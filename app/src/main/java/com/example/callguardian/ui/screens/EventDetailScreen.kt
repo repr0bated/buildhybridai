@@ -37,6 +37,7 @@ import com.example.callguardian.model.label
 import com.example.callguardian.schemaui.SchemaConfirmSheet
 import com.example.callguardian.schemaui.SchemaDetails
 import com.example.callguardian.ui.AppViewModel
+import com.example.callguardian.methods.UserMethod
 import com.example.callguardian.ui.components.*
 import com.example.callguardian.ui.theme.Brand
 import com.example.callguardian.ui.theme.color
@@ -51,13 +52,14 @@ fun EventDetailScreen(vm: AppViewModel, id: Long, onBack: () -> Unit, onReceipt:
     val receipts by vm.receiptsFor(id).collectAsState(initial = emptyList())
     val context = LocalContext.current
     var sheet by remember { mutableStateOf<Pair<GuardianMethod, JsonObject>?>(null) }
+    var userSheet by remember { mutableStateOf<PendingUserMethod?>(null) }
     val onResult: (DispatchResult) -> Unit = { r ->
         r.launch?.let { runCatching { context.startActivity(it) } }
         Toast.makeText(context, if (r.ok) "Done · receipt #${r.receiptId}" else "${r.status}: ${r.error ?: ""}".take(140), Toast.LENGTH_LONG).show()
     }
 
     Column(Modifier.fillMaxSize()) {
-        TopAppBar(
+        GuardianTopBar(
             title = { Text(e?.let { if (it.channel == "CALL") "Call" else "Text message" } ?: "") },
             navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
             actions = { IconButton(onClick = { vm.delete(id); onBack() }) { Icon(Icons.Default.DeleteOutline, "Delete") } },
@@ -71,8 +73,10 @@ fun EventDetailScreen(vm: AppViewModel, id: Long, onBack: () -> Unit, onReceipt:
             Actions(vm, ev) { m -> sheet = m to vm.defaultInput(ev, m) }
             CloudCard(vm, ev, receipts, onAsk = { sheet = GuardianMethod.EXPLAIN_CLOUD to vm.defaultInput(ev, GuardianMethod.EXPLAIN_CLOUD) },
                 onOffer = { m -> sheet = m to vm.defaultInput(ev, m) })
+            JevCard(vm, ev, receipts) { userSheet = PendingUserMethod(UserMethod.JEV_CHECK, vm.jevInput(ev), "Send redacted text to Jev", ev.id) }
             Spacer(Modifier.height(24.dp))
         }
+        userSheet?.let { p -> UserMethodSheet(vm, p, onDismiss = { userSheet = null }) { r -> userSheet = null; onResult(r) } }
         sheet?.let { (m, input) ->
             val reg = vm.registry.byMethod(m)
             if (reg != null) SchemaConfirmSheet(
@@ -95,7 +99,7 @@ private fun Header(e: ScreeningEventEntity) {
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(e.displayName ?: e.number ?: "Hidden number", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
-            Text(listOfNotNull(e.number?.takeIf { e.displayName != null }, if (e.isContact) "Contact" else "Not in contacts", fullTime(e.receivedAt)).joinToString(" · "),
+            Text(listOfNotNull(com.example.callguardian.model.MessageSource.fromWire(e.source).label, e.number?.takeIf { e.displayName != null }, if (e.isContact) "Contact" else "Not in contacts", fullTime(e.receivedAt)).joinToString(" · "),
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             e.lookupSummary?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
         }
@@ -109,17 +113,25 @@ private fun Verdict(e: ScreeningEventEntity) {
     val risk = e.riskLevel()
     val cat = runCatching { ScamCategory.valueOf(e.category) }.getOrDefault(ScamCategory.NONE)
     val src = runCatching { VerdictSource.valueOf(e.decidedBy) }.getOrDefault(VerdictSource.RULES)
-    SectionCard {
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-            RiskPill(risk); SourcePill(src, e.aiModel.takeIf { src == VerdictSource.ON_DEVICE })
-            if (e.aiStatus == AiStatus.PENDING || e.aiStatus == AiStatus.RUNNING) Pill("Analyzing", Brand.Device)
+    SectionCard(accent = risk.color()) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            com.example.callguardian.ui.components.VerdictRing(
+                fraction = (if (e.confidence > 0) e.confidence else 0) / 100f, color = risk.color(),
+                label = "${risk.label()} risk, confidence ${e.confidence} percent",
+            )
+            androidx.compose.foundation.layout.Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    RiskPill(risk)
+                    if (e.aiStatus == AiStatus.PENDING || e.aiStatus == AiStatus.RUNNING) Pill("Analyzing", Brand.Device)
+                }
+                Text(when {
+                    risk >= RiskLevel.HIGH -> "Likely scam" + if (cat != ScamCategory.NONE) ": ${cat.label()}" else ""
+                    risk == RiskLevel.MEDIUM -> "Suspicious" + if (cat != ScamCategory.NONE) ": ${cat.label()}" else ""
+                    else -> "Looks OK"
+                }, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.ExtraBold, color = risk.color())
+                SourcePill(src, e.aiModel.takeIf { src == VerdictSource.ON_DEVICE })
+            }
         }
-        Text(when {
-            risk >= RiskLevel.HIGH -> "Likely scam" + if (cat != ScamCategory.NONE) ": ${cat.label()}" else ""
-            risk == RiskLevel.MEDIUM -> "Suspicious" + if (cat != ScamCategory.NONE) ": ${cat.label()}" else ""
-            else -> "Looks OK"
-        }, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = risk.color())
-        if (e.confidence > 0) Text("Confidence ${e.confidence}%", style = MaterialTheme.typography.labelMedium)
         e.reasons.lines().filter { it.isNotBlank() }.take(4).forEach { Text("• $it", style = MaterialTheme.typography.bodyMedium) }
         e.advice?.let { Text(it, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium) }
     }
@@ -193,7 +205,7 @@ private fun Step(n: Int, title: String, color: Color, line: String, detail: Stri
 private fun Actions(vm: AppViewModel, e: ScreeningEventEntity, open: (GuardianMethod) -> Unit) {
     val channel = Channel.valueOf(e.channel)
     val offered = GuardianMethod.fromAlias(e.finalAction).takeIf { e.policyDispatch == Dispatch.OFFER.name }
-    val methods = vm.registry.methods.filter { m -> m.method != GuardianMethod.EXPLAIN_CLOUD && m.spec.channels.any { it.name == channel.name } }
+    val methods = vm.registry.proposableMethods.filter { m -> m.method != GuardianMethod.EXPLAIN_CLOUD && m.spec.channels.any { it.name == channel.name } }
     SectionCard {
         SectionTitle("Actions")
         Text("Each button is a typed method from registry ${vm.registry.version}; its confirmation screen is generated from the method's JSON Schema.",
@@ -245,5 +257,24 @@ private fun CloudCard(vm: AppViewModel, e: ScreeningEventEntity, receipts: List<
         }
         if (!cloud) Text("Cloud isn't configured in this build (no google-services.json). On-device and rules still work.",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+/** "Jev second opinion" (guardian.jev.check@v1). Shown when the Jev integration is on (Settings → Watchlist). */
+@Composable
+private fun JevCard(vm: AppViewModel, e: ScreeningEventEntity, receipts: List<ReceiptEntity>, onAsk: () -> Unit) {
+    if (e.channel != "SMS" || e.body.isNullOrBlank()) return
+    val state by vm.integrationState.collectAsState()
+    if (state.enabled["jev"] != true) return
+    val reg = vm.registry.byUser(UserMethod.JEV_CHECK) ?: return
+    val latest = receipts.firstOrNull { it.methodId == reg.id }
+    val out = latest?.takeIf { it.status == DispatchResult.STATUS_OK }?.outputJson?.let { runCatching { MethodRegistry.json.parseToJsonElement(it).jsonObject }.getOrNull() }
+    SectionCard {
+        Text("Jev second opinion (TypeSafe)", style = MaterialTheme.typography.titleMedium)
+        if (out != null) SchemaDetails(vm.outputForm(reg), out)
+        else Text("Nine yes/no scam-signal questions about the redacted text; Call Guardian's own truth table turns the answers into a verdict. You'll see exactly what is sent.",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        latest?.takeIf { it.status != DispatchResult.STATUS_OK }?.notes?.let { Text(it.take(240), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
+        OutlinedButton(onClick = onAsk, enabled = vm.cloudConfigured) { Text(if (out != null) "Ask Jev again" else "Ask Jev") }
     }
 }

@@ -1,6 +1,8 @@
 package com.example.callguardian.ui.screens
 
+import com.example.callguardian.ui.components.GuardianTopBar
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -47,6 +49,7 @@ fun HomeScreen(vm: AppViewModel, actions: SetupActions, onEvent: (Long) -> Unit,
                 SetupRow(Icons.Default.Sms, "Check incoming texts", "Read new SMS to spot scams (never sent anywhere)", setup.smsPermission, actions.requestSms)
                 SetupRow(Icons.Default.Contacts, "Recognize contacts", "Never block people you know", setup.contactsPermission, actions.requestContacts)
                 SetupRow(Icons.Default.Notifications, "Scam alerts", "Warn you when something is flagged", setup.notificationsPermission, actions.requestNotifications)
+                if (setup.listenerAppsInstalled) SetupRow(Icons.Default.Forum, "Google Voice & WhatsApp", "Notification access: screen new messages from those apps (read-only)", setup.notificationAccess, actions.openNotificationAccess)
                 if (!setup.smsPermission) Text("SMS permission greyed out? On Android 15, open App info → ⋮ → Allow restricted settings (needed for sideloaded apps).",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 if (!setup.smsPermission) TextButton(onClick = actions.openAppSettings) { Text("Open App info") }
@@ -57,15 +60,15 @@ fun HomeScreen(vm: AppViewModel, actions: SetupActions, onEvent: (Long) -> Unit,
         item {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 SectionTitle("Recent", Modifier.weight(1f))
-                if (recent.isNotEmpty()) TextButton(onClick = { onTab("activity") }) { Text("See all") }
+                if (recent.isNotEmpty()) TextButton(onClick = { onTab("history") }) { Text("See all") }
             }
         }
         if (recent.isEmpty()) item {
             SectionCard {
                 Text("Nothing screened yet.", style = MaterialTheme.typography.titleSmall)
-                Text("Try a sample scam text in the Lab to see the on-device model, schema validation and receipts in action.",
+                Text("Open Activity → ⋮ → Demo samples to see the on-device model, schema validation and receipts in action.",
                     style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                FilledTonalButton(onClick = { onTab("lab") }) { Icon(Icons.Default.Science, null); Spacer(Modifier.width(8.dp)); Text("Open Lab") }
+                FilledTonalButton(onClick = { onTab("activity") }) { Icon(Icons.Default.Science, null); Spacer(Modifier.width(8.dp)); Text("Open Activity") }
             }
         }
         items(recent.take(6), key = { it.id }) { e -> EventRow(e) { onEvent(e.id) } }
@@ -74,21 +77,25 @@ fun HomeScreen(vm: AppViewModel, actions: SetupActions, onEvent: (Long) -> Unit,
 
 @Composable
 private fun Hero(ready: Boolean, online: Boolean, privateMode: Boolean) {
+    val accent = if (ready) Brand.Lime else Brand.Amber
     Box(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(24.dp))
-            .background(Brush.linearGradient(listOf(Brand.Indigo, Color(0xFF2A3BAA), Brand.Night))).padding(20.dp),
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp))
+            .background(Brush.linearGradient(listOf(accent.copy(alpha = 0.16f), Brand.Glass.copy(alpha = 0.9f), Brand.Void)))
+            .border(1.dp, Brush.linearGradient(listOf(accent.copy(alpha = 0.7f), Brand.Line)), RoundedCornerShape(14.dp))
+            .padding(20.dp),
     ) {
-        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(if (ready) "[ armed ]" else "[ setup ]", style = MaterialTheme.typography.labelMedium, color = accent)
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(if (ready) Icons.Default.VerifiedUser else Icons.Default.GppMaybe, null, tint = Color.White, modifier = Modifier.size(28.dp))
+                Icon(if (ready) Icons.Default.VerifiedUser else Icons.Default.GppMaybe, null, tint = accent, modifier = Modifier.size(30.dp))
                 Spacer(Modifier.width(10.dp))
-                Text("Call Guardian", style = MaterialTheme.typography.headlineSmall, color = Color.White, fontWeight = FontWeight.Bold)
+                Text("call_guardian", style = MaterialTheme.typography.headlineMedium, color = Brand.Ink, fontWeight = FontWeight.ExtraBold)
             }
             Text(if (ready) "Protection is on. Calls and texts are checked on this phone first." else "Finish setup to start screening calls and texts.",
-                style = MaterialTheme.typography.bodyMedium, color = Color.White.copy(alpha = 0.85f))
+                style = MaterialTheme.typography.bodyMedium, color = Brand.InkDim)
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Pill(if (privateMode) "Private mode" else "Hybrid mode", Color.White, Icons.Default.Lock)
-                Pill(if (online) "Online" else "Offline · on-device", Color.White, if (online) Icons.Default.Wifi else Icons.Default.AirplanemodeActive)
+                Pill(if (privateMode) "Private mode" else "Hybrid mode", accent, Icons.Default.Lock)
+                Pill(if (online) "Online" else "Offline · on-device", if (online) Brand.Cloud else Brand.InkDim, if (online) Icons.Default.Wifi else Icons.Default.AirplanemodeActive)
             }
         }
     }
@@ -182,7 +189,7 @@ fun ActivityScreen(vm: AppViewModel, onEvent: (Long) -> Unit) {
         else -> recent
     }
     Column(Modifier.fillMaxSize()) {
-        TopAppBar(title = { Text("Activity") })
+        GuardianTopBar(title = { Text("History") })
         Row(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             listOf("All", "Flagged", "Calls", "Texts").forEach { f -> FilterChip(filter == f, { filter = f }, label = { Text(f) }) }
         }

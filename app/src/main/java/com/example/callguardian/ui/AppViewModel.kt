@@ -47,9 +47,12 @@ data class SetupState(
     val contactsPermission: Boolean = false,
     val notificationsPermission: Boolean = false,
     val online: Boolean = true,
+    val notificationAccess: Boolean = false,
+    val listenerAppsInstalled: Boolean = false,
 ) {
     val coreReady get() = callScreeningRole && smsPermission
-    val missing get() = listOf(callScreeningRole, smsPermission, contactsPermission, notificationsPermission).count { !it }
+    val missing get() = listOf(callScreeningRole, smsPermission, contactsPermission, notificationsPermission).count { !it } +
+        (if (listenerAppsInstalled && !notificationAccess) 1 else 0)
 }
 
 data class DeviceModelUi(
@@ -71,6 +74,11 @@ class AppViewModel @Inject constructor(
     private val analyzer: HybridScamAnalyzer,
     private val receiptsDao: ReceiptDao,
     val registry: MethodRegistry,
+    val catalog: com.example.callguardian.integrations.IntegrationCatalog,
+    private val integrationPrefs: com.example.callguardian.integrations.IntegrationPrefs,
+    private val phone: com.example.callguardian.phone.PhoneData,
+    private val subscriptionPrefs: com.example.callguardian.subscriptions.SubscriptionPrefs,
+    private val dispatcher: com.example.callguardian.methods.MethodDispatcher,
 ) : AndroidViewModel(app) {
 
     val receipts: StateFlow<List<ReceiptEntity>> = receiptsDao.observeRecent(500).stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
@@ -117,6 +125,8 @@ class AppViewModel @Inject constructor(
             contactsPermission = granted(Manifest.permission.READ_CONTACTS),
             notificationsPermission = granted(Manifest.permission.POST_NOTIFICATIONS),
             online = online,
+            notificationAccess = notificationAccessGranted(),
+            listenerAppsInstalled = catalog.listenerPackages.any { installed(it) },
         )
         refreshModel()
         viewModelScope.launch { engine.processPending() }
@@ -167,4 +177,110 @@ class AppViewModel @Inject constructor(
     fun saveLookup(num: String, abs: String, url: String, h: String, hv: String) = viewModelScope.launch {
         prefs.updateNumLookupKey(num); prefs.updateAbstractKey(abs); prefs.updateCustomEndpoint(url, h, hv)
     }
+
+    // ---------------------------------------------------------------- integrations (Settings)
+
+    val integrationState = integrationPrefs.state.stateIn(viewModelScope, SharingStarted.Eagerly,
+        com.example.callguardian.integrations.IntegrationState(emptyMap(), emptyMap()))
+
+    fun installed(pkg: String): Boolean = runCatching { app.packageManager.getPackageInfo(pkg, 0); true }.getOrDefault(false)
+    fun granted(p: String) = ContextCompat.checkSelfPermission(app, p) == PackageManager.PERMISSION_GRANTED
+    fun notificationAccessGranted(): Boolean =
+        androidx.core.app.NotificationManagerCompat.getEnabledListenerPackages(app).contains(app.packageName)
+
+    /** Live status line for an integration row (generated from integrations.json). */
+    fun integrationStatus(i: com.example.callguardian.integrations.Integration): com.example.callguardian.integrations.IntegrationStatus {
+        val kind = i.kind.name
+        val pkgs = i.packages.orEmpty()
+        val installedPkgs = pkgs.filter { installed(it) }
+        val available = pkgs.isEmpty() || installedPkgs.isNotEmpty()
+        val missingPerms = i.permissions.orEmpty().filter { !granted(it) }
+        val access = when (kind) {
+            "notification_listener" -> notificationAccessGranted()
+            "cloud_function" -> cloudConfigured
+            else -> missingPerms.isEmpty()
+        }
+        val parts = buildList {
+            if (pkgs.isNotEmpty()) add(if (available) "Installed" else "Not installed")
+            when (kind) {
+                "notification_listener" -> add(if (access) "Notification access on" else "Notification access off")
+                "cloud_function" -> add(if (cloudConfigured) "Firebase configured" else "Firebase not configured")
+                else -> add(if (missingPerms.isEmpty()) "Permissions granted" else "Needs ${missingPerms.joinToString { it.substringAfterLast('.') }}")
+            }
+        }
+        return com.example.callguardian.integrations.IntegrationStatus(available, access, missingPerms, parts.joinToString(" · "))
+    }
+
+    fun setIntegration(i: com.example.callguardian.integrations.Integration, on: Boolean, onResult: (DispatchResult) -> Unit) = viewModelScope.launch {
+        val st = integrationStatus(i)
+        onResult(dispatcher.dispatchUser(com.example.callguardian.methods.UserMethod.SET_INTEGRATION,
+            com.example.callguardian.methods.UserMethodInputs.setIntegration(i.id.name, on, st.line), null))
+    }
+
+    // ---------------------------------------------------------------- Lab: my texts, calls, subscriptions
+
+    val labSamples: List<com.example.callguardian.ui.screens.LabSample> by lazy {
+        val root = kotlinx.serialization.json.Json.parseToJsonElement(app.assets.open("lab_samples.json").bufferedReader().use { it.readText() })
+        (root as kotlinx.serialization.json.JsonObject)["samples"]!!.let { it as kotlinx.serialization.json.JsonArray }.map { e ->
+            val o = e as kotlinx.serialization.json.JsonObject
+            fun f(k: String) = (o[k] as kotlinx.serialization.json.JsonPrimitive).content
+            com.example.callguardian.ui.screens.LabSample(f("title"), f("sender"), f("body"))
+        }
+    }
+
+    private val _inbox = MutableStateFlow<List<com.example.callguardian.subscriptions.InboxSms>?>(null)
+    val inbox = _inbox.asStateFlow()
+    private val _calls = MutableStateFlow<List<com.example.callguardian.methods.CallLogItem>?>(null)
+    val calls = _calls.asStateFlow()
+    private val _subs = MutableStateFlow<List<com.example.callguardian.subscriptions.SubscriptionGroup>?>(null)
+    val subscriptions = _subs.asStateFlow()
+    private val _confirm = MutableStateFlow<Map<String, ScreeningEngine.SubscriptionConfirm>>(emptyMap())
+    val subscriptionConfirm = _confirm.asStateFlow()
+    val subscriptionMarks = subscriptionPrefs.marks.stateIn(viewModelScope, SharingStarted.Eagerly, com.example.callguardian.subscriptions.SubscriptionMarks())
+
+    fun integrationEvents(id: String) = events.observeIntegration(id)
+    fun openNotificationAccess(ctx: android.content.Context) {
+        runCatching { ctx.startActivity(android.content.Intent(android.provider.Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)) }
+    }
+
+    fun loadInbox() = viewModelScope.launch { _inbox.value = phone.inbox() }
+    fun loadCalls() = viewModelScope.launch { _calls.value = phone.calls() }
+
+    fun loadSubscriptions() = viewModelScope.launch {
+        val sms = phone.inbox(1000)
+        val fromApps = events.bySource(listOf("google_voice", "whatsapp"), 500).map {
+            com.example.callguardian.subscriptions.InboxSms(it.id, it.number ?: it.displayName ?: "unknown", it.body.orEmpty(), it.receivedAt,
+                com.example.callguardian.model.MessageSource.fromWire(it.source))
+        }
+        val all = sms + fromApps
+        val groups = com.example.callguardian.subscriptions.SubscriptionDetector.group(all)
+        _subs.value = groups
+        // Gemini Nano 4 confirms each group on the phone (foreground only), newest first.
+        groups.take(25).forEach { g ->
+            if (_confirm.value.containsKey(g.sender)) return@forEach
+            val recent = all.filter { it.address.trim() == g.sender && it.source == g.source }.sortedByDescending { it.date }.take(3).map { it.body }
+            engine.confirmSubscription(g, recent)?.let { c -> _confirm.value = _confirm.value + (g.sender to c) }
+        }
+    }
+
+    /** SMS inbox item → same pipeline as a new text (rules + on-device model), as a review event. */
+    fun reviewText(m: com.example.callguardian.subscriptions.InboxSms, onCreated: (Long) -> Unit) = viewModelScope.launch {
+        val id = engine.screenSms(m.address, m.body, isTest = true, runAi = false, source = com.example.callguardian.model.MessageSource.SMS)
+        onCreated(id)
+        engine.analyzeOnDevice(id, notify = false)
+    }
+
+    fun runUser(m: com.example.callguardian.methods.UserMethod, input: JsonObject, eventId: Long?, onResult: (DispatchResult) -> Unit) = viewModelScope.launch {
+        val r = dispatcher.dispatchUser(m, input, eventId)
+        onResult(r)
+        if (r.ok && m == com.example.callguardian.methods.UserMethod.REVIEW_CALL) {
+            val o = r.output as? JsonObject
+            val ev = (o?.get("eventId") as? kotlinx.serialization.json.JsonPrimitive)?.content?.toLongOrNull()
+            val queued = (o?.get("onDeviceQueued") as? kotlinx.serialization.json.JsonPrimitive)?.content == "true"
+            if (ev != null && queued) engine.analyzeOnDevice(ev, notify = false)
+        }
+    }
+
+    fun jevInput(e: ScreeningEventEntity): JsonObject = com.example.callguardian.methods.UserMethodInputs.jevCheck(
+        e.id, e.number, e.isContact, redactedPreview(e), if (e.source == "sms" || e.source == "google_voice" || e.source == "whatsapp") e.source else "lab_sample")
 }

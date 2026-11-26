@@ -61,6 +61,10 @@ data class ScreeningEventEntity(
     /** AUTO | OFFER | DENY from the capability policy for [finalAction]. */
     @ColumnInfo(name = "policy_dispatch") val policyDispatch: String = "DENY",
     val quarantined: Boolean = false,
+    /** Where the content came from: a MessageSource wire value (sms, google_voice, call_log, …). */
+    @ColumnInfo(defaultValue = "sms") val source: String = "sms",
+    /** integrations.json id it arrived through (phone_sms, google_voice, whatsapp_business, …). */
+    val integration: String? = null,
 )
 
 object AiStatus {

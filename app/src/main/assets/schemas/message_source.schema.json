@@ -1,0 +1,25 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/repr0bated/callguardian-android/schemas/message_source.schema.json",
+  "title": "MessageSource",
+  "description": "Where screened content came from. google_voice and whatsapp are read from those apps' notifications (new messages only), as listed in notification_sources.json.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "source"
+  ],
+  "properties": {
+    "source": {
+      "type": "string",
+      "enum": [
+        "sms",
+        "google_voice",
+        "whatsapp",
+        "call_screening",
+        "call_log",
+        "lab_sample"
+      ],
+      "title": "Source"
+    }
+  }
+}

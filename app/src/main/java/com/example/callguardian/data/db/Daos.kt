@@ -18,6 +18,10 @@ interface ScreeningEventDao {
     suspend fun countCallsSince(number: String, since: Long): Int
     @Query("SELECT * FROM screening_events WHERE ai_status = 'PENDING' ORDER BY received_at DESC LIMIT 10")
     suspend fun pendingAi(): List<ScreeningEventEntity>
+    @Query("SELECT * FROM screening_events WHERE source IN (:sources) AND channel = 'SMS' ORDER BY received_at DESC LIMIT :limit")
+    suspend fun bySource(sources: List<String>, limit: Int): List<ScreeningEventEntity>
+    @Query("SELECT * FROM screening_events WHERE integration = :integration AND is_test = 0 ORDER BY received_at DESC LIMIT :limit")
+    fun observeIntegration(integration: String, limit: Int = 300): Flow<List<ScreeningEventEntity>>
     @Query("DELETE FROM screening_events WHERE id = :id") suspend fun delete(id: Long)
     @Query("DELETE FROM screening_events") suspend fun clear()
 }

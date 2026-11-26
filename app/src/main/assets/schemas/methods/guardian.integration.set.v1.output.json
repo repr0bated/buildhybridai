@@ -1,0 +1,42 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/repr0bated/callguardian-android/schemas/methods/guardian.integration.set.v1.output.json",
+  "title": "SetIntegrationOutput",
+  "description": "Result of guardian.integration.set@v1.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "integration",
+    "enabled",
+    "previous",
+    "savedAt"
+  ],
+  "properties": {
+    "integration": {
+      "type": "string",
+      "enum": [
+        "phone_sms",
+        "phone_calls",
+        "google_voice",
+        "whatsapp",
+        "whatsapp_business",
+        "jev"
+      ],
+      "title": "Integration"
+    },
+    "enabled": {
+      "type": "boolean",
+      "title": "On"
+    },
+    "previous": {
+      "type": "boolean",
+      "title": "Was on"
+    },
+    "savedAt": {
+      "type": "integer",
+      "minimum": 0,
+      "format": "epoch-millis",
+      "title": "Saved at"
+    }
+  }
+}

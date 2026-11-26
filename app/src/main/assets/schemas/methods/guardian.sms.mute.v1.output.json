@@ -1,0 +1,38 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/repr0bated/callguardian-android/schemas/methods/guardian.sms.mute.v1.output.json",
+  "title": "MuteSenderOutput",
+  "description": "Result of guardian.sms.mute@v1.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "sender",
+    "mode",
+    "savedAt"
+  ],
+  "properties": {
+    "sender": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[^\\n\\r]{1,64}$",
+      "title": "Sender",
+      "description": "Sender as shown by the SMS inbox or Google Voice (number, short code or name)."
+    },
+    "mode": {
+      "type": "string",
+      "enum": [
+        "MUTE",
+        "KEEP",
+        "CLEAR"
+      ],
+      "title": "Choice"
+    },
+    "savedAt": {
+      "type": "integer",
+      "minimum": 0,
+      "format": "epoch-millis",
+      "title": "Saved at"
+    }
+  }
+}

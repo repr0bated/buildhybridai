@@ -23,6 +23,7 @@ import com.example.callguardian.methods.PolicyContext
 import com.example.callguardian.methods.PolicyDecision
 import com.example.callguardian.model.Channel
 import com.example.callguardian.model.GuardianMethod
+import com.example.callguardian.model.MessageSource
 import com.example.callguardian.model.RiskLevel
 import com.example.callguardian.model.ScamCategory
 import com.example.callguardian.model.VerdictSource
@@ -67,6 +68,8 @@ class ScreeningEngine @Inject constructor(
     private val policy: CapabilityPolicy,
     private val dispatcher: MethodDispatcher,
     private val io: CoroutineDispatcher,
+    private val subscriptionPrefs: com.example.callguardian.subscriptions.SubscriptionPrefs,
+    private val integrationPrefs: com.example.callguardian.integrations.IntegrationPrefs,
 ) {
     private val json = Json { ignoreUnknownKeys = false }
     val verdictValidator by lazy { SchemaValidator(asset("schemas/scam_verdict.schema.json"), "scam_verdict.schema.json") }
@@ -80,8 +83,15 @@ class ScreeningEngine @Inject constructor(
 
     // ---------------------------------------------------------------- SMS
 
-    suspend fun screenSms(rawNumber: String?, body: String, isTest: Boolean = false, runAi: Boolean = true): Long = withContext(io) {
-        val number = normalize(rawNumber)
+    suspend fun screenSms(
+        rawNumber: String?, body: String, isTest: Boolean = false, runAi: Boolean = true,
+        source: MessageSource = if (isTest) MessageSource.LAB_SAMPLE else MessageSource.SMS, senderName: String? = null,
+        integration: String? = if (source == MessageSource.SMS && !isTest) "phone_sms" else null,
+    ): Long = withContext(io) {
+        // Notification sources (Google Voice, WhatsApp) may give a name instead of a number.
+        val number = normalize(rawNumber)?.takeIf { it.contains('@') || it.trimStart('+').length >= 3 }
+        val muted = (number ?: senderName)?.let { it in subscriptionPrefs.current().muted } == true ||
+            rawNumber?.trim()?.let { it in subscriptionPrefs.current().muted } == true
         val contact = number?.let { runCatching { contacts.lookupContact(it) }.getOrNull() }
         val profile = number?.let { profiles.get(it) }
         val scan = HeuristicScanner.scan(ScanInput(Channel.SMS, number, body, isContact = contact != null))
@@ -89,8 +99,8 @@ class ScreeningEngine @Inject constructor(
         val wantsAi = runAi && (scan.riskLevel >= RiskLevel.LOW || contact == null)
 
         val id = events.insert(ScreeningEventEntity(
-            channel = Channel.SMS.name, number = number, displayName = contact?.displayName ?: profile?.displayName,
-            body = body, isContact = contact != null, isTest = isTest,
+            channel = Channel.SMS.name, number = number, displayName = contact?.displayName ?: profile?.displayName ?: senderName,
+            body = body, isContact = contact != null, isTest = isTest, source = source.wire, integration = integration,
             rulesScore = scan.score, rulesRisk = scan.riskLevel.name, rulesFlags = scan.reasons.joinToString("\n"), rulesMicros = scan.elapsedMicros,
             aiStatus = if (wantsAi) AiStatus.PENDING else AiStatus.NOT_RUN,
             risk = (if (blocked) maxOf(scan.riskLevel, RiskLevel.HIGH) else scan.riskLevel).name, category = scan.category.name,
@@ -99,19 +109,50 @@ class ScreeningEngine @Inject constructor(
         ))
         if (!blocked) decideAndDispatch(id, MethodProposal(scan.method, scan.riskLevel, scan.score, scan.reasons, VerdictSource.RULES))
         val saved = events.get(id)!!
-        if (!isTest) notifier.notifyEvent(saved, aiPending = wantsAi)
+        val alert = !isTest && !muted
+        if (alert) notifier.notifyEvent(saved, aiPending = wantsAi)
         if (wantsAi) {
             // AICore refuses background inference; if so the event stays PENDING and runs when the
             // app is next opened (or the alert is tapped).
-            analyzeOnDevice(id, fromBackground = !AppForeground.isForeground, notify = !isTest)
+            analyzeOnDevice(id, fromBackground = !AppForeground.isForeground, notify = alert)
         }
         id
+    }
+
+    /** A new message read from another app's notification (Google Voice, WhatsApp…): same pipeline, typed source. */
+    suspend fun screenNotificationMessage(integrationId: String, source: MessageSource, sender: String, conversation: String?, text: String): Long? {
+        if (!integrationPrefs.enabled(integrationId)) return null
+        integrationPrefs.seen(integrationId)
+        val digits = sender.filter { it.isDigit() || it == '+' }
+        val looksLikeNumber = digits.trimStart('+').length >= 7 && sender.count { it.isLetter() } == 0
+        val label = if (conversation != null && conversation != sender) "$sender in $conversation" else sender
+        return screenSms(if (looksLikeNumber) digits else null, text, source = source, senderName = if (looksLikeNumber) null else label.take(80), integration = integrationId)
+    }
+
+    // ---------------------------------------------------------------- subscriptions (on-device confirm)
+
+    private val subscriptionValidator by lazy { SchemaValidator(asset("schemas/subscription_check.schema.json"), "subscription_check.schema.json") }
+
+    data class SubscriptionConfirm(val isSubscription: Boolean, val link: com.example.callguardian.subscriptions.LinkCandidate?, val model: String?)
+
+    /** Gemini Nano 4 confirms a rule-detected subscription sender and picks the unsubscribe link. ONLY_ON_DEVICE. */
+    suspend fun confirmSubscription(g: com.example.callguardian.subscriptions.SubscriptionGroup, recent: List<String>): SubscriptionConfirm? = withContext(io) {
+        if (!AppForeground.isForeground) return@withContext null
+        val run = runCatching {
+            aiMutex.withLock { withTimeout(20_000) { analyzer.subscriptionCheck(Prompts.subscription(g.sender, g.source.label, recent, g.links.map { it.url }), prefs.current().modelChoice) } }
+        }.getOrElse { Timber.w(it, "Subscription check failed"); return@withContext null }
+        val report = subscriptionValidator.validate(run.rawText)
+        if (!report.valid) return@withContext null
+        val c = runCatching { json.decodeFromString(com.example.callguardian.ai.SubscriptionCheck.serializer(), report.json) }.getOrNull() ?: return@withContext null
+        SubscriptionConfirm(c.isSubscription, g.links.getOrNull(c.unsubscribeLink - 1), run.modelName)
     }
 
     // ---------------------------------------------------------------- Calls
 
     /** Must finish well inside CallScreeningService's 5 s budget. Rules + lookup only. */
     suspend fun screenCall(rawNumber: String?, callerIdHidden: Boolean, startedAt: Long = System.currentTimeMillis()): Pair<CallDecision, Long> = withContext(io) {
+        if (!integrationPrefs.enabled("phone_calls")) return@withContext CallDecision(false, false, "Calls integration is off") to -1L
+        integrationPrefs.seen("phone_calls")
         val number = normalize(rawNumber)
         val profile = number?.let { profiles.get(it) }
         val contact = number?.let { runCatching { contacts.lookupContact(it) }.getOrNull() }
@@ -119,7 +160,7 @@ class ScreeningEngine @Inject constructor(
 
         if (profile?.shouldBlockCalls() == true) {
             val id = events.insert(ScreeningEventEntity(
-                channel = Channel.CALL.name, number = number, displayName = profile.displayName, risk = RiskLevel.HIGH.name,
+                channel = Channel.CALL.name, number = number, displayName = profile.displayName, risk = RiskLevel.HIGH.name, source = MessageSource.CALL_SCREENING.wire,
                 proposedAction = GuardianMethod.REJECT_CALL.alias, finalAction = GuardianMethod.REJECT_CALL.alias, policyDispatch = Dispatch.AUTO.name,
                 autoApplied = true, gateNotes = "Sender is on your block list.", userAction = "BLOCKED_BY_LIST",
             ))
@@ -140,7 +181,7 @@ class ScreeningEngine @Inject constructor(
         val wantsAi = contact == null && scan.riskLevel >= RiskLevel.LOW
         val id = events.insert(ScreeningEventEntity(
             channel = Channel.CALL.name, number = number, displayName = contact?.displayName ?: lookupResult?.displayName,
-            isContact = contact != null, lookupSummary = summary,
+            isContact = contact != null, lookupSummary = summary, source = MessageSource.CALL_SCREENING.wire,
             rulesScore = scan.score, rulesRisk = scan.riskLevel.name, rulesFlags = scan.reasons.joinToString("\n"), rulesMicros = scan.elapsedMicros,
             aiStatus = if (wantsAi) AiStatus.PENDING else AiStatus.NOT_RUN,
             risk = scan.riskLevel.name, category = scan.category.name, confidence = scan.score, reasons = scan.reasons.joinToString("\n"),

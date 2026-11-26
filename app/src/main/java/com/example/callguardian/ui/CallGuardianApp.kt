@@ -1,10 +1,30 @@
 package com.example.callguardian.ui
 
 import androidx.compose.foundation.layout.padding
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.material3.NavigationBarItemDefaults
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.unit.dp
+import com.example.callguardian.ui.theme.Brand
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.ReceiptLong
 import androidx.compose.material.icons.filled.Science
+import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material3.Icon
@@ -37,9 +57,9 @@ private data class Tab(val route: String, val label: String, val icon: ImageVect
 
 private val tabs = listOf(
     Tab("home", "Home", Icons.Default.Home),
-    Tab("activity", "Activity", Icons.Default.Shield),
     Tab("receipts", "Receipts", Icons.Default.ReceiptLong),
-    Tab("lab", "Lab", Icons.Default.Science),
+    Tab("activity", "Activity", Icons.Default.Shield),
+    Tab("watchlist", "Watchlist", Icons.Default.Visibility),
     Tab("settings", "Settings", Icons.Default.Settings),
 )
 
@@ -49,7 +69,18 @@ data class SetupActions(
     val requestContacts: () -> Unit,
     val requestNotifications: () -> Unit,
     val openAppSettings: () -> Unit,
+    val requestPermissions: (List<String>) -> Unit = {},
+    val openNotificationAccess: () -> Unit = {},
 )
+
+/** Faint terminal grid behind every screen; glass cards sit on top of it. */
+private fun DrawScope.gridBackdrop() {
+    val step = 28.dp.toPx()
+    val c = Brand.Line.copy(alpha = 0.22f)
+    var x = 0f; while (x < size.width) { drawLine(c, Offset(x, 0f), Offset(x, size.height), 1f); x += step }
+    var y = 0f; while (y < size.height) { drawLine(c, Offset(0f, y), Offset(size.width, y), 1f); y += step }
+    drawRect(Brush.radialGradient(listOf(Brand.Lime.copy(alpha = 0.07f), Color.Transparent), center = Offset(size.width * 0.85f, 0f), radius = size.width))
+}
 
 @Composable
 fun CallGuardianApp(vm: AppViewModel, actions: SetupActions, openEventId: Long?, onEventOpened: () -> Unit) {
@@ -62,8 +93,12 @@ fun CallGuardianApp(vm: AppViewModel, actions: SetupActions, openEventId: Long?,
     }
 
     Scaffold(
+        containerColor = Color.Transparent,
+        modifier = Modifier.background(Brand.Void).drawBehind { gridBackdrop() },
         bottomBar = {
-            if (tabs.any { it.route == route }) NavigationBar {
+            if (tabs.any { it.route == route }) Column {
+            Box(Modifier.fillMaxWidth().height(1.dp).background(Brush.horizontalGradient(listOf(Color.Transparent, Brand.Lime.copy(alpha = 0.5f), Color.Transparent))))
+            NavigationBar(containerColor = Brand.Void.copy(alpha = 0.96f), tonalElevation = 0.dp) {
                 tabs.forEach { t ->
                     NavigationBarItem(
                         selected = route == t.route,
@@ -73,17 +108,30 @@ fun CallGuardianApp(vm: AppViewModel, actions: SetupActions, openEventId: Long?,
                                 launchSingleTop = true; restoreState = true
                             }
                         },
-                        icon = { Icon(t.icon, null) }, label = { Text(t.label) },
+                        icon = { Icon(t.icon, null) }, label = { Text(t.label.lowercase(), maxLines = 1) },
+                        colors = NavigationBarItemDefaults.colors(
+                            selectedIconColor = Brand.Lime, selectedTextColor = Brand.Lime,
+                            indicatorColor = Brand.Lime.copy(alpha = 0.14f),
+                            unselectedIconColor = Brand.InkDim, unselectedTextColor = Brand.InkDim,
+                        ),
                     )
                 }
             }
+            }
         },
     ) { pad ->
-        NavHost(nav, startDestination = "home", modifier = Modifier.padding(pad)) {
+        NavHost(
+            nav, startDestination = "home", modifier = Modifier.padding(pad).consumeWindowInsets(pad),
+            enterTransition = { fadeIn(tween(220)) + slideInVertically(tween(260)) { it / 24 } },
+            exitTransition = { fadeOut(tween(140)) },
+            popEnterTransition = { fadeIn(tween(220)) },
+            popExitTransition = { fadeOut(tween(140)) + slideOutVertically(tween(200)) { it / 24 } },
+        ) {
             composable("home") { HomeScreen(vm, actions, onEvent = { nav.navigate("event/$it") }, onTab = { nav.navigate(it) }) }
-            composable("activity") { ActivityScreen(vm, onEvent = { nav.navigate("event/$it") }) }
+            composable("history") { ActivityScreen(vm, onEvent = { nav.navigate("event/$it") }) }
             composable("receipts") { ReceiptsScreen(vm, onReceipt = { nav.navigate("receipt/$it") }) }
-            composable("lab") { LabScreen(vm, onEvent = { nav.navigate("event/$it") }) }
+            composable("activity") { LabScreen(vm, onEvent = { nav.navigate("event/$it") }, onReceipt = { nav.navigate("receipt/$it") }) }
+            composable("watchlist") { LabScreen(vm, onEvent = { nav.navigate("event/$it") }, watchlist = true) }
             composable("settings") { SettingsScreen(vm, actions, onLists = { nav.navigate("lists") }) }
             composable("lists") { ListsScreen(vm, onBack = { nav.popBackStack() }) }
             composable("event/{id}", arguments = listOf(navArgument("id") { type = NavType.LongType })) {

@@ -55,3 +55,18 @@ data class DeepAnalysis(
 ) {
     companion object
 }
+
+/**
+ * On-device confirmation for a subscription sender (Gemini Nano 4, built on Gemma 4). Mirrors
+ * assets/schemas/subscription_check.schema.json, which the raw output is validated against.
+ */
+@Serializable
+@Generable(description = "Whether a sender's texts are a subscription or marketing list, and which link unsubscribes")
+data class SubscriptionCheck(
+    @Guide(description = "True if these are automated subscription, alert or marketing texts the user could opt out of")
+    val isSubscription: Boolean,
+    @Guide(description = "Number of the link that unsubscribes or manages the subscription, from the numbered list; 0 if none fits", minimum = 0.0, maximum = 6.0)
+    val unsubscribeLink: Int,
+) {
+    companion object
+}

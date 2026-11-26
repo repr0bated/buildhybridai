@@ -1,0 +1,142 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/repr0bated/callguardian-android/schemas/methods/guardian.jev.check.v1.output.json",
+  "title": "JevCheckOutput",
+  "description": "Result of guardian.jev.check@v1: Jev's probability for each signal, and the verdict code derived from them.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "eventId",
+    "verdict",
+    "matchedRule",
+    "unsettledSignals",
+    "asks_payment",
+    "deadline_pressure",
+    "claims_organization",
+    "asks_open_link",
+    "asks_share_code",
+    "asks_login_details",
+    "offers_money",
+    "moves_to_other_app",
+    "stranger_opener",
+    "model",
+    "questionsVersion",
+    "inputTokens",
+    "latencyMs"
+  ],
+  "properties": {
+    "eventId": {
+      "type": "integer",
+      "minimum": 1,
+      "title": "Screening event"
+    },
+    "verdict": {
+      "type": "string",
+      "enum": [
+        "SCAM",
+        "SUSPICIOUS",
+        "UNSETTLED",
+        "CLEAR"
+      ],
+      "title": "Verdict",
+      "description": "Decided in code by JevTruthTable (yes \u2265 0.7, no \u2264 0.3)."
+    },
+    "matchedRule": {
+      "type": "string",
+      "maxLength": 80,
+      "title": "Truth-table row"
+    },
+    "unsettledSignals": {
+      "type": "array",
+      "maxItems": 9,
+      "items": {
+        "type": "string",
+        "maxLength": 40
+      },
+      "title": "Unsettled signals (0.3\u20130.7)"
+    },
+    "asks_payment": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100,
+      "title": "Asks for payment (%)",
+      "description": "Jev's probability that the answer is yes, in percent."
+    },
+    "deadline_pressure": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100,
+      "title": "Deadline with a penalty (%)",
+      "description": "Jev's probability that the answer is yes, in percent."
+    },
+    "claims_organization": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100,
+      "title": "Claims to be a company or agency (%)",
+      "description": "Jev's probability that the answer is yes, in percent."
+    },
+    "asks_open_link": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100,
+      "title": "Asks to open a link (%)",
+      "description": "Jev's probability that the answer is yes, in percent."
+    },
+    "asks_share_code": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100,
+      "title": "Asks for a verification code (%)",
+      "description": "Jev's probability that the answer is yes, in percent."
+    },
+    "asks_login_details": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100,
+      "title": "Asks for login details (%)",
+      "description": "Jev's probability that the answer is yes, in percent."
+    },
+    "offers_money": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100,
+      "title": "Offers unexpected money (%)",
+      "description": "Jev's probability that the answer is yes, in percent."
+    },
+    "moves_to_other_app": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100,
+      "title": "Moves chat to another app (%)",
+      "description": "Jev's probability that the answer is yes, in percent."
+    },
+    "stranger_opener": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100,
+      "title": "Stranger opener (%)",
+      "description": "Jev's probability that the answer is yes, in percent."
+    },
+    "model": {
+      "type": "string",
+      "maxLength": 64,
+      "title": "Model"
+    },
+    "questionsVersion": {
+      "type": "string",
+      "maxLength": 20,
+      "title": "Questions version"
+    },
+    "inputTokens": {
+      "type": "integer",
+      "minimum": 0,
+      "title": "Input tokens"
+    },
+    "latencyMs": {
+      "type": "integer",
+      "minimum": 0,
+      "title": "Latency (ms)"
+    }
+  }
+}

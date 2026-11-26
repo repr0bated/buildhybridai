@@ -22,6 +22,7 @@ import javax.inject.Inject
 @AndroidEntryPoint
 class SmsReceiver : BroadcastReceiver() {
     @Inject lateinit var engine: ScreeningEngine
+    @Inject lateinit var integrations: com.example.callguardian.integrations.IntegrationPrefs
 
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != Telephony.Sms.Intents.SMS_RECEIVED_ACTION) return
@@ -33,6 +34,8 @@ class SmsReceiver : BroadcastReceiver() {
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             try {
                 withTimeoutOrNull(9_000) {
+                    if (!integrations.enabled("phone_sms")) return@withTimeoutOrNull
+                    integrations.seen("phone_sms")
                     bySender.forEach { (sender, parts) ->
                         engine.screenSms(sender, parts.joinToString("") { it.displayMessageBody ?: it.messageBody.orEmpty() })
                     }

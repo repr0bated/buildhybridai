@@ -118,6 +118,14 @@ class HybridScamAnalyzer @Inject constructor() {
         return ModelRun(result.response.text, source, name, latency)
     }
 
+    /** Subscription confirmation: always ONLY_ON_DEVICE (inbox content never leaves the phone). */
+    suspend fun subscriptionCheck(prompt: String, choice: OnDeviceModelChoice): ModelRun {
+        val model = triageModel(choice, privateMode = true)
+        val t0 = System.currentTimeMillis()
+        val result = model.generateObject(SubscriptionCheck.firebaseAISchema(), prompt)
+        return ModelRun(result.response.text, VerdictSource.ON_DEVICE, deviceModelName(choice) ?: choice.title, System.currentTimeMillis() - t0)
+    }
+
     suspend fun deepAnalysis(prompt: String): ModelRun {
         val t0 = System.currentTimeMillis()
         val result = deepModel.generateObject(DeepAnalysis.firebaseAISchema(), prompt)

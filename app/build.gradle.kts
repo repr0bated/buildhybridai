@@ -119,7 +119,7 @@ val generateSchemaTypes by tasks.registering {
     doLast {
         val out = generatedSchemaDir.get().asFile
         out.deleteRecursively()
-        val files = listOf(schemaDir.file("registry.schema.json").asFile) +
+        val files = listOf("registry.schema.json", "integrations.schema.json", "message_source.schema.json").map { schemaDir.file(it).asFile } +
             schemaDir.dir("methods").asFile.listFiles()!!.filter { it.name.endsWith(".json") }.sortedBy { it.name }
         CodeGenerator().apply {
             configure(file("schema-codegen.json"))

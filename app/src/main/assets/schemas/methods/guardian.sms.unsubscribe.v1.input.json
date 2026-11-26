@@ -1,0 +1,62 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/repr0bated/callguardian-android/schemas/methods/guardian.sms.unsubscribe.v1.input.json",
+  "title": "UnsubscribeSmsInput",
+  "description": "Send the opt-out keyword as a text to a subscription sender. Sent only after you confirm; exactly this text goes to exactly this number.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "recipient",
+    "keyword",
+    "messagesFromSender",
+    "reason",
+    "source"
+  ],
+  "properties": {
+    "recipient": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 20,
+      "pattern": "^\\+?[0-9]{3,15}$",
+      "format": "phone",
+      "title": "Send to",
+      "description": "The subscription sender, from your SMS inbox.",
+      "readOnly": true
+    },
+    "keyword": {
+      "type": "string",
+      "enum": [
+        "STOP",
+        "STOPALL",
+        "UNSUBSCRIBE",
+        "CANCEL",
+        "END",
+        "QUIT"
+      ],
+      "title": "Text that will be sent",
+      "description": "Carrier-standard opt-out keywords only."
+    },
+    "messagesFromSender": {
+      "type": "integer",
+      "minimum": 1,
+      "title": "Texts from this sender",
+      "readOnly": true
+    },
+    "reason": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "title": "Why this is a subscription",
+      "readOnly": true
+    },
+    "source": {
+      "type": "string",
+      "enum": [
+        "sms"
+      ],
+      "title": "Source",
+      "readOnly": true,
+      "description": "Typed message source (see message_source.schema.json)."
+    }
+  }
+}

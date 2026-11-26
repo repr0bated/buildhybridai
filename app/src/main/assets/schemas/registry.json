@@ -1,5 +1,5 @@
 {
-  "registryVersion": "2026.11.1",
+  "registryVersion": "2026.11.2",
   "methods": [
     {
       "id": "guardian.call.block@v1",
@@ -128,6 +128,118 @@
       "requiresConsent": true,
       "input": "methods/guardian.cloud.explain.v1.input.json",
       "output": "methods/guardian.cloud.explain.v1.output.json"
+    },
+    {
+      "id": "guardian.call.review@v1",
+      "alias": "review_call",
+      "version": 1,
+      "title": "Review call",
+      "description": "Check a call from your call log with the rules and Gemini Nano 4 on this phone. No audio; nothing leaves the phone.",
+      "capability": "analysis.local",
+      "execution": "device",
+      "channels": [
+        "CALL"
+      ],
+      "minRisk": "SAFE",
+      "autoApply": false,
+      "contactSafe": true,
+      "proposable": false,
+      "input": "methods/guardian.call.review.v1.input.json",
+      "output": "methods/guardian.call.review.v1.output.json"
+    },
+    {
+      "id": "guardian.jev.check@v1",
+      "alias": "jev_check",
+      "version": 1,
+      "title": "Jev second opinion",
+      "description": "Ask TypeSafe Jev nine yes/no scam-signal questions about the redacted text. Code turns the answers into a verdict.",
+      "capability": "net.jev",
+      "execution": "cloud",
+      "channels": [
+        "SMS"
+      ],
+      "minRisk": "SAFE",
+      "autoApply": false,
+      "contactSafe": true,
+      "proposable": false,
+      "requiresConsent": true,
+      "input": "methods/guardian.jev.check.v1.input.json",
+      "output": "methods/guardian.jev.check.v1.output.json"
+    },
+    {
+      "id": "guardian.sms.unsubscribe@v1",
+      "alias": "unsubscribe_sms",
+      "version": 1,
+      "title": "Unsubscribe by text",
+      "description": "Text the sender's opt-out keyword (STOP by default). Sent only after you confirm.",
+      "capability": "sms.send",
+      "execution": "device",
+      "channels": [
+        "SMS"
+      ],
+      "minRisk": "SAFE",
+      "autoApply": false,
+      "contactSafe": true,
+      "proposable": false,
+      "requiresConsent": true,
+      "input": "methods/guardian.sms.unsubscribe.v1.input.json",
+      "output": "methods/guardian.sms.unsubscribe.v1.output.json"
+    },
+    {
+      "id": "guardian.sms.manage_subscription@v1",
+      "alias": "manage_subscription",
+      "version": 1,
+      "title": "Open unsubscribe page",
+      "description": "Open the sender's unsubscribe or manage-subscription page in your browser, after you confirm. You unsubscribe there yourself.",
+      "capability": "browser.open",
+      "execution": "device",
+      "channels": [
+        "SMS"
+      ],
+      "minRisk": "SAFE",
+      "autoApply": false,
+      "contactSafe": true,
+      "proposable": false,
+      "requiresConsent": true,
+      "input": "methods/guardian.sms.manage_subscription.v1.input.json",
+      "output": "methods/guardian.sms.manage_subscription.v1.output.json"
+    },
+    {
+      "id": "guardian.sms.mute@v1",
+      "alias": "mute_sender",
+      "version": 1,
+      "title": "Keep or mute sender",
+      "description": "Keep or mute a subscription sender inside Call Guardian. Local only.",
+      "capability": "sms.local",
+      "execution": "device",
+      "channels": [
+        "SMS"
+      ],
+      "minRisk": "SAFE",
+      "autoApply": false,
+      "contactSafe": true,
+      "proposable": false,
+      "input": "methods/guardian.sms.mute.v1.input.json",
+      "output": "methods/guardian.sms.mute.v1.output.json"
+    },
+    {
+      "id": "guardian.integration.set@v1",
+      "alias": "set_integration",
+      "version": 1,
+      "title": "Integration on/off",
+      "description": "Turn a source (SMS, calls, Google Voice, WhatsApp\u2026) or the Jev second opinion on or off. Local only.",
+      "capability": "settings.local",
+      "execution": "device",
+      "channels": [
+        "CALL",
+        "SMS"
+      ],
+      "minRisk": "SAFE",
+      "autoApply": false,
+      "contactSafe": true,
+      "proposable": false,
+      "input": "methods/guardian.integration.set.v1.input.json",
+      "output": "methods/guardian.integration.set.v1.output.json"
     }
   ]
 }

@@ -1,5 +1,6 @@
 package com.example.callguardian.ui.screens
 
+import com.example.callguardian.ui.components.GuardianTopBar
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -84,7 +85,7 @@ fun ReceiptsScreen(vm: AppViewModel, onReceipt: (Long) -> Unit) {
         else -> receipts
     }
     Column(Modifier.fillMaxSize()) {
-        TopAppBar(title = { Text("Receipts") })
+        GuardianTopBar(title = { Text("Receipts") })
         LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             item {
                 Text("Every typed method the app runs, proposes, or refuses leaves a receipt: input, schema version, where it ran, and the result. Registry ${vm.registry.version} · ${vm.registry.methods.size} methods.",
@@ -106,7 +107,7 @@ fun ReceiptDetailScreen(vm: AppViewModel, id: Long, onBack: () -> Unit, onEvent:
     val r by vm.receipt(id).collectAsState(initial = null)
     var raw by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxSize()) {
-        TopAppBar(title = { Text("Receipt #$id") }, navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } })
+        GuardianTopBar(title = { Text("Receipt #$id") }, navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } })
         val rc = r ?: return@Column
         val reg = vm.registry.byId(rc.methodId)
         Column(Modifier.verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {

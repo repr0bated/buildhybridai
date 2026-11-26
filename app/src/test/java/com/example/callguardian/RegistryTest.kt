@@ -23,9 +23,10 @@ class RegistryTest {
             .jsonArray.map { it.jsonPrimitive.content }.toSet()
 
     @Test fun registryLoadsAndIsVersioned() {
-        assertEquals(7, reg.methods.size)
+        assertEquals(13, reg.methods.size)
+        assertEquals(7, reg.proposableMethods.size)
         assertTrue(Regex("^[0-9]{4}\\.[0-9]{2}\\.[0-9]+$").matches(reg.version))
-        reg.methods.forEach { assertTrue(it.id, Regex("^guardian\\.[a-z]+\\.[a-z]+@v[0-9]+$").matches(it.id)) }
+        reg.methods.forEach { assertTrue(it.id, Regex("^guardian\\.[a-z]+\\.[a-z_]+@v[0-9]+$").matches(it.id)) }
         assertNotNull(reg.byId("guardian.call.block@v1"))
     }
 
@@ -34,7 +35,7 @@ class RegistryTest {
         val names = GuardianMethod.entries.map { it.name }.toSet()
         assertEquals(names, enumOf("scam_verdict.schema.json", "method"))
         assertEquals(names - "EXPLAIN_CLOUD", enumOf("deep_analysis.schema.json", "method"))
-        assertEquals(GuardianMethod.entries.filter { it != GuardianMethod.NONE }.map { it.alias }.toSet(), reg.methods.map { it.spec.alias }.toSet())
+        assertEquals(GuardianMethod.entries.filter { it != GuardianMethod.NONE }.map { it.alias }.toSet(), reg.proposableMethods.map { it.spec.alias }.toSet())
         GuardianMethod.entries.filter { it != GuardianMethod.NONE }.forEach { assertNotNull(it.name, reg.byMethod(it)) }
     }
 
@@ -48,7 +49,7 @@ class RegistryTest {
         for (ch in Channel.entries) for (num in listOf("+15550100199", null)) {
             val ctx = BindingContext(42, ch, num, "Ann", RiskLevel.HIGH, ScamCategory.PACKAGE_DELIVERY, listOf("Link to look-alike USPS domain"),
                 redactedText = "Sender: ••99\nUSPS: package on hold https://usps-help.top/[path]", onDeviceOpinion = "HIGH, PACKAGE_DELIVERY, 90")
-            reg.methods.filter { m -> m.spec.channels.any { it.name == ch.name } }.forEach { m ->
+            reg.proposableMethods.filter { m -> m.spec.channels.any { it.name == ch.name } }.forEach { m ->
                 val needsNumber = m.method in listOf(GuardianMethod.BLOCK_NUMBER, GuardianMethod.ALLOW_NUMBER, GuardianMethod.SAVE_CONTACT)
                 if (num == null && needsNumber) return@forEach
                 val r = m.inputValidator.validate(MethodBinder.bind(m.method, ctx).toString())

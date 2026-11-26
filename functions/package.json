@@ -1,0 +1,22 @@
+{
+  "name": "callguardian-functions",
+  "private": true,
+  "license": "Apache-2.0",
+  "main": "lib/index.js",
+  "engines": { "node": "22" },
+  "scripts": {
+    "gen:typesafe": "openapi-typescript typesafe.openapi.json -o src/typesafe.gen.ts",
+    "build": "npm run gen:typesafe && tsc",
+    "probe": "tsx scripts/probe.ts",
+    "deploy": "npm run build && firebase deploy --only functions --project callguardian-hybrid"
+  },
+  "dependencies": {
+    "firebase-admin": "^13.0.0",
+    "firebase-functions": "^6.0.0"
+  },
+  "devDependencies": {
+    "openapi-typescript": "^7.4.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}

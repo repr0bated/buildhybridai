@@ -1,5 +1,6 @@
 package com.example.callguardian.ui.screens
 
+import com.example.callguardian.ui.components.GuardianTopBar
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -36,8 +37,9 @@ fun SettingsScreen(vm: AppViewModel, actions: SetupActions, onLists: () -> Unit)
     val context = LocalContext.current
     var confirmClear by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxSize()) {
-        TopAppBar(title = { Text("Settings") })
+        GuardianTopBar(title = { Text("Settings") })
         Column(Modifier.verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            IntegrationsCard(vm, actions)
             SectionCard {
                 SectionTitle("Privacy")
                 ToggleRow("Private mode", "Message content is analyzed only on this phone (ONLY_ON_DEVICE). Cloud analysis still needs your tap and only sees redacted text.", s.privateMode, vm::setPrivateMode)
@@ -137,7 +139,7 @@ private fun LookupCard(vm: AppViewModel) {
 fun ListsScreen(vm: AppViewModel, onBack: () -> Unit) {
     val listed by vm.listed.collectAsState()
     Column(Modifier.fillMaxSize()) {
-        TopAppBar(title = { Text("Blocked & allowed") }, navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } })
+        GuardianTopBar(title = { Text("Blocked & allowed") }, navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } })
         LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             if (listed.isEmpty()) item { Text("No numbers yet. block_number and allow_number receipts add them here.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
             items(listed, key = { it.phoneNumber }) { p ->
@@ -149,6 +151,45 @@ fun ListsScreen(vm: AppViewModel, onBack: () -> Unit) {
                         }
                         TextButton(onClick = { vm.unlist(p.phoneNumber) }) { Text("Remove") }
                     }
+                }
+            }
+        }
+    }
+}
+
+/** Generated from integrations.json: one row per source plus the Jev second opinion. Toggles run guardian.integration.set@v1. */
+@Composable
+private fun IntegrationsCard(vm: AppViewModel, actions: SetupActions) {
+    val state by vm.integrationState.collectAsState()
+    val context = LocalContext.current
+    var tick by remember { mutableIntStateOf(0) }
+    androidx.lifecycle.compose.LifecycleResumeEffect(Unit) { tick++; onPauseOrDispose { } }
+    SectionCard {
+        SectionTitle("Watchlist")
+        Text("Sources Call Guardian watches. Each switch is the typed method guardian.integration.set@v1 and leaves a receipt. Data from every source stays on this phone.",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        vm.catalog.all.forEach { i ->
+            val st = remember(tick, state) { vm.integrationStatus(i) }
+            val on = state.enabled[i.id.name] ?: i.defaultEnabled
+            val seen = state.lastSeen[i.id.name]?.takeIf { it > 0 }
+            HorizontalDivider()
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(i.label, style = MaterialTheme.typography.bodyLarge)
+                    Text(i.description, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(if (!st.available) "Unavailable · not installed" else st.line + (seen?.let { " · last message " + java.text.SimpleDateFormat("MMM d, h:mm a", java.util.Locale.getDefault()).format(java.util.Date(it)) } ?: ""),
+                        style = MaterialTheme.typography.labelSmall, color = if (st.available && st.accessGranted) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error)
+                }
+                Switch(checked = on && st.available, enabled = st.available, onCheckedChange = { v ->
+                    vm.setIntegration(i, v) { r -> if (!r.ok) Toast.makeText(context, "${r.status}: ${r.error}", Toast.LENGTH_LONG).show() }
+                })
+            }
+            if (st.available && !st.accessGranted) when (i.kind.name) {
+                "notification_listener" -> TextButton(onClick = actions.openNotificationAccess) { Text("Open notification access") }
+                "cloud_function" -> {}
+                else -> Row {
+                    TextButton(onClick = { actions.requestPermissions(st.missingPermissions) }) { Text("Grant permission") }
+                    TextButton(onClick = actions.openAppSettings) { Text("App info") }
                 }
             }
         }

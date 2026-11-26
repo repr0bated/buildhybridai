@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="brand">#FF4F6BFF</color>
+    <color name="brand">#FFC6FF3D</color>
     <color name="brand_teal">#FF14C8A8</color>
-    <color name="night">#FF0B1020</color>
-    <color name="risk_high">#FFE5484D</color>
+    <color name="night">#FF07090B</color>
+    <color name="risk_high">#FFFF3B4E</color>
 </resources>

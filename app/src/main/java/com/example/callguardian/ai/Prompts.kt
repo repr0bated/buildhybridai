@@ -14,7 +14,7 @@ object Prompts {
         appendLine("You only propose; a policy checks your choice. Be calm and specific. Reasons must quote or paraphrase the content.")
         appendLine()
         appendLine("Sender: $senderLabel (${if (isContact) "saved contact" else "not in contacts"})")
-        if (!lookup.isNullOrBlank()) appendLine("Reverse lookup: $lookup")
+        if (!lookup.isNullOrBlank()) appendLine("Caller facts: $lookup")
         if (rules.flags.isNotEmpty()) appendLine("Local rule hints (may be wrong): ${rules.reasons.joinToString("; ")}")
         if (channel == Channel.SMS) {
             appendLine("Message:")
@@ -40,6 +40,18 @@ object Prompts {
             appendLine("\"\"\"")
             appendLine(redactedBody.take(4000))
             appendLine("\"\"\"")
+        }
+        appendLine("Respond with JSON only.")
+    }
+
+    fun subscription(sender: String, sourceLabel: String, messages: List<String>, links: List<String>): String = buildString {
+        appendLine("You check texts privately on the user's phone. Decide whether this sender's texts are an automated subscription, alert or marketing list that the user could opt out of.")
+        appendLine("Sender: $sender (via $sourceLabel)")
+        appendLine("Recent texts:")
+        messages.take(3).forEach { appendLine("- \"${it.take(400)}\"") }
+        if (links.isEmpty()) appendLine("Links: none") else {
+            appendLine("Links (pick the one that unsubscribes or manages the subscription, or 0 if none does):")
+            links.take(6).forEachIndexed { i, l -> appendLine("${i + 1}. $l") }
         }
         appendLine("Respond with JSON only.")
     }

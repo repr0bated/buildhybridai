@@ -1,0 +1,94 @@
+{
+  "version": 1,
+  "integrations": [
+    {
+      "id": "phone_sms",
+      "label": "Phone SMS",
+      "kind": "phone_sms",
+      "source": "sms",
+      "description": "Screen incoming texts and read your inbox for the Lab and Subscriptions.",
+      "permissions": [
+        "android.permission.RECEIVE_SMS",
+        "android.permission.READ_SMS"
+      ],
+      "defaultEnabled": true,
+      "optOut": "text_stop",
+      "optOutHint": "Text STOP from this phone"
+    },
+    {
+      "id": "phone_calls",
+      "label": "Calls",
+      "kind": "phone_calls",
+      "source": "call_screening",
+      "description": "Screen incoming calls and review your call log.",
+      "permissions": [
+        "android.permission.READ_CALL_LOG"
+      ],
+      "defaultEnabled": true
+    },
+    {
+      "id": "google_voice",
+      "label": "Google Voice",
+      "kind": "notification_listener",
+      "source": "google_voice",
+      "description": "Screen new Google Voice texts from their notifications.",
+      "packages": [
+        "com.google.android.apps.googlevoice"
+      ],
+      "defaultEnabled": true,
+      "optOut": "reply_in_app",
+      "optOutHint": "Reply STOP in Google Voice",
+      "ignoreTextPatterns": [
+        "^\\d+ new (messages|conversations)$",
+        "^Missed call",
+        "^New voicemail"
+      ]
+    },
+    {
+      "id": "whatsapp",
+      "label": "WhatsApp",
+      "kind": "notification_listener",
+      "source": "whatsapp",
+      "description": "Screen new WhatsApp messages (chats and groups) from their notifications.",
+      "packages": [
+        "com.whatsapp"
+      ],
+      "defaultEnabled": true,
+      "optOut": "block_or_report_in_app",
+      "optOutHint": "Block or report in WhatsApp",
+      "chatDeepLink": "https://wa.me/{number}",
+      "ignoreTextPatterns": [
+        "^\\d+ new messages?$",
+        "^\\d+ messages? from \\d+ chats?$",
+        "^Checking for new messages$",
+        "^WhatsApp Web is currently active$"
+      ]
+    },
+    {
+      "id": "whatsapp_business",
+      "label": "WhatsApp Business",
+      "kind": "notification_listener",
+      "source": "whatsapp",
+      "description": "Same as WhatsApp, for the WhatsApp Business app.",
+      "packages": [
+        "com.whatsapp.w4b"
+      ],
+      "defaultEnabled": true,
+      "optOut": "block_or_report_in_app",
+      "optOutHint": "Block or report in WhatsApp Business",
+      "chatDeepLink": "https://wa.me/{number}",
+      "ignoreTextPatterns": [
+        "^\\d+ new messages?$",
+        "^\\d+ messages? from \\d+ chats?$",
+        "^Checking for new messages$"
+      ]
+    },
+    {
+      "id": "jev",
+      "label": "Jev second opinion",
+      "kind": "cloud_function",
+      "description": "TypeSafe Jev answers nine scam-signal questions about redacted text, through Call Guardian's Cloud Function.",
+      "defaultEnabled": false
+    }
+  ]
+}

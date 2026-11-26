@@ -22,3 +22,12 @@ object MethodsModule {
     @Singleton
     fun policy(registry: MethodRegistry): CapabilityPolicy = CapabilityPolicy(registry)
 }
+
+@Module
+@InstallIn(SingletonComponent::class)
+object IntegrationsModule {
+    @Provides
+    @Singleton
+    fun catalog(@ApplicationContext context: Context): com.example.callguardian.integrations.IntegrationCatalog =
+        com.example.callguardian.integrations.IntegrationCatalog { path -> context.assets.open("schemas/$path").bufferedReader().use { it.readText() } }
+}

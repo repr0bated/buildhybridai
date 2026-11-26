@@ -43,7 +43,7 @@
       "properties": {
         "id": {
           "type": "string",
-          "pattern": "^guardian\\.[a-z]+\\.[a-z]+@v[0-9]+$"
+          "pattern": "^guardian\\.[a-z]+\\.[a-z_]+@v[0-9]+$"
         },
         "alias": {
           "type": "string",
@@ -68,7 +68,13 @@
             "sms.quarantine",
             "report.external",
             "contacts.write",
-            "net.cloud_ai"
+            "net.cloud_ai",
+            "analysis.local",
+            "net.jev",
+            "sms.send",
+            "sms.local",
+            "browser.open",
+            "settings.local"
           ]
         },
         "execution": {
@@ -130,6 +136,10 @@
         },
         "output": {
           "type": "string"
+        },
+        "proposable": {
+          "type": "boolean",
+          "description": "False = user-only method: never offered to or proposed by a model, and never auto-run. Default true."
         }
       }
     }

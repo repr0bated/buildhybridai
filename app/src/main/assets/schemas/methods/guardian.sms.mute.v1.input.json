@@ -1,0 +1,45 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/repr0bated/callguardian-android/schemas/methods/guardian.sms.mute.v1.input.json",
+  "title": "MuteSenderInput",
+  "description": "Keep or mute a subscription sender. Stored only in Call Guardian on this phone; nothing is sent.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "sender",
+    "mode",
+    "source"
+  ],
+  "properties": {
+    "sender": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[^\\n\\r]{1,64}$",
+      "title": "Sender",
+      "description": "Sender as shown by the SMS inbox or Google Voice (number, short code or name).",
+      "readOnly": true
+    },
+    "mode": {
+      "type": "string",
+      "enum": [
+        "MUTE",
+        "KEEP",
+        "CLEAR"
+      ],
+      "title": "Choice",
+      "description": "MUTE: no Call Guardian alerts for this sender. KEEP: you want these texts; hide from review. CLEAR: undo."
+    },
+    "source": {
+      "type": "string",
+      "enum": [
+        "sms",
+        "google_voice",
+        "whatsapp"
+      ],
+      "title": "Source",
+      "readOnly": true,
+      "description": "Typed message source (see message_source.schema.json)."
+    }
+  }
+}

@@ -1,0 +1,166 @@
+{
+  "probedAt": "2026-11-26T11:48:45.804Z",
+  "totalInputTokens": 6556,
+  "results": [
+    {
+      "title": "Package redelivery",
+      "sender": "unknown_number",
+      "text": "USPS: Your package is on hold due to an incomplete address. Update within 12 hours or it will be returned: https://usps-redelivery-help.top/[path]",
+      "latencyMs": 144,
+      "model": "jev-1.14.0",
+      "questionsVersion": "2026.11.1",
+      "signals": {
+        "asks_payment": 0.03,
+        "deadline_pressure": 0.98,
+        "claims_organization": 0.96,
+        "asks_open_link": 0.98,
+        "asks_share_code": 0.02,
+        "asks_login_details": 0.05,
+        "offers_money": 0.02,
+        "moves_to_other_app": 0.03,
+        "stranger_opener": 0.34
+      },
+      "inputTokens": 823
+    },
+    {
+      "title": "Unpaid toll",
+      "sender": "unknown_number",
+      "text": "E-ZPass FINAL NOTICE: You have an unpaid toll of $4.15. Pay today to avoid a $50 late fee: http://ezpass-pay.info/[path]",
+      "latencyMs": 52,
+      "model": "jev-1.14.0",
+      "questionsVersion": "2026.11.1",
+      "signals": {
+        "asks_payment": 0.99,
+        "deadline_pressure": 0.97,
+        "claims_organization": 0.62,
+        "asks_open_link": 0.98,
+        "asks_share_code": 0.02,
+        "asks_login_details": 0.05,
+        "offers_money": 0.03,
+        "moves_to_other_app": 0.02,
+        "stranger_opener": 0.27
+      },
+      "inputTokens": 823
+    },
+    {
+      "title": "Bank lock + code",
+      "sender": "unknown_number",
+      "text": "Chase Alert: Unusual sign-in detected. Your account is locked. Reply with the 6-digit code we just sent to verify it's you.",
+      "latencyMs": 58,
+      "model": "jev-1.14.0",
+      "questionsVersion": "2026.11.1",
+      "signals": {
+        "asks_payment": 0.02,
+        "deadline_pressure": 0.31,
+        "claims_organization": 0.96,
+        "asks_open_link": 0.02,
+        "asks_share_code": 0.99,
+        "asks_login_details": 0.75,
+        "offers_money": 0.02,
+        "moves_to_other_app": 0.02,
+        "stranger_opener": 0.25
+      },
+      "inputTokens": 817
+    },
+    {
+      "title": "Wrong-number crypto",
+      "sender": "unknown_number",
+      "text": "Hi Amy, is this still your number? It's Lisa from the yoga class. My uncle has a crypto trading tip that doubled my savings last month.",
+      "latencyMs": 46,
+      "model": "jev-1.14.0",
+      "questionsVersion": "2026.11.1",
+      "signals": {
+        "asks_payment": 0.05,
+        "deadline_pressure": 0.02,
+        "claims_organization": 0.02,
+        "asks_open_link": 0.02,
+        "asks_share_code": 0.02,
+        "asks_login_details": 0.02,
+        "offers_money": 0.98,
+        "moves_to_other_app": 0.02,
+        "stranger_opener": 0.84
+      },
+      "inputTokens": 816
+    },
+    {
+      "title": "Job offer",
+      "sender": "unknown_number",
+      "text": "Hello! Our HR team found your resume. Remote part-time role, $300-$500/day, no experience. Reply YES to learn more on WhatsApp.",
+      "latencyMs": 39,
+      "model": "jev-1.14.0",
+      "questionsVersion": "2026.11.1",
+      "signals": {
+        "asks_payment": 0.03,
+        "deadline_pressure": 0.02,
+        "claims_organization": 0.05,
+        "asks_open_link": 0.09,
+        "asks_share_code": 0.02,
+        "asks_login_details": 0.02,
+        "offers_money": 0.98,
+        "moves_to_other_app": 0.99,
+        "stranger_opener": 0.88
+      },
+      "inputTokens": 822
+    },
+    {
+      "title": "Legit reminder",
+      "sender": "unknown_number",
+      "text": "Reminder: your dental appointment is Tue Dec 1 at 3:30pm. Reply C to confirm or call the office to reschedule.",
+      "latencyMs": 42,
+      "model": "jev-1.14.0",
+      "questionsVersion": "2026.11.1",
+      "signals": {
+        "asks_payment": 0.02,
+        "deadline_pressure": 0.08,
+        "claims_organization": 0.05,
+        "asks_open_link": 0.02,
+        "asks_share_code": 0.13,
+        "asks_login_details": 0.01,
+        "offers_money": 0.01,
+        "moves_to_other_app": 0.02,
+        "stranger_opener": 0.08
+      },
+      "inputTokens": 816
+    },
+    {
+      "title": "Store promo (Reply STOP)",
+      "sender": "short_code",
+      "text": "BestMart: 20% off this weekend only with code SAVE20. Msg&data rates may apply. Reply STOP to opt out, HELP for help.",
+      "latencyMs": 52,
+      "model": "jev-1.14.0",
+      "questionsVersion": "2026.11.1",
+      "signals": {
+        "asks_payment": 0.09,
+        "deadline_pressure": 0.42,
+        "claims_organization": 0.92,
+        "asks_open_link": 0.02,
+        "asks_share_code": 0.11,
+        "asks_login_details": 0.02,
+        "offers_money": 0.06,
+        "moves_to_other_app": 0.02,
+        "stranger_opener": 0.16
+      },
+      "inputTokens": 818
+    },
+    {
+      "title": "Newsletter (unsubscribe link)",
+      "sender": "short_code",
+      "text": "Spotify: Your 2026 Wrapped is here! Open https://spotify.com/[path] Manage texts: https://www.spotify.com/[path] Text STOP to end.",
+      "latencyMs": 41,
+      "model": "jev-1.14.0",
+      "questionsVersion": "2026.11.1",
+      "signals": {
+        "asks_payment": 0.03,
+        "deadline_pressure": 0.03,
+        "claims_organization": 0.94,
+        "asks_open_link": 0.98,
+        "asks_share_code": 0.02,
+        "asks_login_details": 0.03,
+        "offers_money": 0.03,
+        "moves_to_other_app": 0.08,
+        "stranger_opener": 0.09
+      },
+      "inputTokens": 821
+    }
+  ]
+}

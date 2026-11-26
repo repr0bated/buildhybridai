@@ -40,6 +40,7 @@ data class DispatchResult(
 class MethodDispatcher @Inject constructor(
     private val registry: MethodRegistry,
     private val handlers: MethodHandlers,
+    private val userHandlers: UserMethodHandlers,
     private val receipts: ReceiptDao,
 ) {
     suspend fun dispatch(
@@ -52,6 +53,19 @@ class MethodDispatcher @Inject constructor(
         extras: HandlerExtras = HandlerExtras(),
     ): DispatchResult {
         val reg = registry.byMethod(method) ?: return DispatchResult(-1, DispatchResult.STATUS_DENIED, null, error = "Unknown method $method")
+        return run(reg, input, eventId, proposedBy, dispatch, notes) { handlers.execute(method, input, extras) }
+    }
+
+    /** User-only methods: always USER_CONFIRMED, from a schema-generated confirmation sheet. */
+    suspend fun dispatchUser(method: UserMethod, input: JsonObject, eventId: Long?, notes: List<String> = emptyList()): DispatchResult {
+        val reg = registry.byUser(method) ?: return DispatchResult(-1, DispatchResult.STATUS_DENIED, null, error = "Unknown method $method")
+        return run(reg, input, eventId, VerdictSource.USER, "USER_CONFIRMED", notes) { userHandlers.execute(method, input) }
+    }
+
+    private suspend fun run(
+        reg: RegisteredMethod, input: JsonObject, eventId: Long?, proposedBy: VerdictSource, dispatch: String,
+        notes: List<String>, exec: suspend () -> HandlerOutcome,
+    ): DispatchResult {
         val started = System.currentTimeMillis()
         val inputText = input.toString()
 
@@ -70,7 +84,7 @@ class MethodDispatcher @Inject constructor(
             return DispatchResult(id, DispatchResult.STATUS_INVALID_INPUT, null, error = inReport.errors.joinToString("; "))
         }
         val outcome = try {
-            handlers.execute(method, input, extras)
+            exec()
         } catch (t: Throwable) {
             Timber.w(t, "Method %s failed", reg.id)
             val id = receipt(DispatchResult.STATUS_FAILED, null, listOf("error: ${t.message ?: t.javaClass.simpleName}"))

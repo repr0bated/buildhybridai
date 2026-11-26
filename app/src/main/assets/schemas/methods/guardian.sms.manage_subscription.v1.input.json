@@ -1,0 +1,91 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/repr0bated/callguardian-android/schemas/methods/guardian.sms.manage_subscription.v1.input.json",
+  "title": "ManageSubscriptionInput",
+  "description": "Open the sender's unsubscribe or manage-subscription page in your browser, so you can unsubscribe there yourself. Nothing on the page is automated; it opens only after you confirm.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "sender",
+    "url",
+    "domain",
+    "linkKind",
+    "chosenBy",
+    "suspicious",
+    "acknowledgeWarning",
+    "source"
+  ],
+  "properties": {
+    "sender": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[^\\n\\r]{1,64}$",
+      "title": "Sender",
+      "description": "Sender as shown by the SMS inbox or Google Voice (number, short code or name).",
+      "readOnly": true
+    },
+    "url": {
+      "type": "string",
+      "minLength": 10,
+      "maxLength": 500,
+      "pattern": "^https?://[^\\s]+$",
+      "title": "Page that will open",
+      "readOnly": true
+    },
+    "domain": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 120,
+      "title": "Domain",
+      "readOnly": true
+    },
+    "linkKind": {
+      "type": "string",
+      "enum": [
+        "UNSUBSCRIBE",
+        "MANAGE_SUBSCRIPTION",
+        "OTHER"
+      ],
+      "title": "Link type",
+      "readOnly": true
+    },
+    "chosenBy": {
+      "type": "string",
+      "enum": [
+        "RULES",
+        "ON_DEVICE"
+      ],
+      "title": "Link picked by",
+      "readOnly": true
+    },
+    "suspicious": {
+      "type": "boolean",
+      "title": "Link looks suspicious",
+      "readOnly": true
+    },
+    "warning": {
+      "type": "string",
+      "maxLength": 200,
+      "title": "Warning",
+      "readOnly": true
+    },
+    "acknowledgeWarning": {
+      "type": "boolean",
+      "default": false,
+      "title": "I understand the warning",
+      "description": "Needed only when the link looks suspicious."
+    },
+    "source": {
+      "type": "string",
+      "enum": [
+        "sms",
+        "google_voice",
+        "whatsapp"
+      ],
+      "title": "Source",
+      "readOnly": true,
+      "description": "Typed message source (see message_source.schema.json)."
+    }
+  }
+}

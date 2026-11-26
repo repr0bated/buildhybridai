@@ -77,7 +77,7 @@ fun SchemaConfirmSheet(
     val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var values by remember(initial) { mutableStateOf(initial) }
     val problems = form.problems(values)
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheet) {
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheet, containerColor = com.example.callguardian.ui.theme.Brand.Glass, tonalElevation = 0.dp, dragHandle = { androidx.compose.material3.BottomSheetDefaults.DragHandle(color = com.example.callguardian.ui.theme.Brand.Lime.copy(alpha = 0.6f)) }) {
         Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp).navigationBarsPadding()) {
             MethodHeaderBlock(header, form)
             Spacer(Modifier.size(12.dp))
@@ -196,7 +196,7 @@ private fun ErrorText(s: String) = Text(s, style = MaterialTheme.typography.body
 @Composable
 fun SchemaDetails(form: SchemaForm, value: JsonObject?, rawFallback: String? = null) {
     if (value == null) {
-        Text(rawFallback ?: "—", style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
+        Text(rawFallback ?: "—", style = MaterialTheme.typography.bodySmall, fontFamily = com.example.callguardian.ui.theme.JetBrainsMono)
         return
     }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -212,7 +212,7 @@ fun SchemaDetails(form: SchemaForm, value: JsonObject?, rawFallback: String? = n
         val extra = value.keys - form.fields.map { it.name }.toSet()
         if (extra.isNotEmpty()) {
             HorizontalDivider()
-            extra.forEach { k -> Text("$k: ${value[k]}", style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace) }
+            extra.forEach { k -> Text("$k: ${value[k]}", style = MaterialTheme.typography.bodySmall, fontFamily = com.example.callguardian.ui.theme.JetBrainsMono) }
         }
     }
 }

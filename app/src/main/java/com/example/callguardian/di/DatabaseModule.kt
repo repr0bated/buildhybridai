@@ -20,6 +20,7 @@ object DatabaseModule {
     fun provideDatabase(@ApplicationContext context: Context): CallGuardianDatabase =
         Room.databaseBuilder(context, CallGuardianDatabase::class.java, "call_guardian.db")
             // v1/v2 schemas from the original app were never shipped to users.
+            .addMigrations(com.example.callguardian.data.db.MIGRATION_3_4)
             .fallbackToDestructiveMigration(dropAllTables = true)
             .build()
 

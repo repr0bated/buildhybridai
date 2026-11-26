@@ -7,6 +7,12 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- Read incoming SMS for screening. We are NOT the default SMS app and never send or delete SMS. -->
     <uses-permission android:name="android.permission.RECEIVE_SMS" />
+    <!-- Lab "My texts" and Subscriptions read the inbox; nothing is uploaded. -->
+    <uses-permission android:name="android.permission.READ_SMS" />
+    <!-- Only for guardian.sms.unsubscribe@v1: sends STOP after you confirm. Never automatic. -->
+    <uses-permission android:name="android.permission.SEND_SMS" />
+    <!-- Lab "Calls": review your call log on the phone. -->
+    <uses-permission android:name="android.permission.READ_CALL_LOG" />
     <!-- Never block or warn on saved contacts. -->
     <uses-permission android:name="android.permission.READ_CONTACTS" />
 
@@ -14,6 +20,13 @@
     <uses-feature android:name="android.hardware.telephony" android:required="false" />
 
     <queries>
+        <package android:name="com.google.android.apps.googlevoice" />
+        <package android:name="com.whatsapp" />
+        <package android:name="com.whatsapp.w4b" />
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="https" />
+        </intent>
         <intent>
             <action android:name="android.intent.action.SENDTO" />
             <data android:scheme="smsto" />
@@ -53,6 +66,17 @@
                 <action android:name="android.provider.Telephony.SMS_RECEIVED" />
             </intent-filter>
         </receiver>
+
+        <!-- Google Voice / WhatsApp: reads new message notifications (integrations.json). Read-only. -->
+        <service
+            android:name=".notify.MessageNotificationListener"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
 
         <receiver
             android:name=".notifications.NotificationActionReceiver"

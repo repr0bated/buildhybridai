@@ -1,0 +1,54 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/repr0bated/callguardian-android/schemas/methods/guardian.jev.check.v1.input.json",
+  "title": "JevCheckInput",
+  "description": "Ask TypeSafe Jev for a second opinion: nine yes/no scam-signal questions about the REDACTED text, through the Call Guardian Cloud Function (App Check). The API key stays on the server.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "eventId",
+    "sender",
+    "redactedText",
+    "source"
+  ],
+  "properties": {
+    "eventId": {
+      "type": "integer",
+      "minimum": 1,
+      "title": "Screening event",
+      "description": "Screening event id. Bound from the trusted context.",
+      "readOnly": true
+    },
+    "sender": {
+      "type": "string",
+      "enum": [
+        "saved_contact",
+        "unknown_number",
+        "short_code",
+        "hidden"
+      ],
+      "title": "Sender kind",
+      "readOnly": true
+    },
+    "redactedText": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2000,
+      "title": "Redacted content sent",
+      "description": "Output of the on-device Redactor.",
+      "readOnly": true
+    },
+    "source": {
+      "type": "string",
+      "enum": [
+        "sms",
+        "google_voice",
+        "whatsapp",
+        "lab_sample"
+      ],
+      "title": "Source",
+      "readOnly": true,
+      "description": "Typed message source (see message_source.schema.json)."
+    }
+  }
+}

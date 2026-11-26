@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "samples": [
+    {
+      "title": "Package redelivery",
+      "sender": "+1 (202) 555-0147",
+      "body": "USPS: Your package is on hold due to an incomplete address. Update within 12 hours or it will be returned: https://usps-redelivery-help.top/track"
+    },
+    {
+      "title": "Unpaid toll",
+      "sender": "+1 (305) 555-0188",
+      "body": "E-ZPass FINAL NOTICE: You have an unpaid toll of $4.15. Pay today to avoid a $50 late fee: http://ezpass-pay.info/settle"
+    },
+    {
+      "title": "Bank lock + code",
+      "sender": "+1 (415) 555-0110",
+      "body": "Chase Alert: Unusual sign-in detected. Your account is locked. Reply with the 6-digit code we just sent to verify it's you."
+    },
+    {
+      "title": "Wrong-number crypto",
+      "sender": "+1 (646) 555-0133",
+      "body": "Hi Amy, is this still your number? It's Lisa from the yoga class. My uncle has a crypto trading tip that doubled my savings last month."
+    },
+    {
+      "title": "Job offer",
+      "sender": "+1 (312) 555-0161",
+      "body": "Hello! Our HR team found your resume. Remote part-time role, $300-$500/day, no experience. Reply YES to learn more on WhatsApp."
+    },
+    {
+      "title": "Legit reminder",
+      "sender": "+1 (617) 555-0102",
+      "body": "Reminder: your dental appointment is Tue Dec 1 at 3:30pm. Reply C to confirm or call the office to reschedule."
+    },
+    {
+      "title": "Store promo (Reply STOP)",
+      "sender": "47297",
+      "body": "BestMart: 20% off this weekend only with code SAVE20. Msg&data rates may apply. Reply STOP to opt out, HELP for help."
+    },
+    {
+      "title": "Newsletter (unsubscribe link)",
+      "sender": "88544",
+      "body": "Spotify: Your 2026 Wrapped is here! Open https://spotify.com/wrapped. Manage texts: https://www.spotify.com/account/notifications Text STOP to end."
+    }
+  ]
+}

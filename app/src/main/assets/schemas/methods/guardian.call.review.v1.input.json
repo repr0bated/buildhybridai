@@ -1,0 +1,93 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/repr0bated/callguardian-android/schemas/methods/guardian.call.review.v1.input.json",
+  "title": "ReviewCallInput",
+  "description": "Review a call from the phone's call log: number, caller name, contact status, frequency and the rule engine. No audio is used. Nothing leaves the phone.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "callLogId",
+    "number",
+    "isContact",
+    "callType",
+    "durationSec",
+    "callAt",
+    "callsFromNumber30d",
+    "callsWithin15Min",
+    "runOnDevice"
+  ],
+  "properties": {
+    "callLogId": {
+      "type": "integer",
+      "minimum": 1,
+      "title": "Call log entry",
+      "readOnly": true
+    },
+    "number": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 32,
+      "pattern": "^(hidden|\\+?[0-9]{3,20})$",
+      "format": "phone",
+      "title": "Number",
+      "description": "From the call log, or 'hidden'.",
+      "readOnly": true
+    },
+    "cachedName": {
+      "type": "string",
+      "maxLength": 80,
+      "title": "Caller name",
+      "readOnly": true
+    },
+    "isContact": {
+      "type": "boolean",
+      "title": "Saved contact",
+      "readOnly": true
+    },
+    "callType": {
+      "type": "string",
+      "enum": [
+        "INCOMING",
+        "OUTGOING",
+        "MISSED",
+        "REJECTED",
+        "BLOCKED",
+        "VOICEMAIL",
+        "UNKNOWN"
+      ],
+      "title": "Call type",
+      "readOnly": true
+    },
+    "durationSec": {
+      "type": "integer",
+      "minimum": 0,
+      "title": "Duration (s)",
+      "readOnly": true
+    },
+    "callAt": {
+      "type": "integer",
+      "minimum": 0,
+      "format": "epoch-millis",
+      "title": "Time",
+      "readOnly": true
+    },
+    "callsFromNumber30d": {
+      "type": "integer",
+      "minimum": 0,
+      "title": "Calls from this number (30 days)",
+      "readOnly": true
+    },
+    "callsWithin15Min": {
+      "type": "integer",
+      "minimum": 0,
+      "title": "Other calls within 15 minutes before",
+      "readOnly": true
+    },
+    "runOnDevice": {
+      "type": "boolean",
+      "default": true,
+      "title": "Also ask Gemini Nano 4 on this phone",
+      "description": "Runs the on-device model (built on Gemma 4) after the rules. Private: nothing is sent anywhere."
+    }
+  }
+}

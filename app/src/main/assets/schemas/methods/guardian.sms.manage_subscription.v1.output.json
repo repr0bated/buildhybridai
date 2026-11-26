@@ -1,0 +1,36 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/repr0bated/callguardian-android/schemas/methods/guardian.sms.manage_subscription.v1.output.json",
+  "title": "ManageSubscriptionOutput",
+  "description": "Result of guardian.sms.manage_subscription@v1.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "url",
+    "domain",
+    "browserOpened",
+    "openedAt"
+  ],
+  "properties": {
+    "url": {
+      "type": "string",
+      "maxLength": 500,
+      "title": "Page"
+    },
+    "domain": {
+      "type": "string",
+      "maxLength": 120,
+      "title": "Domain"
+    },
+    "browserOpened": {
+      "type": "boolean",
+      "title": "Browser opened"
+    },
+    "openedAt": {
+      "type": "integer",
+      "minimum": 0,
+      "format": "epoch-millis",
+      "title": "Opened at"
+    }
+  }
+}

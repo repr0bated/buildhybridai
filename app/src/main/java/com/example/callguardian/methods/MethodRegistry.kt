@@ -12,7 +12,10 @@ class RegisteredMethod(
     val outputSchemaJson: String,
 ) {
     val id: String get() = spec.id
-    val method: GuardianMethod get() = GuardianMethod.fromAlias(spec.alias)
+    /** User-only methods (registry `"proposable": false`) map to NONE here; see [userMethod]. */
+    val proposable: Boolean get() = spec.proposable != false
+    val method: GuardianMethod get() = if (proposable) GuardianMethod.fromAlias(spec.alias) else GuardianMethod.NONE
+    val userMethod: UserMethod? get() = if (proposable) null else UserMethod.fromAlias(spec.alias)
     val inputValidator = SchemaValidator(inputSchemaJson, spec.input.substringAfterLast('/'))
     val outputValidator = SchemaValidator(outputSchemaJson, spec.output.substringAfterLast('/'))
     val inputSchemaId: String get() = spec.input.substringAfterLast('/')
@@ -42,7 +45,10 @@ class MethodRegistry(read: (String) -> String) {
 
     val version: String get() = registry.registryVersion
 
-    fun byMethod(m: GuardianMethod): RegisteredMethod? = methods.firstOrNull { it.method == m }
+    fun byMethod(m: GuardianMethod): RegisteredMethod? = if (m == GuardianMethod.NONE) null else methods.firstOrNull { it.proposable && it.method == m }
+    fun byUser(m: UserMethod): RegisteredMethod? = methods.firstOrNull { it.userMethod == m }
+    /** Methods a model may propose (and the event screen offers as action buttons). */
+    val proposableMethods: List<RegisteredMethod> get() = methods.filter { it.proposable }
     fun byId(id: String): RegisteredMethod? = methods.firstOrNull { it.id == id }
 
     companion object {

@@ -12,6 +12,12 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -27,6 +33,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -50,8 +58,8 @@ import java.util.Date
 @Composable
 fun Pill(text: String, color: Color, icon: ImageVector? = null, modifier: Modifier = Modifier) {
     Row(
-        modifier.clip(RoundedCornerShape(50)).background(color.copy(alpha = 0.16f))
-            .border(1.dp, color.copy(alpha = 0.45f), RoundedCornerShape(50)).padding(horizontal = 9.dp, vertical = 4.dp),
+        modifier.clip(RoundedCornerShape(4.dp)).background(color.copy(alpha = 0.14f))
+            .border(1.dp, color.copy(alpha = 0.55f), RoundedCornerShape(4.dp)).padding(horizontal = 7.dp, vertical = 3.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (icon != null) { Icon(icon, null, tint = color, modifier = Modifier.size(13.dp)); Spacer(Modifier.width(4.dp)) }
@@ -71,24 +79,90 @@ fun SourcePill(source: VerdictSource, model: String? = null) = when (source) {
 }
 
 fun prettyModel(name: String): String = when {
-    name.contains("v4-fast", true) -> "Gemma 4 E2B"
-    name.contains("v4-full", true) -> "Gemma 4 E4B"
+    name.contains("v4-fast", true) -> "Gemini Nano 4 Fast"
+    name.contains("v4-full", true) -> "Gemini Nano 4"
     name.contains("nano", true) -> name
     else -> name
 }
 
+/** Glass card: translucent fill over the grid background, hairline gradient border (lime → transparent). */
 @Composable
-fun SectionCard(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
-    Card(
-        modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
-    ) { Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) { content() } }
+fun SectionCard(modifier: Modifier = Modifier, accent: Color = MaterialTheme.colorScheme.primary, content: @Composable () -> Unit) {
+    val shape = RoundedCornerShape(14.dp)
+    Column(
+        modifier.fillMaxWidth().clip(shape)
+            .background(androidx.compose.ui.graphics.Brush.verticalGradient(listOf(Brand.Glass2.copy(alpha = 0.92f), Brand.Glass.copy(alpha = 0.82f))))
+            .border(1.dp, androidx.compose.ui.graphics.Brush.linearGradient(listOf(accent.copy(alpha = 0.45f), Brand.Line, Brand.Line.copy(alpha = 0.4f))), shape)
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) { content() }
 }
 
+/** Section headings read like terminal prompts: "// title". */
 @Composable
 fun SectionTitle(text: String, modifier: Modifier = Modifier) =
-    Text(text, style = MaterialTheme.typography.titleMedium, modifier = modifier.padding(top = 8.dp, bottom = 2.dp))
+    Text("// " + text.lowercase(), style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary,
+        modifier = modifier.padding(top = 4.dp, bottom = 2.dp))
+
+/** Replaces the stock M3 top app bar: a terminal-style prompt with a blinking cursor and a lime rule underneath. */
+@Composable
+fun GuardianTopBar(
+    title: @Composable () -> Unit,
+    navigationIcon: @Composable () -> Unit = {},
+    actions: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit = {},
+) {
+    val blink = androidx.compose.animation.core.rememberInfiniteTransition(label = "cursor")
+    val a by blink.animateFloat(1f, 0f, androidx.compose.animation.core.infiniteRepeatable(
+        androidx.compose.animation.core.tween(600, easing = androidx.compose.animation.core.LinearEasing),
+        androidx.compose.animation.core.RepeatMode.Reverse), label = "a")
+    Column(Modifier.fillMaxWidth().background(Brand.Void).windowInsetsPadding(WindowInsets.statusBars)) {
+        Row(Modifier.fillMaxWidth().padding(start = 8.dp, end = 4.dp, top = 6.dp, bottom = 6.dp).androidx_minHeight(52.dp), verticalAlignment = Alignment.CenterVertically) {
+            navigationIcon()
+            Spacer(Modifier.width(8.dp))
+            Text(">", style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.primary)
+            Spacer(Modifier.width(8.dp))
+            Box(Modifier.weight(1f)) {
+                androidx.compose.runtime.CompositionLocalProvider(
+                    androidx.compose.material3.LocalTextStyle provides MaterialTheme.typography.headlineSmall,
+                    androidx.compose.material3.LocalContentColor provides MaterialTheme.colorScheme.onBackground,
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        title()
+                        Box(Modifier.padding(start = 3.dp).size(width = 10.dp, height = 20.dp).background(MaterialTheme.colorScheme.primary.copy(alpha = a)))
+                    }
+                }
+            }
+            actions()
+        }
+        Box(Modifier.fillMaxWidth().size(height = 1.dp, width = 1.dp).background(androidx.compose.ui.graphics.Brush.horizontalGradient(listOf(Brand.Lime.copy(alpha = 0.7f), Brand.Line, Color.Transparent))))
+    }
+}
+
+private fun Modifier.androidx_minHeight(h: androidx.compose.ui.unit.Dp) = this.heightIn(min = h)
+
+/** Animated verdict ring: sweeps to [fraction] in the threat colour, with a slow pulse when the risk is high. */
+@Composable
+fun VerdictRing(fraction: Float, color: Color, label: String, modifier: Modifier = Modifier.size(76.dp)) {
+    val sweep by androidx.compose.animation.core.animateFloatAsState(fraction.coerceIn(0f, 1f),
+        androidx.compose.animation.core.tween(900, easing = androidx.compose.animation.core.FastOutSlowInEasing), label = "sweep")
+    val pulse = androidx.compose.animation.core.rememberInfiniteTransition(label = "pulse")
+    val glow by pulse.animateFloat(0.15f, 0.45f, androidx.compose.animation.core.infiniteRepeatable(
+        androidx.compose.animation.core.tween(1400), androidx.compose.animation.core.RepeatMode.Reverse), label = "glow")
+    Box(modifier.androidx_semantics(label), contentAlignment = Alignment.Center) {
+        androidx.compose.foundation.Canvas(Modifier.matchParentSize()) {
+            val stroke = 7.dp.toPx()
+            val inset = stroke / 2
+            val sz = androidx.compose.ui.geometry.Size(size.width - stroke, size.height - stroke)
+            val tl = androidx.compose.ui.geometry.Offset(inset, inset)
+            drawArc(Brand.Line, 0f, 360f, false, tl, sz, style = androidx.compose.ui.graphics.drawscope.Stroke(stroke))
+            drawArc(color.copy(alpha = glow), -90f, 360f * sweep, false, tl, sz, style = androidx.compose.ui.graphics.drawscope.Stroke(stroke * 2.2f))
+            drawArc(color, -90f, 360f * sweep, false, tl, sz, style = androidx.compose.ui.graphics.drawscope.Stroke(stroke, cap = androidx.compose.ui.graphics.StrokeCap.Round))
+        }
+        Text("${(sweep * 100).toInt()}", style = MaterialTheme.typography.titleLarge, color = color)
+    }
+}
+
+private fun Modifier.androidx_semantics(label: String) = this.semantics { contentDescription = label }
 
 @Composable
 fun EventRow(e: ScreeningEventEntity, onClick: () -> Unit) {
@@ -97,8 +171,9 @@ fun EventRow(e: ScreeningEventEntity, onClick: () -> Unit) {
     val category = runCatching { ScamCategory.valueOf(e.category) }.getOrDefault(ScamCategory.NONE)
     val action = GuardianMethod.fromAlias(e.finalAction)
     Row(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).clickable(onClick = onClick)
-            .background(MaterialTheme.colorScheme.surfaceContainer).padding(14.dp),
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable(onClick = onClick)
+            .background(Brand.Glass.copy(alpha = 0.85f)).border(1.dp, risk.color().copy(alpha = if (risk >= RiskLevel.MEDIUM) 0.55f else 0.18f), RoundedCornerShape(12.dp))
+            .padding(14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(Modifier.size(42.dp).clip(CircleShape).background(risk.color().copy(alpha = 0.18f)), contentAlignment = Alignment.Center) {
