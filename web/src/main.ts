@@ -287,13 +287,24 @@ async function boot() {
   store.onChange((c, _d, origin) => { if (origin === 'remote' && (c === 'receipts' || c === 'senders' || c === 'subscriptions' || c === 'settings')) { if (c === 'settings') void loadSettings(store).then((s) => (settings = s)); if (!busy) void render(); } });
   await render();
   const { watchAuth, FirestoreRemote } = await import('./sync-firebase');
+  const { loadRemoteConfig } = await import('./remote-config');
+  void loadRemoteConfig();
+  let stopAlerts: (() => void) | null = null;
   watchAuth((u) => {
     user = u;
     sync?.stop(); sync = null;
+    stopAlerts?.(); stopAlerts = null;
     if (u) {
       sync = new SyncCore(store, new FirestoreRemote(u.uid));
       sync.onStatus = (s) => { syncStatus = s; void render(); };
       void sync.start();
+      void (async () => {
+        const { watchCompanionAlerts, showCompanionNotification, requestCompanionPermission } = await import('./companion-alerts');
+        await requestCompanionPermission();
+        stopAlerts = watchCompanionAlerts(u.uid, (a) => {
+          showCompanionNotification(a);
+        });
+      })();
     } else syncStatus = { state: 'off', pushed: 0, pulled: 0, rejected: 0 };
     void render();
   });

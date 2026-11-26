@@ -40,14 +40,14 @@ describe('registry + validation', () => {
     expect(registry.methods.length).toBeGreaterThan(8);
     expect(methodByAlias('block_number')?.id).toBe('guardian.call.block@v1');
   });
-  const good = { riskLevel: 'HIGH', category: 'PHISHING_LINK', confidence: 90, reasons: ['link'], advice: 'Do not tap', method: 'QUARANTINE_SMS' };
+  const good = { verdict: 'SCAM', confidence: 90, reasons: ['link'], reputable_official: 'NO', held_account: 'NO' };
   it('accepts a valid verdict, including fenced JSON', () => {
     expect(validateModelText('scam_verdict', JSON.stringify(good)).valid).toBe(true);
     expect(validateModelText('scam_verdict', '```json\n' + JSON.stringify(good) + '\n```').valid).toBe(true);
     expect(extractJson('```json\n{"a":1}\n```')).toBe('{"a":1}');
   });
   it('rejects unknown methods, extra fields and bad ranges', () => {
-    expect(validateModelText('scam_verdict', JSON.stringify({ ...good, method: 'WIPE_PHONE' })).valid).toBe(false);
+    expect(validateModelText('scam_verdict', JSON.stringify({ ...good, verdict: 'WIPE_PHONE' })).valid).toBe(false);
     expect(validateModelText('scam_verdict', JSON.stringify({ ...good, extra: 1 })).valid).toBe(false);
     expect(validateModelText('scam_verdict', JSON.stringify({ ...good, confidence: 150 })).valid).toBe(false);
     expect(validateModelText('scam_verdict', 'not json').errors[0]).toMatch(/Not valid JSON/);
@@ -104,7 +104,7 @@ describe('redaction', () => {
 });
 
 describe('analysis pipeline', () => {
-  const verdict = { riskLevel: 'HIGH', category: 'PACKAGE_DELIVERY', confidence: 91, reasons: ['Fake redelivery link'], advice: 'Ignore it.', method: 'QUARANTINE_SMS' };
+  const verdict = { verdict: 'SCAM', confidence: 91, reasons: ['Fake redelivery link'], reputable_official: 'NO', held_account: 'NO' };
   const eng = (raw: string | Error, source: ModelRun['source'] = 'ON_DEVICE'): Engine => ({
     async triage() { if (raw instanceof Error) throw raw; return { rawText: raw, source, modelName: source === 'ON_DEVICE' ? 'Gemini Nano (Chrome built-in)' : 'gemini-3.5-flash-lite', latencyMs: 12 }; },
     async deep() { throw new Error('unused'); },
@@ -125,7 +125,7 @@ describe('analysis pipeline', () => {
     expect(a.steps[1].detail).toMatch(/redacted/);
   });
   it('rejects schema-invalid output and falls back to rules', async () => {
-    const a = await analyze(parseInput(scam, '+14155550142'), { engine: eng(JSON.stringify({ ...verdict, method: 'FORMAT_DISK' })) });
+    const a = await analyze(parseInput(scam, '+14155550142'), { engine: eng(JSON.stringify({ ...verdict, verdict: 'FORMAT_DISK' })) });
     expect(a.schemaValid).toBe(false);
     expect(a.final.decidedBy).toBe('RULES');
     expect(a.steps.some((s) => s.kind === 'fallback')).toBe(true);

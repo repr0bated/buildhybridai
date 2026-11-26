@@ -78,6 +78,7 @@ class ScreeningEngine @Inject constructor(
     private val quarantineInbox: QuarantineInbox,
     private val ownedStore: OwnedStore,
     private val subscriptionStore: com.example.callguardian.subscriptions.SubscriptionStore,
+    private val remoteConfig: com.example.callguardian.firebase.GuardianRemoteConfig,
 ) {
     private val json = Json { ignoreUnknownKeys = false }
     val verdictValidator by lazy { SchemaValidator(asset("schemas/scam_verdict.schema.json"), "scam_verdict.schema.json") }
@@ -362,6 +363,7 @@ class ScreeningEngine @Inject constructor(
             senderFeatures = senderFeatureLine(input, e.number),
             linkDomains = linkDomainLine(e.body),
             ownedList = ownedListLine(),
+            variant = remoteConfig.triagePromptVariant,
         )
 
         val route = NanoPolicy.route(AppForeground.isResumed, settings.privateMode)
@@ -426,6 +428,11 @@ class ScreeningEngine @Inject constructor(
             val rejected = base.copy(aiStatus = AiStatus.REJECTED, schemaValid = false,
                 gateNotes = (listOf("Model output failed ${report.schemaId}; proposal discarded, rules decision kept.") + base.gateNotes.lines()).joinToString("\n"))
             events.update(rejected)
+            com.example.callguardian.firebase.InferenceTelemetry.logVerdict(
+                com.example.callguardian.model.VerdictSource.RULES,
+                rules.category,
+                run.fallbackReason,
+            )
             return@withContext rejected
         }
         val signals = VerdictCalibrator.modelSignals(verdict)
@@ -441,6 +448,7 @@ class ScreeningEngine @Inject constructor(
             aiStatus = AiStatus.DONE, risk = cal.risk.name, category = cal.category.name, confidence = cal.confidence,
             reasons = cal.reasons.joinToString("\n"), advice = cal.advice,
         ))
+        com.example.callguardian.firebase.InferenceTelemetry.logVerdict(run.source, cal.category, run.fallbackReason)
         // Don't re-run a method the rules already executed for this event.
         val alreadyRan = e.autoApplied && e.finalAction == cal.method.alias
         if (applyActions && !alreadyRan) decideAndDispatch(id, MethodProposal(cal.method, cal.risk, cal.confidence, cal.reasons, run.source))

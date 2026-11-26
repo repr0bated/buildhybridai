@@ -42,6 +42,8 @@ class MethodDispatcher @Inject constructor(
     private val handlers: MethodHandlers,
     private val userHandlers: UserMethodHandlers,
     private val receipts: ReceiptDao,
+    private val events: com.example.callguardian.data.db.ScreeningEventDao,
+    private val companionAlerts: com.example.callguardian.firebase.CompanionAlerts,
 ) {
     suspend fun dispatch(
         method: GuardianMethod,
@@ -98,6 +100,15 @@ class MethodDispatcher @Inject constructor(
         }
         val id = receipt(DispatchResult.STATUS_OK, outText, outcome.notes)
         outcome.afterReceipt?.invoke(id)
+        if (reg.method == GuardianMethod.BLOCK_NUMBER) {
+            val ev = eventId?.let { events.get(it) }
+            val category = ev?.category ?: "OTHER"
+            val source = ev?.decidedBy?.let {
+                runCatching { com.example.callguardian.model.VerdictSource.valueOf(it) }.getOrNull()
+            }?.let { com.example.callguardian.firebase.InferenceTelemetry.sourceOf(it) }
+                ?: com.example.callguardian.firebase.InferenceTelemetry.SOURCE_LOCAL
+            companionAlerts.publish(category, source)
+        }
         return DispatchResult(id, DispatchResult.STATUS_OK, outcome.output, outcome.launch)
     }
 

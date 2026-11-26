@@ -30,6 +30,8 @@ data class ModelRun(
     val latencyMs: Long,
     /** Set when on-device failed and cloud Gemini was used instead. Shown in the pipeline step. */
     val fallbackNote: String? = null,
+    /** Closed Analytics token only (never message text). See InferenceTelemetry. */
+    val fallbackReason: String? = null,
 )
 
 enum class DeviceModelState { UNKNOWN, UNAVAILABLE, DOWNLOADABLE, DOWNLOADING, AVAILABLE }
@@ -149,7 +151,8 @@ class HybridScamAnalyzer @Inject constructor(
         return when (route) {
             com.example.callguardian.screening.NanoPolicy.Route.QUEUE ->
                 throw com.example.callguardian.screening.NanoRequiresForegroundException()
-            com.example.callguardian.screening.NanoPolicy.Route.CLOUD -> runCloudTriage(clipped)
+            com.example.callguardian.screening.NanoPolicy.Route.CLOUD ->
+                runCloudTriage(clipped).copy(fallbackReason = com.example.callguardian.firebase.InferenceTelemetry.FALLBACK_BACKGROUND)
             com.example.callguardian.screening.NanoPolicy.Route.NANO -> try {
                 runOnDevice(clipped, choice, privateMode)
             } catch (t: Throwable) {
@@ -163,7 +166,14 @@ class HybridScamAnalyzer @Inject constructor(
                 }
                 Timber.w(t, "On-device triage failed; falling back to cloud Gemini")
                 val note = "On-device request failed (${shortError(t)}); used cloud Gemini automatically."
-                runCloudTriage(clipped).copy(fallbackNote = note)
+                val reason = when {
+                    com.example.callguardian.screening.NanoPolicy.isError9(t) ->
+                        com.example.callguardian.firebase.InferenceTelemetry.FALLBACK_ERROR9
+                    com.example.callguardian.screening.NanoPolicy.isCloudRateLimited(t) ->
+                        com.example.callguardian.firebase.InferenceTelemetry.FALLBACK_RATE_LIMITED
+                    else -> com.example.callguardian.firebase.InferenceTelemetry.FALLBACK_ON_DEVICE_FAILED
+                }
+                runCloudTriage(clipped).copy(fallbackNote = note, fallbackReason = reason)
             }
         }
     }
@@ -179,7 +189,12 @@ class HybridScamAnalyzer @Inject constructor(
     suspend fun deepAnalysis(prompt: String): ModelRun {
         val t0 = System.currentTimeMillis()
         return try {
-            val result = deepModel.generateObject(DeepAnalysis.firebaseAISchema(), prompt)
+            val trace = com.example.callguardian.firebase.InferenceTelemetry.startTrace("cloud")
+            val result = try {
+                deepModel.generateObject(DeepAnalysis.firebaseAISchema(), prompt)
+            } finally {
+                com.example.callguardian.firebase.InferenceTelemetry.stopTrace(trace, "cloud")
+            }
             val text = result.response.text?.trim().orEmpty()
             if (text.isEmpty()) error("Cloud model returned an empty response")
             ModelRun(text, VerdictSource.IN_CLOUD, cloudModelName, System.currentTimeMillis() - t0)
@@ -200,13 +215,20 @@ class HybridScamAnalyzer @Inject constructor(
         }
         val model = triageModel(choice, privateMode)
         val t0 = System.currentTimeMillis()
-        val result = model.generateContent(prompt)
+        val traceName = "nano"
+        val trace = com.example.callguardian.firebase.InferenceTelemetry.startTrace(traceName)
+        val result = try {
+            model.generateContent(prompt)
+        } finally {
+            com.example.callguardian.firebase.InferenceTelemetry.stopTrace(trace, traceName)
+        }
         val latency = System.currentTimeMillis() - t0
         val source = if (result.inferenceSource == InferenceSource.ON_DEVICE) VerdictSource.ON_DEVICE else VerdictSource.IN_CLOUD
         val name = if (source == VerdictSource.ON_DEVICE) deviceModelName(choice) ?: choice.title else cloudModelName
         val text = result.text?.trim().orEmpty()
         if (text.isEmpty()) error("On-device model returned an empty response")
-        return ModelRun(text, source, name, latency)
+        val reason = if (source == VerdictSource.IN_CLOUD) com.example.callguardian.firebase.InferenceTelemetry.FALLBACK_NANO_UNAVAILABLE else null
+        return ModelRun(text, source, name, latency, fallbackReason = reason)
     }
 
     private suspend fun runCloudTriage(prompt: String): ModelRun {
@@ -227,7 +249,12 @@ class HybridScamAnalyzer @Inject constructor(
             timber.log.Timber.w(templated.exceptionOrNull(), "Server prompt template unavailable (Spark/Developer API may not serve templates); falling back to Remote Config / in-app prompt")
         }
         return try {
-            val result = cloudTriageModel().generateContent(finalPrompt)
+            val trace = com.example.callguardian.firebase.InferenceTelemetry.startTrace("cloud")
+            val result = try {
+                cloudTriageModel().generateContent(finalPrompt)
+            } finally {
+                com.example.callguardian.firebase.InferenceTelemetry.stopTrace(trace, "cloud")
+            }
             val text = result.text?.trim().orEmpty()
             if (text.isEmpty()) error("Cloud model returned an empty response")
             ModelRun(text, VerdictSource.IN_CLOUD, remote.cloudModel, System.currentTimeMillis() - t0)
@@ -242,13 +269,19 @@ class HybridScamAnalyzer @Inject constructor(
         val key = geminiSecrets.apiKey()
         if (key.isBlank()) throw cause
         Timber.w(cause, "Firebase AI Logic failed; trying the optional Gemini API key")
-        val text = geminiByok.generate(key, remote.cloudModel, prompt, temperature, maxOutputTokens)
+        val trace = com.example.callguardian.firebase.InferenceTelemetry.startTrace("cloud")
+        val text = try {
+            geminiByok.generate(key, remote.cloudModel, prompt, temperature, maxOutputTokens)
+        } finally {
+            com.example.callguardian.firebase.InferenceTelemetry.stopTrace(trace, "cloud")
+        }
         return ModelRun(
             text,
             VerdictSource.IN_CLOUD,
             "${remote.cloudModel} (own key)",
             System.currentTimeMillis() - t0,
             fallbackNote = "Used your Gemini API key after Firebase AI Logic failed.",
+            fallbackReason = com.example.callguardian.firebase.InferenceTelemetry.FALLBACK_OWN_KEY,
         )
     }
 

@@ -37,6 +37,24 @@ Hybrid inference works best as a *trust boundary*: private content stays on-devi
 ## What's next
 Signed registry updates, per-method permissions UI, Korean prompts (on-device is supported), and a Play Store release so Play Integrity can enforce App Check for everyone.
 
+## Firebase products used
+
+All of the following run on the Spark (free) plan for the `callguardian-hybrid` project. Billing is not enabled.
+
+**Android and web**
+
+* **Firebase AI Logic** — Gemma 4 / Gemini Nano on-device (AICore on Android, Chrome Prompt API on web) with cloud Gemini fallback, protected by **App Check**.
+* **Remote Config** plus **A/B Testing** — a two-variant triage prompt (`triage_prompt_variant` = A or B). The app and web companion both read the parameter. Creating the experiment in the console is documented in `docs/FIREBASE_SETUP.md` (the experiment-create API is not available on Spark without the Google Analytics 360 / paid A/B surface).
+* **Performance Monitoring** — custom traces `inference_nano` and `inference_cloud` for Nano vs cloud inference latency, on both Android and web.
+* **Analytics** — a `verdict` event with `source` (`nano`, `cloud`, or `local`), `category`, and `fallback_reason`. Events never include message text or phone numbers.
+* **Cloud Firestore** — web companion alerts when the phone blocks a scam. The phone writes a PII-free document; the web app listens with `onSnapshot` and can show a browser notification while it is open. Sending those alerts through **FCM** from the server would require **Cloud Functions**, which are only on the Blaze plan, so this project does not send FCM from the server.
+
+**Android only**
+
+* **Crashlytics** — crash reports for the Android app.
+
+**Disclosure.** The pre-existing repo was a lookup-only screening prototype that did not build. The hybrid AI, typed methods, companion, and the Firebase products above landed on the `buildhybridai` branch in November 2026. See README → *What was built during the submission period*.
+
 ## Built during the submission period
 The pre-existing repo was a lookup-only screening app that didn't build. All of the hybrid AI, the typed-method registry, receipts, the schema renderer, the new UI and the fixes landed on the `buildhybridai` branch in November 2026. See README → *What was built during the submission period*.
 

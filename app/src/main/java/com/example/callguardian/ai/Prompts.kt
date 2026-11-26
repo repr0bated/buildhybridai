@@ -9,9 +9,13 @@ object Prompts {
     fun triage(
         channel: Channel, senderLabel: String, isContact: Boolean, body: String?, lookup: String?, rules: RuleScan,
         senderFeatures: String? = null, linkDomains: String? = null, ownedList: String? = null,
+        variant: String = "A",
     ): String = buildString {
         appendLine("You are Call Guardian, a scam detector running privately on the user's phone.")
         appendLine("Classify this incoming ${if (channel == Channel.SMS) "text message" else "phone call"}.")
+        if (normalizeVariant(variant) == "B") {
+            appendLine("Variant B: Be conservative. Prefer SUSPICIOUS over CLEAR when evidence is thin. An official domain is supporting evidence only, never proof by itself.")
+        }
         appendLine("Respond with JSON only, matching {\"verdict\": one of SCAM, SUSPICIOUS, CLEAR, SUBSCRIPTION, CODE, OWNED, \"confidence\": 0-99, \"reasons\": up to 3 short strings, \"reputable_official\": YES, NO or UNKNOWN, \"held_account\": YES, NO or UNKNOWN}.")
         appendLine("SCAM if fraudulent, SUSPICIOUS if unsettled, CLEAR if legitimate, SUBSCRIPTION if a list the user could opt out of, CODE if a login or verification code, OWNED if it is from an account the user owns.")
         appendLine("reputable_official: YES if a link uses an official domain of the claimed brand, NO if a look-alike domain is used, UNKNOWN otherwise.")
@@ -68,4 +72,7 @@ object Prompts {
         }
         appendLine("Respond with JSON only.")
     }
+
+    fun normalizeVariant(variant: String?): String =
+        if (variant?.trim().equals("B", ignoreCase = true)) "B" else "A"
 }

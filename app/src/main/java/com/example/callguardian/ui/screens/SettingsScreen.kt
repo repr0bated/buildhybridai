@@ -88,6 +88,7 @@ fun SettingsScreen(vm: AppViewModel, actions: SetupActions, onLists: () -> Unit)
                 }
             }
             DeepAnalysisCard(vm)
+            CompanionAlertsCard(vm, actions)
             LookupCard(vm)
             JevKeyCard(vm)
             SectionCard {
@@ -168,6 +169,29 @@ private fun DeepAnalysisCard(vm: AppViewModel) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = { vm.saveGeminiKey(value); value = "" }, enabled = value.isNotBlank()) { Text("Save") }
             if (saved) TextButton(onClick = { vm.clearGeminiKey(); value = "" }) { Text("Remove key") }
+        }
+    }
+}
+
+@Composable
+private fun CompanionAlertsCard(vm: AppViewModel, actions: SetupActions) {
+    val signedIn by vm.companionSignedIn.collectAsState()
+    SectionCard {
+        SectionTitle("Web companion alerts")
+        Text(
+            "When this phone blocks a scam, a notice can appear in the signed-in web companion. " +
+                "The notice includes only the category and whether Nano, cloud, or local rules decided it — never the message text or the phone number. " +
+                "The web app listens with Firestore onSnapshot (Spark). Sending those alerts through FCM would need Cloud Functions, which are only on the Blaze plan, so this app does not send FCM from the server.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        if (!vm.companionSignInConfigured()) {
+            Text("Google sign-in is not configured in this build.", style = MaterialTheme.typography.bodySmall)
+        } else if (signedIn) {
+            Text("Signed in${vm.companionEmail()?.let { " as $it" } ?: ""}.", style = MaterialTheme.typography.bodySmall, color = com.example.callguardian.ui.theme.Brand.Lime)
+            TextButton(onClick = actions.signOutCompanion) { Text("Sign out") }
+        } else {
+            Button(onClick = actions.signInCompanion) { Text("Sign in for web alerts") }
         }
     }
 }

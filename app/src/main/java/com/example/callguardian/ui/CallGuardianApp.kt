@@ -81,6 +81,8 @@ data class SetupActions(
     val requestSmsRole: () -> Unit = {},
     val openSmsRoleSettings: () -> Unit = {},
     val unlockPrivate: () -> Unit = {},
+    val signInCompanion: () -> Unit = {},
+    val signOutCompanion: () -> Unit = {},
 )
 
 /** Faint terminal grid behind every screen; glass cards sit on top of it. */

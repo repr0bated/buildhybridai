@@ -13,7 +13,7 @@ import { readFileSync } from 'node:fs';
 
 let n = 0;
 const fresh = () => new Store(`t${++n}-${Math.random()}`);
-const verdict = JSON.stringify({ riskLevel: 'HIGH', category: 'PHISHING_LINK', confidence: 92, reasons: ['Look-alike link'], advice: 'Ignore it.', method: 'BLOCK_NUMBER' });
+const verdict = JSON.stringify({ verdict: 'SCAM', confidence: 92, reasons: ['Look-alike link'], reputable_official: 'NO', held_account: 'NO' });
 const engine = { async triage() { return { rawText: verdict, source: 'ON_DEVICE' as const, modelName: 'Gemini Nano (Chrome built-in)', latencyMs: 5 }; }, async deep() { throw new Error('no'); } };
 const scam = 'USPS: Your package delivery failed. Confirm your details within 24 hours: https://usps-redelivery.top/x';
 
@@ -195,7 +195,7 @@ describe('generated firestore.rules', () => {
   it('scopes everything to the signed-in owner and denies the rest', () => {
     expect(rules).toContain('request.auth.uid == uid');
     expect(rules).toContain('match /{document=**} { allow read, write: if false; }');
-    for (const c of ['receipts', 'verdicts', 'senders', 'subscriptions', 'privateFlags', 'content', 'settings']) expect(rules).toContain(`match /users/{uid}/${c}/`);
+    for (const c of ['receipts', 'verdicts', 'senders', 'subscriptions', 'privateFlags', 'content', 'settings', 'companionAlerts']) expect(rules).toContain(`match /users/{uid}/${c}/`);
   });
   it('gates the content collection on settings/main.syncMessageContent', () => {
     const block = rules.slice(rules.indexOf('match /users/{uid}/content/'));

@@ -5,12 +5,14 @@ import { getAI, getGenerativeModel, GoogleAIBackend, InferenceMode, InferenceSou
 import { getFirebaseApp } from './firebase';
 import config from './firebase-config.json';
 import { modelSchema } from './registry';
+import { FALLBACK, startTrace } from './telemetry';
 
 export interface ModelRun {
   rawText: string | null;
   source: 'ON_DEVICE' | 'IN_CLOUD';
   modelName: string;
   latencyMs: number;
+  fallbackReason?: string;
 }
 
 export type DeviceAvailability = 'available' | 'downloadable' | 'downloading' | 'unavailable' | 'unsupported';
@@ -69,9 +71,18 @@ export class FirebaseEngine implements Engine {
 
   async triage(prompt: string, opts: { onDeviceOnly?: boolean } = {}): Promise<ModelRun> {
     const t0 = performance.now();
+    const prefer = !!opts.onDeviceOnly ? 'nano' : 'nano';
+    const started = await startTrace(prefer);
     const result = await this.triageModel(!!opts.onDeviceOnly).generateContent(prompt);
     const source = result.response.inferenceSource === InferenceSource.ON_DEVICE ? 'ON_DEVICE' : 'IN_CLOUD';
-    return { rawText: result.response.text(), source, modelName: source === 'ON_DEVICE' ? NANO_LABEL : cloudModel, latencyMs: Math.round(performance.now() - t0) };
+    started.stop(source === 'ON_DEVICE' ? 'nano' : 'cloud');
+    return {
+      rawText: result.response.text(),
+      source,
+      modelName: source === 'ON_DEVICE' ? NANO_LABEL : cloudModel,
+      latencyMs: Math.round(performance.now() - t0),
+      fallbackReason: source === 'IN_CLOUD' ? FALLBACK.nano_unavailable : FALLBACK.none,
+    };
   }
 
   async deep(prompt: string): Promise<ModelRun> {
@@ -83,7 +94,9 @@ export class FirebaseEngine implements Engine {
       });
     }
     const t0 = performance.now();
+    const started = await startTrace('cloud');
     const result = await this.deepModel.generateContent(prompt);
+    started.stop();
     return { rawText: result.response.text(), source: 'IN_CLOUD', modelName: cloudModel, latencyMs: Math.round(performance.now() - t0) };
   }
 }

@@ -1,0 +1,70 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/repr0bated/buildhybridai/schemas/sync/sync_companion_alert.schema.json",
+  "title": "SyncCompanionAlert",
+  "description": "A PII-free notice that the phone blocked a scam. No message text and no phone numbers. The web companion listens with Firestore onSnapshot (Spark). Server-side FCM is not used because sending would need Cloud Functions on Blaze.",
+  "x-firestore": "users/{uid}/companionAlerts/{id}",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "category",
+    "source",
+    "action",
+    "createdAt",
+    "deviceId"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 96,
+      "pattern": "^[A-Za-z0-9_.-]+$",
+      "description": "<deviceId>-<epochMillis>; also the Firestore document id."
+    },
+    "category": {
+      "type": "string",
+      "enum": [
+        "NONE",
+        "PHISHING_LINK",
+        "IMPERSONATION",
+        "PACKAGE_DELIVERY",
+        "BANK_FRAUD",
+        "TOLL_OR_FINE",
+        "PRIZE_OR_LOTTERY",
+        "JOB_OFFER",
+        "ROMANCE_OR_WRONG_NUMBER",
+        "CRYPTO_INVESTMENT",
+        "TECH_SUPPORT",
+        "OTP_THEFT",
+        "ROBOCALL",
+        "SPOOFED_CALLER",
+        "OTHER"
+      ]
+    },
+    "source": {
+      "type": "string",
+      "enum": ["nano", "cloud", "local"]
+    },
+    "action": {
+      "type": "string",
+      "enum": ["block"]
+    },
+    "createdAt": {
+      "type": "integer",
+      "minimum": 0,
+      "format": "epoch-millis"
+    },
+    "deviceId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "read": {
+      "type": "boolean"
+    },
+    "deleted": {
+      "type": "boolean"
+    }
+  }
+}

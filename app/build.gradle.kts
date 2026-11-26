@@ -20,6 +20,8 @@ plugins {
 val hasGoogleServicesJson = file("google-services.json").exists()
 if (hasGoogleServicesJson) {
     apply(plugin = libs.plugins.gms.get().pluginId)
+    apply(plugin = libs.plugins.firebase.crashlytics.get().pluginId)
+    apply(plugin = libs.plugins.firebase.perf.get().pluginId)
 }
 
 fun cfg(name: String, default: String = ""): String =
@@ -185,6 +187,14 @@ dependencies {
     implementation(libs.firebase.appcheck.playintegrity)
     debugImplementation(libs.firebase.appcheck.debug)
     implementation(libs.firebase.config)
+    implementation(libs.firebase.crashlytics)
+    implementation(libs.firebase.perf)
+    implementation(libs.firebase.analytics)
+    implementation(libs.firebase.auth)
+    implementation(libs.firebase.firestore)
+    implementation(libs.androidx.credentials)
+    implementation(libs.androidx.credentials.play.services)
+    implementation(libs.googleid)
     implementation(libs.guava)
 
     implementation(libs.json.schema.validator)

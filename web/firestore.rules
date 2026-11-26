@@ -10,6 +10,25 @@ service cloud.firestore {
         && get(/databases/$(database)/documents/users/$(uid)/settings/main).data.syncMessageContent == true;
     }
 
+    match /users/{uid}/companionAlerts/{id} {
+      function valid(id) {
+        let d = request.resource.data;
+        return d.keys().hasOnly(["id","category","source","action","createdAt","deviceId","read","deleted"])
+          && d.keys().hasAll(["id","category","source","action","createdAt","deviceId"])
+          && ((d.id is string && d.id.size() >= 1 && d.id.size() <= 96))
+          && ((d.category is string && d.category in ["NONE","PHISHING_LINK","IMPERSONATION","PACKAGE_DELIVERY","BANK_FRAUD","TOLL_OR_FINE","PRIZE_OR_LOTTERY","JOB_OFFER","ROMANCE_OR_WRONG_NUMBER","CRYPTO_INVESTMENT","TECH_SUPPORT","OTP_THEFT","ROBOCALL","SPOOFED_CALLER","OTHER"]))
+          && ((d.source is string && d.source in ["nano","cloud","local"]))
+          && ((d.action is string && d.action in ["block"]))
+          && ((d.createdAt is int && d.createdAt >= 0))
+          && ((d.deviceId is string && d.deviceId.size() >= 1 && d.deviceId.size() <= 64))
+          && (!('read' in d) || d.read is bool)
+          && (!('deleted' in d) || d.deleted is bool)
+          && d.id == id;
+      }
+      allow read, delete: if owner(uid);
+      allow create, update: if owner(uid) && valid(id);
+    }
+
     match /users/{uid}/content/{id} {
       function valid(id) {
         let d = request.resource.data;
@@ -124,7 +143,7 @@ service cloud.firestore {
     match /users/{uid}/subscriptions/{id} {
       function valid(id) {
         let d = request.resource.data;
-        return d.keys().hasOnly(["key","sender","source","brand","count","lastDate","keyword","linkUrl","linkDomain","linkKind","status","origin","updatedAt","deviceId","deleted"])
+        return d.keys().hasOnly(["key","sender","source","brand","count","lastDate","keyword","linkUrl","linkDomain","linkKind","status","origin","updatedAt","deviceId","deleted","stopSentAt","unsubscribedAt","canceledAt","stopReceiptId","unsubscribedEventId","unsubscribedReceiptId","history"])
           && d.keys().hasAll(["key","sender","source","count","status","origin","updatedAt","deviceId"])
           && ((d.key is string && d.key.size() >= 1 && d.key.size() <= 96))
           && ((d.sender is string && d.sender.size() >= 1 && d.sender.size() <= 64))
@@ -136,11 +155,18 @@ service cloud.firestore {
           && (!('linkUrl' in d) || (d.linkUrl is string && d.linkUrl.size() <= 300) || d.linkUrl == null)
           && (!('linkDomain' in d) || (d.linkDomain is string && d.linkDomain.size() <= 100) || d.linkDomain == null)
           && (!('linkKind' in d) || (d.linkKind is string && d.linkKind in ["UNSUBSCRIBE","MANAGE_SUBSCRIPTION","OTHER"]) || d.linkKind == null)
-          && ((d.status is string && d.status in ["ACTIVE","STOP_SENT","MANAGE_OPENED","MUTED","DISMISSED"]))
+          && ((d.status is string && d.status in ["ACTIVE","STOP_SENT","UNSUBSCRIBED","CANCELED","MANAGE_OPENED","MUTED","DISMISSED"]))
           && ((d.origin is string && d.origin in ["android","web"]))
           && ((d.updatedAt is int && d.updatedAt >= 0))
           && ((d.deviceId is string && d.deviceId.size() >= 1 && d.deviceId.size() <= 64))
           && (!('deleted' in d) || d.deleted is bool)
+          && (!('stopSentAt' in d) || (d.stopSentAt is int && d.stopSentAt >= 0) || d.stopSentAt == null)
+          && (!('unsubscribedAt' in d) || (d.unsubscribedAt is int && d.unsubscribedAt >= 0) || d.unsubscribedAt == null)
+          && (!('canceledAt' in d) || (d.canceledAt is int && d.canceledAt >= 0) || d.canceledAt == null)
+          && (!('stopReceiptId' in d) || (d.stopReceiptId is int && d.stopReceiptId >= 0) || d.stopReceiptId == null)
+          && (!('unsubscribedEventId' in d) || (d.unsubscribedEventId is int && d.unsubscribedEventId >= 0) || d.unsubscribedEventId == null)
+          && (!('unsubscribedReceiptId' in d) || (d.unsubscribedReceiptId is int && d.unsubscribedReceiptId >= 0) || d.unsubscribedReceiptId == null)
+          && (!('history' in d) || (d.history is list))
           && d.key == id;
       }
       allow read, delete: if owner(uid);

@@ -34,6 +34,9 @@ class GuardianRemoteConfig @Inject constructor() {
     val cloudPromptTemplate: String get() = stringOr(KEY_CLOUD_PROMPT_TEMPLATE, "")
     /** Full cloud triage prompt, or blank to use the in-app Prompts.triage text. */
     val cloudPrompt: String get() = stringOr(KEY_CLOUD_PROMPT, "")
+    /** A/B test of two on-device/cloud triage prompt variants. "A" (default) or "B". */
+    val triagePromptVariant: String
+        get() = com.example.callguardian.ai.Prompts.normalizeVariant(stringOr(KEY_TRIAGE_PROMPT_VARIANT, "A"))
 
     fun onDeviceChoice(fallback: OnDeviceModelChoice): OnDeviceModelChoice {
         val raw = stringOr(KEY_ON_DEVICE_MODEL, "")
@@ -70,6 +73,7 @@ class GuardianRemoteConfig @Inject constructor() {
         const val KEY_STARTUP_AUTO_PROCESS = "startup_auto_process"
         const val KEY_CLOUD_PROMPT = "cloud_prompt"
         const val KEY_CLOUD_PROMPT_TEMPLATE = "cloud_prompt_template"
+        const val KEY_TRIAGE_PROMPT_VARIANT = "triage_prompt_variant"
         const val DEFAULT_STARTUP_AUTO_PROCESS = true
 
         val DEFAULTS: Map<String, Any> = mapOf(
@@ -80,6 +84,7 @@ class GuardianRemoteConfig @Inject constructor() {
             KEY_STARTUP_AUTO_PROCESS to DEFAULT_STARTUP_AUTO_PROCESS,
             KEY_CLOUD_PROMPT to "",
             KEY_CLOUD_PROMPT_TEMPLATE to "",
+            KEY_TRIAGE_PROMPT_VARIANT to "A",
         )
     }
 }

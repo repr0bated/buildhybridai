@@ -52,3 +52,43 @@ Download **google-services.json** (it covers both apps once both are registered)
 - Android apps: `io.github.repr0bated.callguardian`, `io.github.repr0bated.callguardian.debug` (SHA-1 and SHA-256 registered for both).
 - Enabled: Firebase AI Logic (`firebasevertexai`), Generative Language, App Check, Play Integrity.
 - App Check: Play Integrity configured for the release app; not enforced. Register the debug token from the phone before enforcing.
+
+## 6. Spark-plan products (Crashlytics, Performance, Analytics, A/B Testing, companion alerts)
+
+These are enabled in the app and web companion. Do not upgrade the project to Blaze.
+
+### Crashlytics (Android)
+No extra console step beyond using this Firebase project. The first debug or release run uploads crashes automatically. Keep App Check debug tokens out of git.
+
+### Performance Monitoring
+Custom traces `inference_nano` and `inference_cloud` are recorded on Android and web. After a few inference runs they appear under **Performance**.
+
+### Analytics
+The app logs a `verdict` event with only `source` (`nano` / `cloud` / `local`), `category`, and `fallback_reason`. Message text and phone numbers are never attached. A/B Testing uses this event as the experiment metric.
+
+### Remote Config A/B test of two triage prompts
+
+The in-app / in-browser default is variant **A**. Variant **B** is a more conservative triage prompt (same required JSON fields). Both clients read `triage_prompt_variant`.
+
+The Firebase CLI can list, get, and delete Remote Config experiments (`firebase remoteconfig:experiments:list`) on this Spark project, and it currently reports none. It has no create-experiment command, and there is no documented free create API for A/B Testing. Do not enable billing to unlock one. Create the experiment in the console:
+
+1. Open [Firebase console](https://console.firebase.google.com/project/callguardian-hybrid) → **Engage → A/B Testing** (or **Remote Config → Experiments**).
+2. **Create experiment** → **Remote Config**.
+3. Target the Android apps (`io.github.repr0bated.callguardian` and `.debug`) and the web app.
+4. Parameter: `triage_prompt_variant`. Control: `A`. Variant: `B`. 50% / 50% (or a smaller rollout first).
+5. Goal: the Analytics event `verdict` (optional filter: `source` = `nano` or `cloud`). Do not add text or phone-number parameters.
+6. Start the experiment. Clients pick up the variant on the next Remote Config fetch (debug builds fetch immediately; release uses a 1-hour interval; the web companion uses a 1-hour interval).
+
+If the REST/CLI experiment-create call is ever available on this Spark project, use it instead of the console; do not enable billing to unlock it.
+
+### Web companion alerts (Firestore, not FCM send)
+
+When the phone blocks a scam and the user is signed in with the same Google account, Android writes `users/{uid}/companionAlerts/{id}` (category, source, timestamp — no message text, no numbers). The web app uses Firestore `onSnapshot` and may show a browser notification while the tab is open.
+
+FCM *client* SDKs are free, but **sending** a push to the web companion from the server needs Cloud Functions or a similar backend, which requires the **Blaze** plan. This project stays on Spark and does not send FCM from the server.
+
+Deploy the updated Firestore rules (from `web/`) after review:
+
+```
+npx -y firebase-tools@latest deploy --only firestore:rules --project callguardian-hybrid
+```

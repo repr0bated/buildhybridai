@@ -3,15 +3,23 @@ import type { RuleScan } from './rules';
 import { reasonsOf } from './rules';
 import type { Channel } from './rules';
 
-export function triage(channel: Channel, sender: string, body: string | null, rules: RuleScan): string {
+export function normalizeVariant(variant: string | null | undefined): 'A' | 'B' {
+  return String(variant ?? 'A').trim().toUpperCase() === 'B' ? 'B' : 'A';
+}
+
+export function triage(channel: Channel, sender: string, body: string | null, rules: RuleScan, variant: string = 'A'): string {
   const l: string[] = [];
   l.push("You are Call Guardian, a scam detector running privately in the user's browser.");
   l.push(`Classify this ${channel === 'SMS' ? 'text message' : 'phone call'} and pick ONE method to call.`);
+  if (normalizeVariant(variant) === 'B') {
+    l.push('Variant B: Be conservative. Prefer SUSPICIOUS over CLEAR when evidence is thin. An official domain is supporting evidence only, never proof by itself.');
+  }
   l.push(
     'Methods: NONE (normal), ' + (channel === 'SMS' ? 'QUARANTINE_SMS (hide behind a warning), ' : 'REJECT_CALL (silence or reject), ') +
       'BLOCK_NUMBER (only for an obvious scam), ALLOW_NUMBER (clearly legitimate), REPORT_SCAM, EXPLAIN_CLOUD (unsure; ask for a deeper look).',
   );
   l.push('You only propose; a policy checks your choice. Be calm and specific. Reasons must quote or paraphrase the content.');
+  l.push('Respond with JSON only, including verdict, confidence, reasons, reputable_official (YES, NO or UNKNOWN) and held_account (YES, NO or UNKNOWN).');
   l.push('');
   l.push(`Sender: ${sender || 'unknown'}`);
   if (rules.flags.length) l.push(`Local rule hints (may be wrong): ${reasonsOf(rules).join('; ')}`);

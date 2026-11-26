@@ -3,11 +3,14 @@
 import type { Engine, ModelRun } from './ai';
 import { decide, type MethodProposal, type PolicyDecision } from './policy';
 import * as prompts from './prompts';
+import { FALLBACK, logVerdict, sourceOf } from './telemetry';
+import { triagePromptVariant } from './remote-config';
 import { redact, redactNumber } from './redact';
 import { reasonsOf, scan, e164, type Channel, type RuleScan } from './rules';
 import { methodByAlias, validateModelText, type Risk } from './registry';
 import { analyzeSubscription, type SubscriptionInfo } from './subscriptions';
 import type { DeepAnalysis, ScamVerdict } from './generated/types';
+import { fillOmitted, localHeldAccount, localReputableOfficial, modelSignals } from './verdict-fields';
 
 export interface ParsedInput { channel: Channel; number: string | null; body: string | null; kind: 'message' | 'number' | 'link' }
 
@@ -92,6 +95,7 @@ export async function analyze(input: ParsedInput, opts: AnalyzeOptions): Promise
         willLeave ? redactNumber(input.number) : input.number ?? 'unknown',
         willLeave && input.body ? redact(input.body) : input.body,
         rules,
+        triagePromptVariant(),
       );
       run = await opts.engine.triage(prompt, { onDeviceOnly: !!settings.onDeviceOnly });
       steps.push({
@@ -101,7 +105,8 @@ export async function analyze(input: ParsedInput, opts: AnalyzeOptions): Promise
           ? `Answered locally in ${run.latencyMs} ms. The text never left this browser.`
           : `On-device Gemini Nano wasn't available here, so Firebase AI Logic fell back to cloud Gemini (${run.latencyMs} ms)${opts.deviceReady === false ? '; personal data was redacted before it was sent' : ''}.`,
       });
-      const report = validateModelText('scam_verdict', run.rawText ?? '');
+      const filled = fillOmitted(run.rawText ?? '', localReputableOfficial(rules), localHeldAccount(!!opts.isTrusted));
+      const report = validateModelText('scam_verdict', filled);
       schemaValid = report.valid;
       schemaErrors = report.errors;
       steps.push({ kind: 'validate', ok: report.valid, title: report.valid ? 'Output matches scam_verdict.schema.json' : 'Output rejected by scam_verdict.schema.json', detail: report.valid ? 'Valid typed verdict; its proposed method goes to the policy.' : report.errors.join('; ') });
@@ -117,12 +122,13 @@ export async function analyze(input: ParsedInput, opts: AnalyzeOptions): Promise
   let final: Final;
   let policy: PolicyDecision;
   if (verdict && run) {
-    const method = verdict.method.toLowerCase();
+    const signals = modelSignals(verdict, rules, input.channel);
+    const method = signals.method;
     final = {
-      riskLevel: verdict.riskLevel, category: verdict.category, confidence: verdict.confidence,
-      reasons: verdict.reasons, advice: verdict.advice, decidedBy: run.source, proposedMethod: method,
+      riskLevel: signals.riskLevel, category: signals.category, confidence: verdict.confidence,
+      reasons: verdict.reasons, advice: signals.advice, decidedBy: run.source, proposedMethod: method,
     };
-    policy = decide({ method, riskLevel: verdict.riskLevel, confidence: verdict.confidence, reasons: verdict.reasons, source: run.source }, ctx);
+    policy = decide({ method, riskLevel: signals.riskLevel, confidence: verdict.confidence, reasons: verdict.reasons, source: run.source }, ctx);
   } else {
     final = {
       riskLevel: rules.riskLevel, category: rules.category, confidence: rules.score, reasons: reasonsOf(rules),
@@ -132,6 +138,9 @@ export async function analyze(input: ParsedInput, opts: AnalyzeOptions): Promise
     policy = rulesPolicy;
     if (run || modelError) steps.push({ kind: 'fallback', ok: true, title: 'Falling back to the rules verdict', detail: 'The model result could not be used, so the deterministic rules decide.' });
   }
+  const fb = run?.source === 'IN_CLOUD' ? (run.fallbackReason ?? FALLBACK.nano_unavailable) : (run?.fallbackReason ?? FALLBACK.none);
+  void logVerdict(sourceOf(final.decidedBy), final.category, fb);
+
   if (opts.isBlocked) steps.push({ kind: 'policy', ok: true, title: 'Sender is on your block list', detail: 'This sender was blocked earlier (synced list).' });
   steps.push({
     kind: 'policy', ok: policy.dispatch !== 'DENY',

@@ -69,6 +69,15 @@ class MainActivity : FragmentActivity() {
             requestSmsRole = ::requestSmsRole,
             openSmsRoleSettings = { startActivity(SmsRole.manageIntent()) },
             unlockPrivate = ::unlockPrivate,
+            signInCompanion = {
+                lifecycleScope.launch {
+                    runCatching { vm.signInCompanion(this@MainActivity) }
+                        .onFailure { Toast.makeText(this@MainActivity, "Could not sign in for web companion alerts.", Toast.LENGTH_LONG).show() }
+                }
+            },
+            signOutCompanion = {
+                lifecycleScope.launch { vm.signOutCompanion(this@MainActivity) }
+            },
         )
         setContent {
             CallGuardianTheme {

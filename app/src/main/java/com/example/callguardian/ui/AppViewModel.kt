@@ -98,6 +98,7 @@ class AppViewModel @Inject constructor(
     private val subscriptionStore: com.example.callguardian.subscriptions.SubscriptionStore,
     private val jevSecrets: com.example.callguardian.jev.JevSecrets,
     private val geminiSecrets: com.example.callguardian.ai.GeminiSecrets,
+    private val companionAlerts: com.example.callguardian.firebase.CompanionAlerts,
     private val remoteConfig: com.example.callguardian.firebase.GuardianRemoteConfig,
     private val lookupManager: com.example.callguardian.lookup.ReverseLookupManager,
     private val lookupSecrets: com.example.callguardian.lookup.LookupSecrets,
@@ -139,6 +140,11 @@ class AppViewModel @Inject constructor(
     val ownedAccounts: StateFlow<List<OwnedAccount>> = ownedStore.accounts.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
     val jevKeySaved: StateFlow<Boolean> = jevSecrets.hasKey
     val geminiKeySaved: StateFlow<Boolean> = geminiSecrets.hasKey
+    val companionSignedIn: StateFlow<Boolean> = companionAlerts.signedIn
+    fun companionEmail(): String? = companionAlerts.email()
+    fun companionSignInConfigured(): Boolean = companionAlerts.webClientConfigured()
+    suspend fun signInCompanion(activity: android.app.Activity) = companionAlerts.signIn(activity)
+    suspend fun signOutCompanion(activity: android.app.Activity?) = companionAlerts.signOut(activity)
     val twilioKeySaved: StateFlow<Boolean> = lookupSecrets.hasTwilio
     val telnyxKeySaved: StateFlow<Boolean> = lookupSecrets.hasTelnyx
     fun ownedFor(number: String?) = ownedStore.matchSender(number)
