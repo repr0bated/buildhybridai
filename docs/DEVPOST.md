@@ -40,4 +40,4 @@ Signed registry updates, per-method permissions UI, Korean prompts (on-device is
 ## Built during the submission period
 The pre-existing repo was a lookup-only screening app that didn't build. All of the hybrid AI, the typed-method registry, receipts, the schema renderer, the new UI and the fixes landed on the `buildhybridai` branch in November 2026. See README → *What was built during the submission period*.
 
-**Links:** https://github.com/repr0bated/callguardian-android/tree/buildhybridai · Apache-2.0 · by Jeremy Hobson
+**Links:** https://github.com/repr0bated/buildhybridai · Apache-2.0 · by Jeremy Hobson

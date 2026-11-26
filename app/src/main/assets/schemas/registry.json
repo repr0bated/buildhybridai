@@ -189,7 +189,7 @@
       "id": "guardian.sms.manage_subscription@v1",
       "alias": "manage_subscription",
       "version": 1,
-      "title": "Open unsubscribe page",
+      "title": "Manage subscription",
       "description": "Open the sender's unsubscribe or manage-subscription page in your browser, after you confirm. You unsubscribe there yourself.",
       "capability": "browser.open",
       "execution": "device",

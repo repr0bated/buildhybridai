@@ -317,7 +317,7 @@ private fun SubscriptionCard(vm: AppViewModel, g: SubscriptionGroup, c: com.exam
             }
             if (link != null && safety != null) OutlinedButton(onClick = {
                 open(PendingUserMethod(UserMethod.MANAGE_SUBSCRIPTION, UserMethodInputs.manageSubscription(g.sender, g.source.wire, link, chosenBy, safety), "Open ${link.domain}"))
-            }) { Text("Open unsubscribe page") }
+            }) { Text("Manage subscription") }
             TextButton(onClick = { open(PendingUserMethod(UserMethod.MUTE_SENDER, UserMethodInputs.mute(g.sender, g.source.wire, "KEEP"), "Save")) }) { Text("Keep") }
             TextButton(onClick = { open(PendingUserMethod(UserMethod.MUTE_SENDER, UserMethodInputs.mute(g.sender, g.source.wire, "MUTE"), "Save")) }) { Text("Mute") }
         }
