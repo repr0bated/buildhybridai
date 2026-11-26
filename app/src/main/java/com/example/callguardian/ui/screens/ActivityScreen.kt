@@ -109,7 +109,7 @@ private fun Processed(vm: AppViewModel, onEvent: (Long) -> Unit, onReceipt: (Lon
         if (standalone.isNotEmpty()) {
             item { Spacer(Modifier.height(8.dp)); Text("// receipts", style = MaterialTheme.typography.titleSmall, color = Brand.Lime) }
             items(standalone, key = { "r-${it.id}" }) { r ->
-                ReceiptRow(vm.registry, r) { onReceipt(r.id) }
+                ReceiptRow(vm.registry, r, event = events.firstOrNull { it.id == r.eventId }) { onReceipt(r.id) }
             }
         }
     }

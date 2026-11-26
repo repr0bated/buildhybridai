@@ -113,7 +113,9 @@ fun HomeScreen(vm: AppViewModel, actions: SetupActions, onEvent: (Long) -> Unit,
             if (timeline.isEmpty()) item {
                 Text("No receipts yet.", style = MaterialTheme.typography.bodySmall, color = Brand.InkDim)
             } else {
-                items(timeline, key = { "rcpt-${it.id}" }) { r -> ReceiptLine(vm, r) { onTab("receipt/${r.id}") } }
+                items(timeline, key = { "rcpt-${it.id}" }) { r ->
+                    ReceiptRow(vm.registry, r, event = recent.firstOrNull { it.id == r.eventId }) { onTab("receipt/${r.id}") }
+                }
             }
             item {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -249,19 +251,5 @@ fun ProcessAllButton(state: ProcessAllState, onStart: () -> Unit, onCancel: () -
                 Text("Last run · ${state.done} analyzed" + if (state.failed > 0) ", ${state.failed} failed" else "", style = MaterialTheme.typography.labelSmall, color = Brand.InkDim)
             }
         }
-    }
-}
-
-@Composable
-private fun ReceiptLine(vm: AppViewModel, r: ReceiptEntity, onClick: () -> Unit) {
-    val title = vm.registry.byId(r.methodId)?.spec?.title ?: r.methodId.substringAfter('.').substringBefore('@').replace('_', ' ')
-    Row(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).clickable(onClick = onClick).padding(vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        Text(relativeTime(r.createdAt), style = MaterialTheme.typography.labelSmall, color = Brand.InkDim, modifier = Modifier.width(48.dp))
-        Text(title, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-        Text(r.status.lowercase(), style = MaterialTheme.typography.labelSmall, color = statusColor(r.status))
     }
 }

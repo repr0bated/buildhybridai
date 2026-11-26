@@ -20,13 +20,17 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.callguardian.data.db.ReceiptEntity
 import com.example.callguardian.methods.MethodRegistry
 import com.example.callguardian.schemaui.MethodHeaderBlock
 import com.example.callguardian.schemaui.SchemaDetails
 import com.example.callguardian.schemaui.SchemaForm
+import com.example.callguardian.data.db.ScreeningEventEntity
 import com.example.callguardian.ui.AppViewModel
+import com.example.callguardian.ui.ReceiptPresentation
+import com.example.callguardian.ui.ReceiptTone
 import com.example.callguardian.ui.components.Pill
 import com.example.callguardian.ui.components.SectionCard
 import com.example.callguardian.ui.components.SectionTitle
@@ -45,30 +49,57 @@ fun statusColor(s: String): Color = when (s) {
     else -> MaterialTheme.colorScheme.error
 }
 
-/** List row whose summary line is derived from the method's output (or input) schema. */
+/** Filled square badge used for both outcome and status on a receipt row. */
 @Composable
-fun ReceiptRow(registry: MethodRegistry, r: ReceiptEntity, onClick: () -> Unit) {
-    val reg = registry.byId(r.methodId)
-    val summary = remember(r.id) {
-        reg?.let {
-            val out = parseObj(r.outputJson)
-            if (out != null) SchemaForm.summary(SchemaForm.parse(it.outputSchemaJson), out)
-            else parseObj(r.inputJson)?.let { i -> SchemaForm.summary(SchemaForm.parse(it.inputSchemaJson), i) }
-        }.orEmpty()
+fun ReceiptBadge(text: String, tone: ReceiptTone, modifier: Modifier = Modifier) {
+    val (bg, fg) = when (tone) {
+        ReceiptTone.ALLOW -> Brand.Lime to Brand.OnLime
+        ReceiptTone.BLOCK -> Brand.Threat to Color.White
+        ReceiptTone.WARN -> Brand.Amber to Color(0xFF241A00)
+        ReceiptTone.NEUTRAL -> Brand.Glass2 to Brand.Ink
+        ReceiptTone.BAD -> Brand.Threat to Color.White
     }
-    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh).clickable(onClick = onClick).padding(12.dp),
-        verticalAlignment = Alignment.CenterVertically) {
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                Pill(r.status, statusColor(r.status))
-                Text(reg?.spec?.title ?: r.methodId, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+    Text(
+        text,
+        color = fg,
+        style = MaterialTheme.typography.labelSmall,
+        fontWeight = FontWeight.SemiBold,
+        maxLines = 1,
+        modifier = modifier
+            .clip(RoundedCornerShape(2.dp))
+            .background(bg)
+            .padding(horizontal = 7.dp, vertical = 3.dp),
+    )
+}
+
+/**
+ * List row: primary line is what was acted on (name/number + snippet or call).
+ * Method title is secondary. Right side is two same-size filled badges: outcome and status.
+ */
+@Composable
+fun ReceiptRow(registry: MethodRegistry, r: ReceiptEntity, event: ScreeningEventEntity? = null, onClick: () -> Unit) {
+    val reg = registry.byId(r.methodId)
+    val view = remember(r.id, r.status, r.inputJson, r.outputJson, event?.id, event?.displayName, event?.body, reg?.spec?.title) {
+        ReceiptPresentation.present(r, reg?.spec?.title, event, parseObj(r.inputJson), parseObj(r.outputJson))
+    }
+    val hidden = event != null && com.example.callguardian.privacy.LocalPrivacy.current.event(event)
+    com.example.callguardian.privacy.PrivateGate(hidden = hidden) {
+        Row(
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(Brand.Glass.copy(alpha = 0.9f)).clickable(onClick = onClick).padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(view.subject, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(view.methodTitle, style = MaterialTheme.typography.labelSmall, color = Brand.InkDim, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
-            Text(r.methodId, style = MaterialTheme.typography.labelSmall, fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            if (summary.isNotBlank()) Text(summary, style = MaterialTheme.typography.bodySmall, maxLines = 1)
-        }
-        Column(horizontalAlignment = Alignment.End) {
-            Text(relativeTime(r.createdAt), style = MaterialTheme.typography.labelSmall)
-            Text("${r.executedOn} · ${r.proposedBy.lowercase().replace('_', '-')}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.width(8.dp))
+            Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    ReceiptBadge(view.outcome, view.outcomeTone)
+                    ReceiptBadge(view.status, view.statusTone)
+                }
+                Text(relativeTime(r.createdAt), style = MaterialTheme.typography.labelSmall, color = Brand.InkDim)
+            }
         }
     }
 }
@@ -84,6 +115,7 @@ fun ReceiptsScreen(vm: AppViewModel, onReceipt: (Long) -> Unit) {
         "Invalid" -> receipts.filter { it.status.startsWith("INVALID") || it.status == "FAILED" }
         else -> receipts
     }
+    val events by vm.recent.collectAsState()
     Column(Modifier.fillMaxSize()) {
         GuardianTopBar(title = { Text("Receipts") })
         LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -96,7 +128,9 @@ fun ReceiptsScreen(vm: AppViewModel, onReceipt: (Long) -> Unit) {
                 }
             }
             if (shown.isEmpty()) item { Text("No receipts yet. Run a sample in the Lab.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
-            items(shown, key = { it.id }) { r -> ReceiptRow(vm.registry, r) { onReceipt(r.id) } }
+            items(shown, key = { it.id }) { r ->
+                ReceiptRow(vm.registry, r, event = events.firstOrNull { it.id == r.eventId }) { onReceipt(r.id) }
+            }
         }
     }
 }
@@ -113,7 +147,16 @@ fun ReceiptDetailScreen(vm: AppViewModel, id: Long, onBack: () -> Unit, onEvent:
         Column(Modifier.verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             if (reg != null) MethodHeaderBlock(vm.header(reg)) else Text(rc.methodId, style = MaterialTheme.typography.titleLarge)
             SectionCard {
-                Row(verticalAlignment = Alignment.CenterVertically) { Pill(rc.status, statusColor(rc.status)); Spacer(Modifier.width(8.dp)); Text(fullTime(rc.createdAt), style = MaterialTheme.typography.bodySmall) }
+                val ev by vm.event(rc.eventId ?: -1).collectAsState(initial = null)
+                val view = ReceiptPresentation.present(rc, reg?.spec?.title, ev, parseObj(rc.inputJson), parseObj(rc.outputJson))
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    ReceiptBadge(view.outcome, view.outcomeTone)
+                    ReceiptBadge(view.status, view.statusTone)
+                    Spacer(Modifier.width(4.dp))
+                    Text(fullTime(rc.createdAt), style = MaterialTheme.typography.bodySmall, color = Brand.InkDim)
+                }
+                Text(view.subject, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                Text(rc.methodId, style = MaterialTheme.typography.labelSmall, fontFamily = FontFamily.Monospace, color = Brand.InkDim)
                 Meta("Dispatch", rc.dispatch.replace('_', ' ').lowercase())
                 Meta("Proposed by", rc.proposedBy.replace('_', ' ').lowercase())
                 Meta("Executed on", rc.executedOn)
