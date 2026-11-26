@@ -162,7 +162,7 @@ class ScreeningEngine @Inject constructor(
         val scan = HeuristicScanner.scan(input)
         val cal = VerdictCalibrator.fuse(scan, VerdictCalibrator.features(input), channel = Channel.SMS)
         val blocked = profile?.shouldBlockMessages() == true
-        val wantsAi = runAi && !(cal.band == VerdictCalibrator.Band.CLEAR && input.owned != null) && (cal.risk >= RiskLevel.LOW || contact == null)
+        val wantsAi = runAi && !(cal.band == VerdictCalibrator.Band.CLEAR && (input.owned != null || cal.codeLabel != null)) && (cal.risk >= RiskLevel.LOW || contact == null)
 
         val id = events.insert(ScreeningEventEntity(
             channel = Channel.SMS.name, number = number, displayName = contact?.displayName ?: profile?.displayName ?: senderName,

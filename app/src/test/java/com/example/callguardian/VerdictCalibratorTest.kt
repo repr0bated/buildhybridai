@@ -70,4 +70,58 @@ class VerdictCalibratorTest {
         val d = decide("+18005551212", body, isContact = true)
         assertEquals(VerdictCalibrator.Band.CLEAR, d.band)
     }
+
+    @Test fun cashAppCodeTextIsClearCodeNeverScam() {
+        val body = "Your Cash App code is 123456"
+        val d = decide("28581", body)
+        assertEquals(VerdictCalibrator.Band.CLEAR, d.band)
+        assertEquals(RiskLevel.SAFE, d.risk)
+        assertEquals("Code", d.codeLabel)
+        assertTrue(d.reasons.any { it.contains("CLEAR (Code)") })
+        assertTrue(d.confidence < 100)
+        val high = decide("28581", body, modelConf = 100)
+        assertEquals(VerdictCalibrator.Band.CLEAR, high.band)
+        assertNotEquals(VerdictCalibrator.Band.SCAM, high.band)
+    }
+
+    @Test fun cashAppDashedCodeTextIsClearCode() {
+        // Real Cash App login codes are formatted like 123-456, not a bare 6-digit run.
+        val body = "Cash App: This code is for you and only you. Code: 123-456. To prevent fraud, never share it anywhere or with anyone, including people posing as Cash App."
+        val d = decide("28581", body)
+        assertEquals("band=${d.band} reasons=${d.reasons}", VerdictCalibrator.Band.CLEAR, d.band)
+        assertEquals(RiskLevel.SAFE, d.risk)
+        assertEquals("Code", d.codeLabel)
+        assertTrue(d.reasons.any { it.contains("CLEAR (Code)") })
+        val rules = HeuristicScanner.scan(ScanInput(Channel.SMS, "28581", body))
+        assertTrue("flags=${rules.flags}", rules.flags.none { it.id == "otp" || it.id == "money" })
+        assertTrue(rules.flags.any { it.id == "verification_code" })
+    }
+
+    @Test fun cashAppNeverShareWarningIsStillClearCode() {
+        val body = "Cash App: This code is for you and only you. Code: 123456. To prevent fraud, never share it anywhere or with anyone."
+        val d = decide("28581", body)
+        assertEquals("band=${d.band} reasons=${d.reasons}", VerdictCalibrator.Band.CLEAR, d.band)
+        assertEquals("Code", d.codeLabel)
+        assertTrue(d.reasons.none { it.contains("Asks you to share a code") })
+        val rules = HeuristicScanner.scan(ScanInput(Channel.SMS, "28581", body))
+        assertTrue("flags=${rules.flags}", rules.flags.none { it.id == "otp" || it.id == "money" })
+        assertTrue(rules.flags.any { it.id == "verification_code" })
+    }
+
+    @Test fun otpThatAsksToShareTheCodeIsFlagged() {
+        val body = "Your Cash App code is 123456. Reply with this code to confirm your account."
+        val d = decide("28581", body)
+        assertNotEquals(VerdictCalibrator.Band.CLEAR, d.band)
+        assertTrue("band=${d.band} reasons=${d.reasons}", d.band == VerdictCalibrator.Band.SCAM || d.band == VerdictCalibrator.Band.UNSETTLED)
+        assertEquals(null, d.codeLabel)
+        val rules = HeuristicScanner.scan(ScanInput(Channel.SMS, "28581", body))
+        assertTrue(rules.flags.any { it.id == "otp" })
+    }
+
+    @Test fun otpWithPhishingLinkIsNotClearCode() {
+        val body = "Your Cash App code is 123456. Verify at http://cashapp-secure.xyz/login"
+        val d = decide("28581", body)
+        assertNotEquals("Code", d.codeLabel)
+        assertTrue("band=${d.band} reasons=${d.reasons}", d.band != VerdictCalibrator.Band.CLEAR)
+    }
 }

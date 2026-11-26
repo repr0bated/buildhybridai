@@ -17,6 +17,7 @@ object Prompts {
         appendLine("You only propose; a policy checks your choice. Be calm and specific. Reasons must quote or paraphrase the content.")
         appendLine("Never treat a brand name alone as proof the message is legitimate. An official link domain lowers suspicion; a look-alike domain raises it.")
         appendLine("Do not use 100 for confidence; leave room for uncertainty. Prefer a mid confidence when sender or domain evidence is mixed.")
+        appendLine("A text that only contains a login or verification code, with no link and no request to share the code, call, or reply, is legitimate (CLEAR / Code) — especially from a short code. 'Never share this code' is a standard warning, not a scam. Flag a code text only if it asks the user to share the code or includes a link.")
         appendLine()
         appendLine("Sender: $senderLabel (${if (isContact) "saved contact" else "not in contacts"})")
         if (!senderFeatures.isNullOrBlank()) appendLine("Sender features: $senderFeatures")

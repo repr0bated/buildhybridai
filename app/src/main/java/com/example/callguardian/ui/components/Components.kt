@@ -194,6 +194,7 @@ fun EventRow(e: ScreeningEventEntity, onClick: () -> Unit) {
                     maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
                 if (e.isTest) { Spacer(Modifier.width(6.dp)); Pill("Test", MaterialTheme.colorScheme.onSurfaceVariant) }
                 if (LocalOwned.current.forSender(e.number) != null) { Spacer(Modifier.width(6.dp)); OwnedPill() }
+                if (e.reasons.contains("CLEAR (Code)")) { Spacer(Modifier.width(6.dp)); CodePill() }
             }
             Text(
                 e.body?.replace('\n', ' ') ?: (e.lookupSummary ?: "Incoming call"),
@@ -249,3 +250,6 @@ data class OwnedLookup(val accounts: List<com.example.callguardian.accounts.Owne
 
 @Composable
 fun OwnedPill() = Pill("Owned", Brand.Lime)
+
+@Composable
+fun CodePill() = Pill("Code", Brand.Lime)

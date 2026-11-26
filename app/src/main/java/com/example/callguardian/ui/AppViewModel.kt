@@ -42,6 +42,8 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ensureActive
@@ -92,6 +94,7 @@ class AppViewModel @Inject constructor(
     private val quarantineInbox: com.example.callguardian.sms.QuarantineInbox,
     private val smsRolePrefs: com.example.callguardian.sms.SmsRolePrefs,
     private val ownedStore: OwnedStore,
+    private val jevSecrets: com.example.callguardian.jev.JevSecrets,
 ) : AndroidViewModel(app) {
 
     val receipts: StateFlow<List<ReceiptEntity>> = receiptsDao.observeRecent(500).stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
@@ -127,6 +130,7 @@ class AppViewModel @Inject constructor(
     val recent: StateFlow<List<ScreeningEventEntity>> = events.observeRecent(300).stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
     val listed = profilesDao.observeListed().stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
     val ownedAccounts: StateFlow<List<OwnedAccount>> = ownedStore.accounts.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+    val jevKeySaved: StateFlow<Boolean> = jevSecrets.hasKey
     fun ownedFor(number: String?) = ownedStore.matchSender(number)
 
     private val _processAll = MutableStateFlow(ProcessAllState())
@@ -139,9 +143,10 @@ class AppViewModel @Inject constructor(
     }
 
     /**
-     * Analyze every unprocessed screening event. When [includeLogs] is true, also reviews inbox
-     * texts and call-log rows that have not been analyzed yet. On-device first, cloud fallback.
-     * Never sends STOP and never auto-applies a method.
+     * Analyze every unprocessed screening event with the default pipeline: rules, then Firebase
+     * AI Logic (Nano on-device, then cloud Gemini). When [includeLogs] is true, also reviews inbox
+     * texts and call-log rows that have not been analyzed yet. Never sends STOP and never
+     * auto-applies a method. Jev is not part of this path unless the user later turns it on.
      */
     fun startProcessAll(includeLogs: Boolean) {
         if (_processAll.value.running) return
@@ -238,6 +243,12 @@ class AppViewModel @Inject constructor(
             }
         }
         viewModelScope.launch { loadSubscriptions() }
+        // Once per process: analyze unprocessed messages with rules, then Firebase AI Logic
+        // (Nano, then cloud Gemini). Judge only — never sends STOP or runs a method.
+        viewModelScope.launch {
+            recent.drop(1).first()
+            startProcessAll(includeLogs = true)
+        }
     }
 
     private val _model = MutableStateFlow(DeviceModelUi())
@@ -314,6 +325,8 @@ class AppViewModel @Inject constructor(
     fun saveLookup(num: String, abs: String, url: String, h: String, hv: String) = viewModelScope.launch {
         prefs.updateNumLookupKey(num); prefs.updateAbstractKey(abs); prefs.updateCustomEndpoint(url, h, hv)
     }
+    fun saveJevKey(key: String) = viewModelScope.launch { jevSecrets.setApiKey(key) }
+    fun clearJevKey() = viewModelScope.launch { jevSecrets.clear() }
 
     // ---------------------------------------------------------------- integrations (Settings)
 

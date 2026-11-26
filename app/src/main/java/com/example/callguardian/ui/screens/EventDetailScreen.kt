@@ -108,6 +108,7 @@ private fun Header(e: ScreeningEventEntity) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(e.displayName ?: e.number ?: "Hidden number", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
                 if (com.example.callguardian.ui.components.LocalOwned.current.forSender(e.number) != null) com.example.callguardian.ui.components.OwnedPill()
+                if (e.reasons.contains("CLEAR (Code)")) com.example.callguardian.ui.components.CodePill()
             }
             Text(listOfNotNull(com.example.callguardian.model.MessageSource.fromWire(e.source).label, e.number?.takeIf { e.displayName != null }, if (e.isContact) "Contact" else "Not in contacts", fullTime(e.receivedAt)).joinToString(" · "),
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -137,7 +138,7 @@ private fun Verdict(e: ScreeningEventEntity) {
                 Text(when {
                     risk >= RiskLevel.HIGH -> "Likely scam" + if (cat != ScamCategory.NONE) ": ${cat.label()}" else ""
                     risk == RiskLevel.MEDIUM -> "Suspicious" + if (cat != ScamCategory.NONE) ": ${cat.label()}" else ""
-                    else -> "Looks OK"
+                    else -> if (e.reasons.contains("CLEAR (Code)")) "Looks OK (Code)" else "Looks OK"
                 }, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.ExtraBold, color = risk.color())
                 SourcePill(src, e.aiModel.takeIf { src == VerdictSource.ON_DEVICE })
             }

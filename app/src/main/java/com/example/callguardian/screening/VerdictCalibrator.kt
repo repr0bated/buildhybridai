@@ -1,5 +1,6 @@
 package com.example.callguardian.screening
 
+import com.example.callguardian.accounts.SenderIds
 import com.example.callguardian.model.GuardianMethod
 import com.example.callguardian.model.RiskLevel
 import com.example.callguardian.model.ScamCategory
@@ -37,6 +38,10 @@ object VerdictCalibrator {
         val ownedOfficialDomain: Boolean = false,
         val ownedBrandClaimed: Boolean = false,
         val ownedLookalike: Boolean = false,
+        val clearCode: Boolean = false,
+        val codeShareRequest: Boolean = false,
+        val codeWithLink: Boolean = false,
+        val isShortCode: Boolean = false,
     ) {
         val trustedSender get() = isContact || isTrusted || shortCodeHistory
         /** Sender is on an owned account and every link (if any) is an official domain for it. */
@@ -54,6 +59,7 @@ object VerdictCalibrator {
         val reasons: List<String>,
         val advice: String,
         val ownedLabel: String? = null,
+        val codeLabel: String? = null,
     )
 
     fun capModelConfidence(raw: Int): Int = raw.coerceIn(0, MAX_MODEL_CONFIDENCE)
@@ -69,6 +75,7 @@ object VerdictCalibrator {
 
     fun features(input: ScanInput): Features {
         val body = input.body.orEmpty()
+        val otp = VerificationCode.of(body)
         val hosts = OfficialDomains.hostsIn(body)
         val mentioned = OfficialDomains.mentionedBrands(body)
         val officialHost = mentioned.firstNotNullOfOrNull { b -> OfficialDomains.officialIn(hosts, b)?.let { it to b } }
@@ -102,6 +109,10 @@ object VerdictCalibrator {
             ownedOfficialDomain = ownedOfficial && owned != null,
             ownedBrandClaimed = ownedBrand != null,
             ownedLookalike = ownedLookalike,
+            clearCode = otp.clearCode,
+            codeShareRequest = otp.asksToShare,
+            codeWithLink = otp.isCodeMessage && otp.hasLink,
+            isShortCode = SenderIds.isShortCode(input.number),
         )
     }
 
@@ -117,6 +128,32 @@ object VerdictCalibrator {
         lookupSpamScore: Int? = null,
         channel: com.example.callguardian.model.Channel,
     ): Decision {
+        if (features.clearCode) {
+            val why = buildList {
+                add("CLEAR (Code): verification or login code, no link and no request to share or reply.")
+                if (features.isShortCode || features.shortCodeHistory) add("Came from a short code.")
+                if (features.ownedSender) add("Owned account: ${features.ownedService}.")
+                else if (features.trustedSender) add(
+                    when {
+                        features.isTrusted -> "Sender is on your Trust list."
+                        features.isContact -> "Sender is in your contacts."
+                        else -> "Known short code with prior history."
+                    }
+                )
+            }
+            return Decision(
+                score = 0.06,
+                band = Band.CLEAR,
+                risk = RiskLevel.SAFE,
+                category = ScamCategory.NONE,
+                confidence = 18,
+                method = GuardianMethod.NONE,
+                reasons = why,
+                advice = "No action needed. Don't share this code with anyone.",
+                ownedLabel = features.ownedService.takeIf { features.ownedSender },
+                codeLabel = "Code",
+            )
+        }
         if (features.ownedClear) {
             val service = features.ownedService ?: "owned account"
             return Decision(
@@ -145,6 +182,9 @@ object VerdictCalibrator {
         if (features.trustedSender) s -= 0.32
         if (features.lookalike) s += 0.22
         if (features.ownedImpersonation) s += 0.30
+        if (features.codeShareRequest) s = maxOf(s, 0.72)
+        if (features.codeWithLink && features.lookalike) s = maxOf(s, 0.78)
+        if (features.codeWithLink && !features.officialDomain && !features.trustedSender) s += 0.15
         if (features.ownedLookalike || (features.ownedBrandClaimed && features.lookalike)) s = maxOf(s, 0.78)
         // Official domains lower suspicion; they do not, by themselves, clear an unknown sender.
         if (features.officialDomain && !features.trustedSender && !features.ownedClear && s <= CLEAR_THRESHOLD) {

@@ -47,6 +47,8 @@ android {
         buildConfigField("String", "FIREBASE_APP_ID", "\"${cfg("FIREBASE_APP_ID")}\"")
         buildConfigField("String", "FIREBASE_PROJECT_ID", "\"${cfg("FIREBASE_PROJECT_ID")}\"")
         buildConfigField("String", "CLOUD_MODEL", "\"${cfg("CLOUD_MODEL", "gemini-3.5-flash-lite")}\"")
+        // Cloudflare Jev Worker (docs/JEV_WORKER.md). Override with JEV_WORKER_URL if needed.
+        buildConfigField("String", "JEV_WORKER_URL", "\"${cfg("JEV_WORKER_URL", "https://callguardian-jev.reprobate.workers.dev")}\"")
     }
 
     signingConfigs {
@@ -151,6 +153,7 @@ dependencies {
     implementation(libs.androidx.activity.compose)
     implementation("androidx.biometric:biometric:1.1.0")
     implementation("androidx.fragment:fragment-ktx:1.8.6")
+    implementation("androidx.security:security-crypto:1.0.0")
     implementation(libs.androidx.navigation.compose)
     implementation(libs.androidx.hilt.navigation.compose)
 

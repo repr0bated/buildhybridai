@@ -81,6 +81,7 @@ fun SettingsScreen(vm: AppViewModel, actions: SetupActions, onLists: () -> Unit)
                 }
             }
             LookupCard(vm)
+            JevKeyCard(vm)
             SectionCard {
                 SectionTitle("Data")
                 OutlinedButton(onClick = { confirmClear = true }) { Text("Clear history and receipts") }
@@ -130,6 +131,29 @@ private fun KeyField(value: String, onValue: (String) -> Unit, label: String, ge
                 context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(getKeyUrl)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
             }
         }) { Text("Get a key") }
+    }
+}
+
+
+@Composable
+private fun JevKeyCard(vm: AppViewModel) {
+    val saved by vm.jevKeySaved.collectAsState()
+    var value by remember { mutableStateOf("") }
+    SectionCard {
+        SectionTitle("TypeSafe Jev API key")
+        Text(
+            "Optional. Jev is off by default; turn it on under Watchlist when you want a second opinion. " +
+                "A key is stored encrypted on this phone (Android Keystore) and is never logged or backed up. " +
+                "With a key, the app calls TypeSafe directly; otherwise it uses the Cloudflare Worker.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        if (saved) Text("A key is saved on this phone.", style = MaterialTheme.typography.bodySmall, color = com.example.callguardian.ui.theme.Brand.Lime)
+        KeyField(value, { value = it }, "TypeSafe Jev API key", com.example.callguardian.jev.JevEndpoints.TYPESAFE_GET_KEY_URL)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = { vm.saveJevKey(value); value = "" }, enabled = value.isNotBlank()) { Text("Save") }
+            if (saved) TextButton(onClick = { vm.clearJevKey(); value = "" }) { Text("Remove key") }
+        }
     }
 }
 

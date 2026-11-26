@@ -87,7 +87,7 @@
       "id": "jev",
       "label": "Jev second opinion",
       "kind": "cloud_function",
-      "description": "TypeSafe Jev answers nine scam-signal questions about redacted text, through Call Guardian's Cloud Function.",
+      "description": "Optional TypeSafe Jev second opinion, off by default. Add a key in Settings or the app uses the Cloudflare Worker.",
       "defaultEnabled": false
     }
   ]

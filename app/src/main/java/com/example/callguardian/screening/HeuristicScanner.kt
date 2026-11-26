@@ -59,9 +59,7 @@ object HeuristicScanner {
         Pattern("urgency", "Pressure to act fast", 15, null,
             Regex("""(?i)\b(urgent|immediately|final (notice|warning)|within (24|48) ?h(ours)?|act now|suspend(ed)?|locked|expire[sd]?|last chance|today only)\b""")),
         Pattern("money", "Asks for gift cards, wire or crypto", 20, ScamCategory.CRYPTO_INVESTMENT,
-            Regex("""(?i)\b(gift ?cards?|wire transfer|western union|moneygram|bitcoin|btc|usdt|crypto|cash ?app|zelle me|venmo me)\b""")),
-        Pattern("otp", "Asks you to share a code or password", 25, ScamCategory.OTP_THEFT,
-            Regex("""(?i)(\b(send|share|reply with|tell me|forward)\b.{0,30}\b(code|otp|pin|password|passcode)\b)|(\b(code|otp)\b.{0,40}\b(send it|share it|reply)\b)""")),
+            Regex("""(?i)\b(gift ?cards?|wire transfer|western union|moneygram|bitcoin|btc|usdt|crypto|cash ?app me|pay (me )?(with |via |on )?(cash ?app|zelle|venmo)|zelle me|venmo me)\b""")),
         Pattern("credentials", "Asks to verify account or personal info", 15, ScamCategory.BANK_FRAUD,
             Regex("""(?i)\b(verify (your )?(account|identity|information)|confirm (your )?(details|identity|card)|update (your )?(billing|payment)|ssn|social security number)\b""")),
         Pattern("delivery", "Fake delivery / redelivery story", 15, ScamCategory.PACKAGE_DELIVERY,
@@ -101,7 +99,21 @@ object HeuristicScanner {
                     ?: hosts.firstOrNull { h -> brands.any { b -> OfficialDomains.isLookalike(h, b) } }
                 if (lookalike != null) flags += RuleFlag("lookalike", "Look-alike brand domain ($lookalike)", 25, ScamCategory.IMPERSONATION)
             }
-            textPatterns.forEach { p -> if (p.regex.containsMatchIn(body)) flags += RuleFlag(p.id, p.label, p.weight, p.category) }
+            val otp = VerificationCode.of(body)
+            textPatterns.forEach { p ->
+                if (p.regex.containsMatchIn(body)) {
+                    // A bare brand like "Cash App" in a login-code text is not a payment request.
+                    if (p.id == "money" && otp.clearCode) return@forEach
+                    flags += RuleFlag(p.id, p.label, p.weight, p.category)
+                }
+            }
+            if (otp.asksToShare) {
+                flags += RuleFlag("otp", "Asks you to share a code or password", 25, ScamCategory.OTP_THEFT)
+            } else if (otp.asksToCallOrReply) {
+                flags += RuleFlag("otp_call", "Asks you to call or reply about a code", 20, ScamCategory.OTP_THEFT)
+            } else if (otp.clearCode) {
+                flags += RuleFlag("verification_code", "Looks like a login or verification code", 0, null)
+            }
             val brand = mentioned.firstOrNull()
             val officialForBrand = brand != null && hosts.any { OfficialDomains.isOfficialHost(it, brand) }
             if (brand != null && flags.any { it.weight >= 15 } && !officialForBrand) {
