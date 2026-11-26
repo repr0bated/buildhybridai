@@ -37,11 +37,12 @@ enum class GuardianMethod {
     NONE, BLOCK_NUMBER, ALLOW_NUMBER, REJECT_CALL, QUARANTINE_SMS, REPORT_SCAM, SAVE_CONTACT, EXPLAIN_CLOUD;
 
     val alias: String get() = name.lowercase()
-
-    companion object {
-        fun fromAlias(alias: String?): GuardianMethod = entries.firstOrNull { it.alias == alias } ?: NONE
-    }
 }
+
+/** Top-level so [GuardianMethod] has no companion object: the on-device @Generable schema
+ *  would otherwise list "Companion" as a fake enum value and AICore rejects the request (-110). */
+fun guardianMethodFromAlias(alias: String?): GuardianMethod =
+    GuardianMethod.entries.firstOrNull { it.alias == alias } ?: GuardianMethod.NONE
 
 /** Where a verdict came from. */
 enum class VerdictSource { RULES, ON_DEVICE, IN_CLOUD, USER }

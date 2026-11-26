@@ -40,6 +40,27 @@
       "title": "Source",
       "readOnly": true,
       "description": "Typed message source (see message_source.schema.json)."
+    },
+    "service": {
+      "type": "string",
+      "maxLength": 80,
+      "title": "Service",
+      "description": "Service these senders belong to, when grouped.",
+      "readOnly": true
+    },
+    "senders": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 20,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 64,
+        "pattern": "^[^\\n\\r]{1,64}$"
+      },
+      "title": "Senders in this service",
+      "description": "Every sender number or name in the service group. Keep or mute applies to all of them.",
+      "readOnly": true
     }
   }
 }

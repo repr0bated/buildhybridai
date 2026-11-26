@@ -39,6 +39,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.ensureActive
 import javax.inject.Inject
 
 data class SetupState(
@@ -49,6 +51,8 @@ data class SetupState(
     val online: Boolean = true,
     val notificationAccess: Boolean = false,
     val listenerAppsInstalled: Boolean = false,
+    val smsRole: Boolean = false,
+    val previousSmsLabel: String? = null,
 ) {
     val coreReady get() = callScreeningRole && smsPermission
     val missing get() = listOf(callScreeningRole, smsPermission, contactsPermission, notificationsPermission).count { !it } +
@@ -79,11 +83,25 @@ class AppViewModel @Inject constructor(
     private val phone: com.example.callguardian.phone.PhoneData,
     private val subscriptionPrefs: com.example.callguardian.subscriptions.SubscriptionPrefs,
     private val dispatcher: com.example.callguardian.methods.MethodDispatcher,
+    private val privacyStore: com.example.callguardian.privacy.PrivacyStore,
+    private val privacySession: com.example.callguardian.privacy.PrivacySession,
+    private val quarantineInbox: com.example.callguardian.sms.QuarantineInbox,
+    private val smsRolePrefs: com.example.callguardian.sms.SmsRolePrefs,
 ) : AndroidViewModel(app) {
 
     val receipts: StateFlow<List<ReceiptEntity>> = receiptsDao.observeRecent(500).stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
     fun receiptsFor(eventId: Long): Flow<List<ReceiptEntity>> = receiptsDao.observeForEvent(eventId)
     fun receipt(id: Long): Flow<ReceiptEntity?> = receiptsDao.observe(id)
+
+    val privacyKeys: StateFlow<Set<String>> = privacyStore.keys.stateIn(viewModelScope, SharingStarted.Eagerly, emptySet())
+    val privacyUnlocked: StateFlow<Boolean> = privacySession.unlocked
+    val quarantined = quarantineInbox.observe().stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+    val quarantineCount = quarantineInbox.observeCount().stateIn(viewModelScope, SharingStarted.Eagerly, 0)
+    fun isPrivate(e: ScreeningEventEntity): Boolean =
+        com.example.callguardian.privacy.PrivacyKeys.coversEvent(privacyKeys.value, e.id, e.number ?: e.displayName, e.channel == "CALL")
+    fun unlockPrivate() = privacySession.unlock()
+    fun restoreQuarantine(id: Long) = viewModelScope.launch { quarantineInbox.restore(id) }
+
 
     private val forms = mutableMapOf<String, SchemaForm>()
     /** Schema → UI model, cached per schema file. */
@@ -104,8 +122,91 @@ class AppViewModel @Inject constructor(
     val recent: StateFlow<List<ScreeningEventEntity>> = events.observeRecent(300).stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
     val listed = profilesDao.observeListed().stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
+    private val _processAll = MutableStateFlow(ProcessAllState())
+    val processAll: StateFlow<ProcessAllState> = _processAll.asStateFlow()
+    private var processJob: kotlinx.coroutines.Job? = null
+
+    fun cancelProcessAll() {
+        processJob?.cancel()
+        _processAll.value = _processAll.value.copy(running = false, cancelled = true, label = null)
+    }
+
+    /**
+     * Analyze every unprocessed screening event. When [includeLogs] is true, also reviews inbox
+     * texts and call-log rows that have not been analyzed yet. On-device first, cloud fallback.
+     * Never sends STOP and never auto-applies a method.
+     */
+    fun startProcessAll(includeLogs: Boolean) {
+        if (_processAll.value.running) return
+        processJob?.cancel()
+        processJob = viewModelScope.launch {
+            val evs = recent.value
+            data class Item(val kind: String, val id: Long? = null, val label: String, val text: com.example.callguardian.subscriptions.InboxSms? = null, val call: com.example.callguardian.methods.CallLogItem? = null)
+            val queue = mutableListOf<Item>()
+            evs.filter(HomeStats::isUnprocessed).forEach { e ->
+                queue += Item("event", e.id, e.displayName ?: e.number ?: "item")
+            }
+            if (includeLogs) {
+                val inbox = runCatching { phone.inbox() }.getOrDefault(emptyList())
+                _inbox.value = inbox
+                val calls = runCatching { phone.calls() }.getOrDefault(emptyList())
+                _calls.value = calls
+                val all = (evs + recent.value).distinctBy { it.id }
+                inbox.filter { !HomeStats.textAlreadyAnalyzed(it, all) }.forEach { m ->
+                    queue += Item("text", label = m.address, text = m)
+                }
+                calls.filter { !HomeStats.callAlreadyAnalyzed(it, all) }.forEach { c ->
+                    queue += Item("call", label = c.cachedName ?: c.number ?: "hidden", call = c)
+                }
+            }
+            if (queue.isEmpty()) {
+                _processAll.value = ProcessAllState(total = 0, label = "Nothing to process")
+                return@launch
+            }
+            _processAll.value = ProcessAllState(running = true, total = queue.size, current = 0)
+            var done = 0
+            var failed = 0
+            try {
+                queue.forEachIndexed { i, item ->
+                    ensureActive()
+                    _processAll.value = _processAll.value.copy(current = i, label = item.label.take(40))
+                    val ok = runCatching {
+                        val id = when (item.kind) {
+                            "event" -> item.id!!
+                            "text" -> {
+                                val m = item.text!!
+                                engine.screenSms(m.address, m.body, isTest = true, runAi = false, source = com.example.callguardian.model.MessageSource.SMS, applyActions = false)
+                            }
+                            else -> {
+                                val c = item.call!!
+                                engine.reviewCallLog(c.number, c.cachedName, c.isContact, c.type.name, c.durationSec, c.date, c.callsFromNumber30d, c.callsWithin15Min)
+                            }
+                        }
+                        engine.analyzeOnDevice(id, notify = false, applyActions = false)
+                    }.isSuccess
+                    if (ok) done++ else failed++
+                    _processAll.value = _processAll.value.copy(current = i + 1, done = done, failed = failed)
+                }
+            } catch (ce: CancellationException) {
+                _processAll.value = _processAll.value.copy(running = false, cancelled = true, done = done, failed = failed, label = null)
+                throw ce
+            }
+            _processAll.value = _processAll.value.copy(running = false, cancelled = false, current = queue.size, done = done, failed = failed, label = null)
+        }
+    }
+
+
     private val _setup = MutableStateFlow(SetupState())
     val setup = _setup.asStateFlow()
+    init {
+        viewModelScope.launch {
+            smsRolePrefs.previousPackage.collect { pkg ->
+                _setup.value = _setup.value.copy(previousSmsLabel = com.example.callguardian.sms.SmsRole.labelFor(app, pkg))
+            }
+        }
+        viewModelScope.launch { loadSubscriptions() }
+    }
+
     private val _model = MutableStateFlow(DeviceModelUi())
     val model = _model.asStateFlow()
 
@@ -119,6 +220,7 @@ class AppViewModel @Inject constructor(
         val role = ctx.getSystemService(RoleManager::class.java)?.isRoleHeld(RoleManager.ROLE_CALL_SCREENING) == true
         val cm = ctx.getSystemService(ConnectivityManager::class.java)
         val online = cm?.getNetworkCapabilities(cm.activeNetwork)?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true
+        val smsHeld = com.example.callguardian.sms.SmsRole.held(ctx)
         _setup.value = SetupState(
             callScreeningRole = role,
             smsPermission = granted(Manifest.permission.RECEIVE_SMS),
@@ -127,6 +229,8 @@ class AppViewModel @Inject constructor(
             online = online,
             notificationAccess = notificationAccessGranted(),
             listenerAppsInstalled = catalog.listenerPackages.any { installed(it) },
+            smsRole = smsHeld,
+            previousSmsLabel = _setup.value.previousSmsLabel,
         )
         refreshModel()
         viewModelScope.launch { engine.processPending() }
@@ -253,14 +357,40 @@ class AppViewModel @Inject constructor(
                 com.example.callguardian.model.MessageSource.fromWire(it.source))
         }
         val all = sms + fromApps
-        val groups = com.example.callguardian.subscriptions.SubscriptionDetector.group(all)
+        val detector = com.example.callguardian.subscriptions.SubscriptionDetector
+        var groups = detector.group(all)
         _subs.value = groups
-        // Gemini Nano 4 confirms each group on the phone (foreground only), newest first.
-        groups.take(25).forEach { g ->
-            if (_confirm.value.containsKey(g.sender)) return@forEach
-            val recent = all.filter { it.address.trim() == g.sender && it.source == g.source }.sortedByDescending { it.date }.take(3).map { it.body }
-            engine.confirmSubscription(g, recent)?.let { c -> _confirm.value = _confirm.value + (g.sender to c) }
+        val confirms = _confirm.value.toMutableMap()
+        suspend fun confirmMissing() {
+            groups.take(25).forEach { g ->
+                if (confirms.containsKey(g.serviceKey)) return@forEach
+                val recent = all.filter { it.source == g.source && it.address.trim() in g.senders }
+                    .sortedByDescending { it.date }.take(5).map { "${it.address}: ${it.body}" }
+                engine.confirmSubscription(g, recent)?.let { confirms[g.serviceKey] = it }
+            }
         }
+        confirmMissing()
+        val named = groups.map { g ->
+            confirms[g.serviceKey]?.service?.let { detector.withService(g, it) } ?: g
+        }
+        val merged = detector.mergeByService(named)
+        groups = merged
+        _subs.value = groups
+        // Re-key confirms after Nano-driven merges, then confirm any new rows.
+        val reindexed = mutableMapOf<String, com.example.callguardian.screening.ScreeningEngine.SubscriptionConfirm>()
+        merged.forEach { g ->
+            confirms[g.serviceKey]?.let { reindexed[g.serviceKey] = it }
+            confirms.values.firstOrNull { c ->
+                val s = c.service?.let(detector::squash).orEmpty()
+                s.length >= 3 && s == detector.squash(g.service)
+            }?.let { reindexed[g.serviceKey] = it }
+        }
+        confirms.clear(); confirms.putAll(reindexed)
+        confirmMissing()
+        _subs.value = detector.mergeByService(groups.map { g ->
+            confirms[g.serviceKey]?.service?.let { detector.withService(g, it) } ?: g
+        })
+        _confirm.value = confirms
     }
 
     /** SMS inbox item → same pipeline as a new text (rules + on-device model), as a review event. */
@@ -283,4 +413,69 @@ class AppViewModel @Inject constructor(
 
     fun jevInput(e: ScreeningEventEntity): JsonObject = com.example.callguardian.methods.UserMethodInputs.jevCheck(
         e.id, e.number, e.isContact, redactedPreview(e), if (e.source == "sms" || e.source == "google_voice" || e.source == "whatsapp") e.source else "lab_sample")
+
+    fun privacyLabel(e: ScreeningEventEntity): String = (e.displayName ?: e.number ?: "this item").take(80)
+    fun setPrivateInput(e: ScreeningEventEntity) = com.example.callguardian.methods.UserMethodInputs.setPrivate(
+        "EVENT", "Hide ${privacyLabel(e)}", eventId = e.id, address = e.number, source = e.source)
+    fun clearPrivateInput(e: ScreeningEventEntity) = com.example.callguardian.methods.UserMethodInputs.clearPrivate(
+        "EVENT", "Show ${privacyLabel(e)} again", eventId = e.id, address = e.number, source = e.source)
+    fun setThreadPrivateInput(address: String, source: String = "sms") = com.example.callguardian.methods.UserMethodInputs.setPrivate(
+        "THREAD", "Hide texts from $address", address = address, source = source)
+    fun clearThreadPrivateInput(address: String, source: String = "sms") = com.example.callguardian.methods.UserMethodInputs.clearPrivate(
+        "THREAD", "Show texts from $address again", address = address, source = source)
+    fun setContactPrivateInput(address: String, source: String = "sms") = com.example.callguardian.methods.UserMethodInputs.setPrivate(
+        "CONTACT", "Hide all from $address", address = address, source = source)
+    fun clearContactPrivateInput(address: String, source: String = "sms") = com.example.callguardian.methods.UserMethodInputs.clearPrivate(
+        "CONTACT", "Show all from $address again", address = address, source = source)
+    fun setCallPrivateInput(c: com.example.callguardian.methods.CallLogItem) = com.example.callguardian.methods.UserMethodInputs.setPrivate(
+        "CALL", "Hide call with ${c.cachedName ?: c.number ?: "hidden number"}", address = c.number, callLogId = c.id, source = "call_log")
+    fun clearCallPrivateInput(c: com.example.callguardian.methods.CallLogItem) = com.example.callguardian.methods.UserMethodInputs.clearPrivate(
+        "CALL", "Show call with ${c.cachedName ?: c.number ?: "hidden number"} again", address = c.number, callLogId = c.id, source = "call_log")
+
+    private val _searchQuery = MutableStateFlow("")
+    val searchQuery = _searchQuery.asStateFlow()
+    private val _searchChips = MutableStateFlow(emptySet<SearchChip>())
+    val searchChips = _searchChips.asStateFlow()
+    private val _searchHits = MutableStateFlow(emptyList<SearchHit>())
+    val searchHits = _searchHits.asStateFlow()
+
+    fun setSearchQuery(q: String) {
+        _searchQuery.value = q
+        viewModelScope.launch { refreshSearch() }
+    }
+
+    fun toggleSearchChip(chip: SearchChip) {
+        val cur = _searchChips.value
+        _searchChips.value = if (chip in cur) cur - chip else cur + chip
+        viewModelScope.launch { refreshSearch() }
+    }
+
+    suspend fun refreshSearch() {
+        val q = _searchQuery.value
+        val chips = _searchChips.value
+        val marks = privacyKeys.value
+        val fts = SearchMatcher.ftsQuery(q)
+        val digits = SearchMatcher.digitQuery(q)
+        val found = buildList {
+            if (fts != null) addAll(runCatching { events.searchFts(fts) }.getOrDefault(emptyList()))
+            if (digits.length >= 3) addAll(runCatching { events.searchNumberOrName(digits, q.trim(), 200) }.getOrDefault(emptyList()))
+            if (fts == null && digits.length < 3 && q.isNotBlank()) addAll(recent.value)
+            if (q.isBlank()) addAll(recent.value)
+        }.distinctBy { it.id }
+        val subs = subscriptions.value.orEmpty()
+        val subIds = subs.flatMap { it.senders + listOfNotNull(it.service, it.brand, it.sender) }.flatMap { listOf(it, SearchMatcher.digits(it)) }.toSet()
+        _searchHits.value = SearchMatcher.merge(
+            query = q,
+            chips = chips,
+            marks = marks,
+            events = found,
+            receipts = receipts.value,
+            subscriptions = subs,
+            quarantined = quarantined.value,
+            inbox = inbox.value.orEmpty(),
+            calls = calls.value.orEmpty(),
+            methodTitle = { id -> registry.byId(id)?.spec?.title ?: id },
+            subscriptionIds = subIds,
+        )
+    }
 }

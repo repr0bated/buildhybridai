@@ -4,6 +4,8 @@ import com.example.callguardian.jev.JevTruthTable
 import com.example.callguardian.subscriptions.LinkCandidate
 import com.example.callguardian.subscriptions.LinkSafety
 import com.example.callguardian.subscriptions.SubscriptionGroup
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -19,7 +21,9 @@ enum class UserMethod(val alias: String) {
     UNSUBSCRIBE_SMS("unsubscribe_sms"),
     MANAGE_SUBSCRIPTION("manage_subscription"),
     MUTE_SENDER("mute_sender"),
-    SET_INTEGRATION("set_integration");
+    SET_INTEGRATION("set_integration"),
+    SET_PRIVATE("set_private"),
+    CLEAR_PRIVATE("clear_private");
 
     companion object { fun fromAlias(a: String) = entries.firstOrNull { it.alias == a } }
 }
@@ -66,12 +70,14 @@ object UserMethodInputs {
     }
 
     fun unsubscribe(g: SubscriptionGroup): JsonObject = buildJsonObject {
-        put("recipient", g.sender)
-        put("keyword", g.keyword ?: "STOP")
-        put("messagesFromSender", g.count.coerceAtLeast(1))
+        put("service", g.service.take(80).ifBlank { g.senders.first() })
+        put("recipients", JsonArray(g.textableSenders.map { JsonPrimitive(it) }))
+        put("keyword", g.keyword)
+        put("messagesInGroup", g.count.coerceAtLeast(1))
         put("reason", (g.signals.joinToString(", ").ifBlank { "subscription sender" }).take(200))
-        put("source", g.source.wire)
+        put("source", "sms")
     }
+
 
     fun manageSubscription(sender: String, source: String, link: LinkCandidate, chosenBy: String, safety: LinkSafety): JsonObject = buildJsonObject {
         put("sender", sender.take(64)); put("source", source)
@@ -89,6 +95,27 @@ object UserMethodInputs {
     }
 
     fun mute(sender: String, source: String, mode: String): JsonObject = buildJsonObject { put("sender", sender.take(64)); put("source", source); put("mode", mode) }
+
+    fun setPrivate(kind: String, label: String, eventId: Long? = null, address: String? = null, callLogId: Long? = null, source: String? = null): JsonObject =
+        privacyInput(kind, label, eventId, address, callLogId, source)
+    fun clearPrivate(kind: String, label: String, eventId: Long? = null, address: String? = null, callLogId: Long? = null, source: String? = null): JsonObject =
+        privacyInput(kind, label, eventId, address, callLogId, source)
+    private fun privacyInput(kind: String, label: String, eventId: Long?, address: String?, callLogId: Long?, source: String?) = buildJsonObject {
+        put("kind", kind)
+        put("label", label.take(80))
+        if (eventId != null) put("eventId", eventId)
+        if (!address.isNullOrBlank()) put("address", address.take(64))
+        if (callLogId != null) put("callLogId", callLogId)
+        if (!source.isNullOrBlank()) put("source", source)
+    }
+
+    fun mute(g: SubscriptionGroup, mode: String): JsonObject = buildJsonObject {
+        put("sender", (g.service.ifBlank { g.sender }).take(64))
+        put("service", g.service.take(80))
+        put("senders", JsonArray(g.senders.map { JsonPrimitive(it.take(64)) }))
+        put("source", g.source.wire)
+        put("mode", mode)
+    }
 
     /** Jev probabilities from the function → output object (verdict decided here, in code). */
     fun jevOutput(eventId: Long, signals: Map<String, Double>, isContact: Boolean, model: String, questionsVersion: String, inputTokens: Int, latencyMs: Long): JsonObject {

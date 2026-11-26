@@ -1,0 +1,44 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/repr0bated/callguardian-android/schemas/methods/guardian.privacy.clear_private.v1.output.json",
+  "title": "ClearPrivateOutput",
+  "description": "Result of guardian.privacy.clear_private@v1.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "kind",
+    "key",
+    "private",
+    "changedAt"
+  ],
+  "properties": {
+    "kind": {
+      "type": "string",
+      "enum": [
+        "EVENT",
+        "THREAD",
+        "CONTACT",
+        "CALL"
+      ],
+      "title": "Scope",
+      "readOnly": true
+    },
+    "key": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80,
+      "title": "Stored key",
+      "readOnly": true
+    },
+    "private": {
+      "type": "boolean",
+      "title": "Marked private"
+    },
+    "changedAt": {
+      "type": "integer",
+      "minimum": 0,
+      "format": "epoch-millis",
+      "title": "Changed at"
+    }
+  }
+}

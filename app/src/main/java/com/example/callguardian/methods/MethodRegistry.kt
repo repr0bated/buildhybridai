@@ -2,6 +2,7 @@ package com.example.callguardian.methods
 
 import com.example.callguardian.methods.gen.Registry
 import com.example.callguardian.model.GuardianMethod
+import com.example.callguardian.model.guardianMethodFromAlias
 import com.example.callguardian.policy.SchemaValidator
 import kotlinx.serialization.json.Json
 
@@ -14,7 +15,7 @@ class RegisteredMethod(
     val id: String get() = spec.id
     /** User-only methods (registry `"proposable": false`) map to NONE here; see [userMethod]. */
     val proposable: Boolean get() = spec.proposable != false
-    val method: GuardianMethod get() = if (proposable) GuardianMethod.fromAlias(spec.alias) else GuardianMethod.NONE
+    val method: GuardianMethod get() = if (proposable) guardianMethodFromAlias(spec.alias) else GuardianMethod.NONE
     val userMethod: UserMethod? get() = if (proposable) null else UserMethod.fromAlias(spec.alias)
     val inputValidator = SchemaValidator(inputSchemaJson, spec.input.substringAfterLast('/'))
     val outputValidator = SchemaValidator(outputSchemaJson, spec.output.substringAfterLast('/'))

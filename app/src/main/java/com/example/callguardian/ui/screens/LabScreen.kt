@@ -44,29 +44,35 @@ data class PendingUserMethod(val method: UserMethod, val input: JsonObject, val 
 private enum class View { TABS, SUBSCRIPTIONS, SAMPLES }
 
 /**
- * "Activity" (watchlist = false): the phone's own Texts and Calls. "Watchlist" (watchlist = true):
+ * "Logs" (watchlist = false): the phone's own Texts and Calls. "Watchlist" (watchlist = true):
  * notification-based linked apps. Both are one tab per integration in integrations.json that is a message source (phone SMS,
  * calls, Google Voice, WhatsApp, WhatsApp Business), shown when it is enabled and installed.
  * Subscriptions and the demo samples live in the top-bar menu.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun LabScreen(vm: AppViewModel, onEvent: (Long) -> Unit, watchlist: Boolean = false, onReceipt: (Long) -> Unit = {}) {
+fun LabScreen(vm: AppViewModel, onEvent: (Long) -> Unit, watchlist: Boolean = false, onReceipt: (Long) -> Unit = {}, startSubscriptions: Boolean = false, onSearch: () -> Unit = {}) {
     val state by vm.integrationState.collectAsState()
     val tabs = vm.catalog.all.filter { i ->
         (if (watchlist) i.kind.name == "notification_listener" else i.kind.name == "phone_sms" || i.kind.name == "phone_calls") &&
             (state.enabled[i.id.name] ?: i.defaultEnabled) && (i.packages.isNullOrEmpty() || i.packages!!.any(vm::installed))
     }
     var tab by rememberSaveable { mutableIntStateOf(0) }
-    var view by rememberSaveable { mutableStateOf(View.TABS) }
+    var view by rememberSaveable { mutableStateOf(if (startSubscriptions) View.SUBSCRIPTIONS else View.TABS) }
     var menu by remember { mutableStateOf(false) }
     var pending by remember { mutableStateOf<PendingUserMethod?>(null) }
     val context = LocalContext.current
     Column(Modifier.fillMaxSize()) {
         GuardianTopBar(
-            title = { Text(when (view) { View.TABS -> if (watchlist) "Watchlist" else "Activity"; View.SUBSCRIPTIONS -> "Subscriptions"; View.SAMPLES -> "Demo samples" }) },
+            onSearch = onSearch,
+            title = { Text(when (view) { View.TABS -> if (watchlist) "watchlist" else "logs"; View.SUBSCRIPTIONS -> "subscriptions"; View.SAMPLES -> "demo samples" }) },
             navigationIcon = { if (view != View.TABS) IconButton(onClick = { view = View.TABS }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
             actions = {
+                if (view == View.TABS && !watchlist) {
+                    val process by vm.processAll.collectAsState()
+                    if (process.running) TextButton(onClick = vm::cancelProcessAll) { Text("Cancel") }
+                    else TextButton(onClick = { vm.startProcessAll(includeLogs = true) }) { Text("Process all") }
+                }
                 if (view == View.TABS) TextButton(onClick = { view = View.SUBSCRIPTIONS }) { Text("Subscriptions") }
                 IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreVert, "More") }
                 DropdownMenu(menu, { menu = false }) {
@@ -80,14 +86,10 @@ fun LabScreen(vm: AppViewModel, onEvent: (Long) -> Unit, watchlist: Boolean = fa
             View.SAMPLES -> Samples(vm, onEvent)
             View.TABS -> {
                 if (tabs.isEmpty()) { Box(Modifier.padding(16.dp)) { Hint(if (watchlist) "No linked apps are installed and on. Google Voice, WhatsApp and WhatsApp Business show up here; turn them on in Settings → Watchlist." else "Texts and Calls are off. Turn them on in Settings → Watchlist.") }; return@Column }
-                // Activity also has "Processed": the history of everything analyzed or acted on, all sources.
-                val count = tabs.size + if (watchlist) 0 else 1
-                val sel = tab.coerceIn(0, count - 1)
+                val sel = tab.coerceIn(0, (tabs.size - 1).coerceAtLeast(0))
                 ScrollableTabRow(selectedTabIndex = sel, edgePadding = 8.dp) {
                     tabs.forEachIndexed { i, t -> Tab(selected = sel == i, onClick = { tab = i }, text = { Text(if (t.id.name == "phone_sms") "Texts" else t.label) }) }
-                    if (!watchlist) Tab(selected = sel == tabs.size, onClick = { tab = tabs.size }, text = { Text("Processed") })
                 }
-                if (sel == tabs.size) { Processed(vm, onEvent, onReceipt); return@Column }
                 val t = tabs[sel]
                 when (t.kind.name) {
                     "phone_sms" -> MyTexts(vm, onEvent) { pending = it }
@@ -162,7 +164,7 @@ private fun SubscriptionButton(vm: AppViewModel, sender: String, source: Message
         val confirm by vm.subscriptionConfirm.collectAsState()
         val g = groups?.firstOrNull { it.sender == sender.trim() && it.source == source }
         AlertDialog(onDismissRequest = { show = false }, confirmButton = { TextButton(onClick = { show = false }) { Text("Close") } },
-            text = { if (g == null) LinearProgressIndicator(Modifier.fillMaxWidth()) else SubscriptionCard(vm, g, confirm[g.sender], null) { show = false; open(it) } })
+            text = { if (g == null) LinearProgressIndicator(Modifier.fillMaxWidth()) else SubscriptionCard(vm, g, confirm[g.serviceKey], null) { show = false; open(it) } })
     }
 }
 
@@ -207,15 +209,22 @@ private fun MyTexts(vm: AppViewModel, onEvent: (Long) -> Unit, open: (PendingUse
     LaunchedEffect(Unit) { vm.loadInbox() }
     val list = inbox
     LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        item { Hint("Tap a text to check it: rules → Gemini Nano 4 (built on Gemma 4) → schema → policy → receipt. Reviews never block anyone or post alerts. Cloud Explain is still opt-in and redacted.") }
+        item {
+            val process by vm.processAll.collectAsState()
+            ProcessAllButton(process, onStart = { vm.startProcessAll(includeLogs = true) }, onCancel = vm::cancelProcessAll)
+        }
+        item { Hint("Tap a text to check it. Process all runs analysis only — nothing is sent and no STOP is texted.") }
         when {
             list == null -> item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
             list.isEmpty() -> item { Hint("No texts in the inbox.") }
             else -> items(list, key = { it.id }) { m ->
+                val hidden = com.example.callguardian.privacy.LocalPrivacy.current.address(m.address)
+                com.example.callguardian.privacy.PrivateGate(hidden = hidden) {
                 SectionCard(Modifier.clickable { vm.reviewText(m, onEvent) }) {
                     Row { Text(m.address, style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f)); Text(time(m.date), style = MaterialTheme.typography.labelSmall) }
                     Text(m.body, style = MaterialTheme.typography.bodySmall, maxLines = 2, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     if (SubscriptionDetector.isSubscription(m.address, m.body)) SubscriptionButton(vm, m.address, MessageSource.SMS, open)
+                }
                 }
             }
         }
@@ -229,7 +238,11 @@ private fun Calls(vm: AppViewModel, open: (PendingUserMethod) -> Unit) = Permiss
     LaunchedEffect(Unit) { vm.loadCalls() }
     val list = calls
     LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        item { Hint("Tap a call to review it with guardian.call.review@v1. You'll see exactly what is checked first.") }
+        item {
+            val process by vm.processAll.collectAsState()
+            ProcessAllButton(process, onStart = { vm.startProcessAll(includeLogs = true) }, onCancel = vm::cancelProcessAll)
+        }
+        item { Hint("Tap a call to review it with guardian.call.review@v1. Process all analyzes only; it never takes an action for you.") }
         when {
             list == null -> item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
             list.isEmpty() -> item { Hint("No calls in the call log.") }
@@ -240,6 +253,8 @@ private fun Calls(vm: AppViewModel, open: (PendingUserMethod) -> Unit) = Permiss
 
 @Composable
 private fun CallRow(c: CallLogItem, onClick: () -> Unit) {
+    val hidden = com.example.callguardian.privacy.LocalPrivacy.current.call(c.id, c.number)
+    com.example.callguardian.privacy.PrivateGate(hidden = hidden) {
     SectionCard(Modifier.clickable(onClick = onClick)) {
         Row {
             Text(c.cachedName ?: c.number ?: "Hidden number", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
@@ -248,6 +263,7 @@ private fun CallRow(c: CallLogItem, onClick: () -> Unit) {
         Text(listOfNotNull(c.number?.takeIf { c.cachedName != null }, c.type.name.lowercase().replaceFirstChar { it.uppercase() },
             if (c.isContact) "Contact" else "Not in contacts", "${c.callsFromNumber30d}× in 30 days").joinToString(" · "),
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
     }
 }
 
@@ -260,12 +276,17 @@ private fun Subscriptions(vm: AppViewModel, open: (PendingUserMethod) -> Unit) =
     LaunchedEffect(Unit) { vm.loadSubscriptions() }
     val list = groups
     LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        item { Hint("Found by the rule engine (short codes, \"Reply STOP\", \"Msg&data rates\", unsubscribe links), then confirmed by Gemini Nano 4 on this phone. Nothing is sent or opened until you confirm.") }
+        item { Hint("Found by the rule engine (short codes, \"Reply STOP\", \"Msg&data rates\", unsubscribe links), then confirmed by Gemini Nano 4 on this phone. Every subscription can be opted out by texting STOP (after you confirm). If the texts also include an unsubscribe or manage-subscription link, a second Manage subscription button opens that page in the browser, after you confirm. Nothing is sent or opened automatically.") }
         when {
             list == null -> item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
             list.isEmpty() -> item { Hint("No subscription senders found.") }
             else -> items(list, key = { it.source.wire + it.sender }) { g ->
-                SubscriptionCard(vm, g, confirm[g.sender], marks.let { m -> when (g.sender) { in m.unsubscribed -> "Unsubscribed"; in m.muted -> "Muted"; in m.kept -> "Kept"; else -> null } }, open)
+                SubscriptionCard(vm, g, confirm[g.serviceKey], marks.let { m -> when {
+                    g.senders.any { it in m.unsubscribed } -> "Unsubscribed"
+                    g.senders.all { it in m.muted } && g.senders.isNotEmpty() -> "Muted"
+                    g.senders.any { it in m.kept } -> "Kept"
+                    else -> null
+                } }, open)
             }
         }
     }
@@ -283,8 +304,10 @@ private fun SubscriptionCard(vm: AppViewModel, g: SubscriptionGroup, c: com.exam
     SectionCard {
         Row {
             Column(Modifier.weight(1f)) {
-                Text(g.brand?.let { "$it · ${g.sender}" } ?: g.sender, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-                Text("${g.source.label} · ${g.count} text${if (g.count == 1) "" else "s"} · last ${time(g.lastDate)}", style = MaterialTheme.typography.labelSmall)
+                Text(g.service, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                val numbers = if (g.senders.size == 1) g.senders.first() else "${g.senders.size} numbers"
+                Text("${g.source.label} · ${g.count} text${if (g.count == 1) "" else "s"} · $numbers · last ${time(g.lastDate)}", style = MaterialTheme.typography.labelSmall)
+                if (g.senders.size > 1) Text(g.senders.joinToString(), style = MaterialTheme.typography.labelSmall, fontFamily = FontFamily.Monospace)
             }
             mark?.let { AssistChip(onClick = {}, label = { Text(it) }) }
         }
@@ -301,9 +324,13 @@ private fun SubscriptionCard(vm: AppViewModel, g: SubscriptionGroup, c: com.exam
             safety?.warning?.let { Text("⚠ $it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
         }
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (g.canReplyStop && g.scamRisk < RiskLevel.MEDIUM) {
-                val kw = g.keyword ?: "STOP"
-                Button(onClick = { open(PendingUserMethod(UserMethod.UNSUBSCRIBE_SMS, UserMethodInputs.unsubscribe(g), "Send \"$kw\" to ${g.sender}")) }) { Text("Text $kw") }
+            if (g.canReplyStop) {
+                val kw = g.keyword
+                val n = g.textableSenders.size
+                val who = if (n <= 1) g.textableSenders.first() else "${n} ${g.service} numbers"
+                Button(onClick = { open(PendingUserMethod(UserMethod.UNSUBSCRIBE_SMS, UserMethodInputs.unsubscribe(g), "Send \"$kw\" to $who")) }) {
+                    Text(if (n <= 1) "Text $kw" else "Text $kw to $n numbers")
+                }
             }
             if (g.source.fromNotifications && integration != null) {
                 val pkg = integration.packages.orEmpty().firstOrNull(vm::installed)
@@ -318,8 +345,8 @@ private fun SubscriptionCard(vm: AppViewModel, g: SubscriptionGroup, c: com.exam
             if (link != null && safety != null) OutlinedButton(onClick = {
                 open(PendingUserMethod(UserMethod.MANAGE_SUBSCRIPTION, UserMethodInputs.manageSubscription(g.sender, g.source.wire, link, chosenBy, safety), "Open ${link.domain}"))
             }) { Text("Manage subscription") }
-            TextButton(onClick = { open(PendingUserMethod(UserMethod.MUTE_SENDER, UserMethodInputs.mute(g.sender, g.source.wire, "KEEP"), "Save")) }) { Text("Keep") }
-            TextButton(onClick = { open(PendingUserMethod(UserMethod.MUTE_SENDER, UserMethodInputs.mute(g.sender, g.source.wire, "MUTE"), "Save")) }) { Text("Mute") }
+            TextButton(onClick = { open(PendingUserMethod(UserMethod.MUTE_SENDER, UserMethodInputs.mute(g, "KEEP"), "Save")) }) { Text("Keep") }
+            TextButton(onClick = { open(PendingUserMethod(UserMethod.MUTE_SENDER, UserMethodInputs.mute(g, "MUTE"), "Save")) }) { Text("Mute") }
         }
     }
 }
@@ -376,7 +403,7 @@ private fun Processed(vm: AppViewModel, onEvent: (Long) -> Unit, onReceipt: (Lon
             val src = f("source")?.let(MessageSource::fromWire) ?: if (r.methodId.startsWith("guardian.integration")) null else MessageSource.SMS
             val method = vm.registry.byId(r.methodId)?.spec?.title ?: r.methodId
             val action = when (r.methodId) {
-                "guardian.sms.unsubscribe@v1" -> "Unsubscribed (texted ${f("keyword")})"
+                "guardian.sms.unsubscribe@v1" -> "Unsubscribed (texted ${f("keyword")} to ${f("service") ?: "service"})"
                 "guardian.sms.manage_subscription@v1" -> "Opened ${f("domain")}"
                 "guardian.sms.mute@v1" -> if (f("mode") == "KEEP") "Kept" else if (f("mode") == "MUTE") "Muted" else "Cleared"
                 else -> method

@@ -25,7 +25,7 @@ import java.util.Locale
  *
  * Pure Kotlin (no Android types) so the mapping is unit-tested on the JVM (SchemaFormTest).
  */
-enum class FieldKind { TEXT, MULTILINE, PHONE, EMAIL, INTEGER, NUMBER, BOOLEAN, ENUM, STRING_LIST, EPOCH_MILLIS, DATE_TIME, UNKNOWN }
+enum class FieldKind { TEXT, MULTILINE, PHONE, EMAIL, INTEGER, NUMBER, BOOLEAN, ENUM, STRING_LIST, OBJECT_LIST, EPOCH_MILLIS, DATE_TIME, UNKNOWN }
 
 data class SchemaField(
     val name: String,
@@ -70,7 +70,7 @@ data class SchemaForm(
                 }
                 FieldKind.ENUM -> if ((v as? JsonPrimitive)?.contentOrNull !in f.enumValues) put(f.name, "Pick one of ${f.enumValues.joinToString()}")
                 FieldKind.BOOLEAN -> if ((v as? JsonPrimitive)?.booleanOrNull == null) put(f.name, "Must be yes or no")
-                FieldKind.STRING_LIST -> {
+                FieldKind.STRING_LIST, FieldKind.OBJECT_LIST -> {
                     val n = (v as? JsonArray)?.size
                     if (n == null) put(f.name, "Must be a list") else if (f.maxItems != null && n > f.maxItems) put(f.name, "At most ${f.maxItems} items")
                 }
@@ -109,6 +109,7 @@ data class SchemaForm(
                 type == "integer" -> FieldKind.INTEGER
                 type == "number" -> FieldKind.NUMBER
                 type == "array" && p["items"]?.jsonObject?.let { typeOf(it) } == "string" -> FieldKind.STRING_LIST
+                type == "array" && p["items"]?.jsonObject?.let { typeOf(it) } == "object" -> FieldKind.OBJECT_LIST
                 type == "string" && format == "phone" -> FieldKind.PHONE
                 type == "string" && format == "email" -> FieldKind.EMAIL
                 type == "string" && (format == "date-time" || format == "date") -> FieldKind.DATE_TIME
@@ -149,7 +150,16 @@ data class SchemaForm(
         /** Human display of a value for a field kind (used by receipt detail and read-only rows). */
         fun display(f: SchemaField, v: JsonElement?): String = when {
             v == null || v is JsonNull -> "—"
-            v is JsonArray -> v.joinToString("\n") { "• " + ((it as? JsonPrimitive)?.contentOrNull ?: it.toString()) }
+            v is JsonArray -> v.joinToString("\n") { item ->
+                when (item) {
+                    is JsonPrimitive -> "• " + (item.contentOrNull ?: item.toString())
+                    is JsonObject -> "• " + item.entries.joinToString(" · ") { (k, ev) ->
+                        val sv = (ev as? JsonPrimitive)?.contentOrNull ?: ev.toString()
+                        "${humanize(k)}: $sv"
+                    }
+                    else -> "• $item"
+                }
+            }
             v is JsonObject -> v.toString()
             else -> {
                 val p = v as JsonPrimitive

@@ -19,7 +19,7 @@ object Prompts {
         if (channel == Channel.SMS) {
             appendLine("Message:")
             appendLine("\"\"\"")
-            appendLine(body.orEmpty().take(1500))
+            appendLine(body.orEmpty().take(800))
             appendLine("\"\"\"")
         } else {
             appendLine("There is no transcript; judge from the caller metadata only.")
@@ -44,11 +44,13 @@ object Prompts {
         appendLine("Respond with JSON only.")
     }
 
-    fun subscription(sender: String, sourceLabel: String, messages: List<String>, links: List<String>): String = buildString {
-        appendLine("You check texts privately on the user's phone. Decide whether this sender's texts are an automated subscription, alert or marketing list that the user could opt out of.")
-        appendLine("Sender: $sender (via $sourceLabel)")
+    fun subscription(service: String, senders: List<String>, sourceLabel: String, messages: List<String>, links: List<String>): String = buildString {
+        appendLine("You check texts privately on the user's phone. Decide whether these texts are an automated subscription, alert or marketing list the user could opt out of.")
+        appendLine("Name the company or service they come from (for example Cash App or Spotify). If several numbers belong to one service, use the same name. Leave service empty only if it cannot be told.")
+        if (service.isNotBlank()) appendLine("Suggested service: $service")
+        appendLine("Senders: ${senders.joinToString()} (via $sourceLabel)")
         appendLine("Recent texts:")
-        messages.take(3).forEach { appendLine("- \"${it.take(400)}\"") }
+        messages.take(5).forEach { appendLine("- \"${it.take(300)}\"") }
         if (links.isEmpty()) appendLine("Links: none") else {
             appendLine("Links (pick the one that unsubscribes or manages the subscription, or 0 if none does):")
             links.take(6).forEachIndexed { i, l -> appendLine("${i + 1}. $l") }

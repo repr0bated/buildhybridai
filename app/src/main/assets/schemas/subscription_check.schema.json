@@ -2,12 +2,13 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://github.com/repr0bated/callguardian-android/schemas/subscription_check.schema.json",
   "title": "SubscriptionCheck",
-  "description": "On-device (Gemini Nano 4) confirmation of a subscription sender and its unsubscribe link.",
+  "description": "On-device (Gemini Nano 4) confirmation of a subscription service, its name, and its unsubscribe link.",
   "type": "object",
   "additionalProperties": false,
   "required": [
     "isSubscription",
-    "unsubscribeLink"
+    "unsubscribeLink",
+    "service"
   ],
   "properties": {
     "isSubscription": {
@@ -17,6 +18,11 @@
       "type": "integer",
       "minimum": 0,
       "maximum": 6
+    },
+    "service": {
+      "type": "string",
+      "maxLength": 80,
+      "description": "Company or service these texts are from, like Cash App or Spotify. Empty if it cannot be told."
     }
   }
 }

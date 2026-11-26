@@ -22,7 +22,7 @@ import androidx.compose.ui.unit.dp
 import com.example.callguardian.ui.theme.Brand
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.ReceiptLong
+import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Science
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.Settings
@@ -35,6 +35,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.navigation.NavGraph.Companion.findStartDestination
@@ -51,14 +52,15 @@ import com.example.callguardian.ui.screens.LabScreen
 import com.example.callguardian.ui.screens.ListsScreen
 import com.example.callguardian.ui.screens.ReceiptDetailScreen
 import com.example.callguardian.ui.screens.ReceiptsScreen
+import com.example.callguardian.ui.screens.SearchScreen
 import com.example.callguardian.ui.screens.SettingsScreen
 
 private data class Tab(val route: String, val label: String, val icon: ImageVector)
 
 private val tabs = listOf(
     Tab("home", "Home", Icons.Default.Home),
-    Tab("receipts", "Receipts", Icons.Default.ReceiptLong),
     Tab("activity", "Activity", Icons.Default.Shield),
+    Tab("logs", "Logs", Icons.Default.Call),
     Tab("watchlist", "Watchlist", Icons.Default.Visibility),
     Tab("settings", "Settings", Icons.Default.Settings),
 )
@@ -71,6 +73,9 @@ data class SetupActions(
     val openAppSettings: () -> Unit,
     val requestPermissions: (List<String>) -> Unit = {},
     val openNotificationAccess: () -> Unit = {},
+    val requestSmsRole: () -> Unit = {},
+    val openSmsRoleSettings: () -> Unit = {},
+    val unlockPrivate: () -> Unit = {},
 )
 
 /** Faint terminal grid behind every screen; glass cards sit on top of it. */
@@ -87,6 +92,26 @@ fun CallGuardianApp(vm: AppViewModel, actions: SetupActions, openEventId: Long?,
     val nav = rememberNavController()
     val entry by nav.currentBackStackEntryAsState()
     val route = entry?.destination?.route
+    val marks by vm.privacyKeys.collectAsState()
+    val unlocked by vm.privacyUnlocked.collectAsState()
+    val view = androidx.compose.ui.platform.LocalView.current
+    androidx.compose.runtime.DisposableEffect(marks.isNotEmpty()) {
+        val window = (view.context as? android.app.Activity)?.window
+        if (marks.isNotEmpty()) window?.addFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)
+        else window?.clearFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)
+        onDispose { window?.clearFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE) }
+    }
+    androidx.compose.runtime.CompositionLocalProvider(
+        com.example.callguardian.privacy.LocalPrivacy provides com.example.callguardian.privacy.PrivacyUiState(
+            marks = marks, unlocked = unlocked, onUnlock = actions.unlockPrivate,
+        ),
+    ) {
+    CallGuardianNav(vm, actions, openEventId, onEventOpened, nav, route)
+    }
+}
+
+@Composable
+private fun CallGuardianNav(vm: AppViewModel, actions: SetupActions, openEventId: Long?, onEventOpened: () -> Unit, nav: androidx.navigation.NavHostController, route: String?) {
 
     LaunchedEffect(openEventId) {
         if (openEventId != null && openEventId > 0) { nav.navigate("event/$openEventId"); onEventOpened() }
@@ -127,11 +152,15 @@ fun CallGuardianApp(vm: AppViewModel, actions: SetupActions, openEventId: Long?,
             popEnterTransition = { fadeIn(tween(220)) },
             popExitTransition = { fadeOut(tween(140)) + slideOutVertically(tween(200)) { it / 24 } },
         ) {
-            composable("home") { HomeScreen(vm, actions, onEvent = { nav.navigate("event/$it") }, onTab = { nav.navigate(it) }) }
-            composable("history") { ActivityScreen(vm, onEvent = { nav.navigate("event/$it") }) }
-            composable("receipts") { ReceiptsScreen(vm, onReceipt = { nav.navigate("receipt/$it") }) }
-            composable("activity") { LabScreen(vm, onEvent = { nav.navigate("event/$it") }, onReceipt = { nav.navigate("receipt/$it") }) }
-            composable("watchlist") { LabScreen(vm, onEvent = { nav.navigate("event/$it") }, watchlist = true) }
+            composable("home") { HomeScreen(vm, actions, onEvent = { nav.navigate("event/$it") }, onTab = { nav.navigate(it) }, onSearch = { nav.navigate("search") }) }
+            composable("activity") { ActivityScreen(vm, onEvent = { nav.navigate("event/$it") }, onReceipt = { nav.navigate("receipt/$it") }, onSearch = { nav.navigate("search") }) }
+            composable("activity/{tab}", arguments = listOf(navArgument("tab") { type = NavType.StringType })) {
+                ActivityScreen(vm, onEvent = { nav.navigate("event/$it") }, onReceipt = { nav.navigate("receipt/$it") }, initialTab = it.arguments?.getString("tab"), onSearch = { nav.navigate("search") })
+            }
+            composable("logs") { LabScreen(vm, onEvent = { nav.navigate("event/$it") }, onReceipt = { nav.navigate("receipt/$it") }, onSearch = { nav.navigate("search") }) }
+            composable("subscriptions") { LabScreen(vm, onEvent = { nav.navigate("event/$it") }, onReceipt = { nav.navigate("receipt/$it") }, startSubscriptions = true, onSearch = { nav.navigate("search") }) }
+            composable("watchlist") { LabScreen(vm, onEvent = { nav.navigate("event/$it") }, watchlist = true, onSearch = { nav.navigate("search") }) }
+            composable("search") { SearchScreen(vm, onBack = { nav.popBackStack() }, onEvent = { nav.navigate("event/$it") }, onReceipt = { nav.navigate("receipt/$it") }, onSubscriptions = { nav.navigate("subscriptions") }) }
             composable("settings") { SettingsScreen(vm, actions, onLists = { nav.navigate("lists") }) }
             composable("lists") { ListsScreen(vm, onBack = { nav.popBackStack() }) }
             composable("event/{id}", arguments = listOf(navArgument("id") { type = NavType.LongType })) {

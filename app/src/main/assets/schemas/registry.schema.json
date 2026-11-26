@@ -74,7 +74,8 @@
             "sms.send",
             "sms.local",
             "browser.open",
-            "settings.local"
+            "settings.local",
+            "privacy.local"
           ]
         },
         "execution": {

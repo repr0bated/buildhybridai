@@ -2,25 +2,40 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://github.com/repr0bated/callguardian-android/schemas/methods/guardian.sms.unsubscribe.v1.input.json",
   "title": "UnsubscribeSmsInput",
-  "description": "Send the opt-out keyword as a text to a subscription sender. Sent only after you confirm; exactly this text goes to exactly this number.",
+  "description": "Send the opt-out keyword once to each distinct sender number for a subscription service. Offered for every subscription (STOP when the text does not name a keyword), including ones that also have an unsubscribe or manage-subscription link. Sent only after you confirm; exactly this text goes to exactly these numbers.",
   "type": "object",
   "additionalProperties": false,
   "required": [
-    "recipient",
+    "service",
+    "recipients",
     "keyword",
-    "messagesFromSender",
+    "messagesInGroup",
     "reason",
     "source"
   ],
   "properties": {
-    "recipient": {
+    "service": {
       "type": "string",
-      "minLength": 3,
-      "maxLength": 20,
-      "pattern": "^\\+?[0-9]{3,15}$",
-      "format": "phone",
+      "minLength": 1,
+      "maxLength": 80,
+      "title": "Service",
+      "description": "Company or service these texts are from (for example Cash App).",
+      "readOnly": true
+    },
+    "recipients": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 20,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 3,
+        "maxLength": 20,
+        "pattern": "^\\+?[0-9]{3,15}$",
+        "format": "phone"
+      },
       "title": "Send to",
-      "description": "The subscription sender, from your SMS inbox.",
+      "description": "Each distinct sender number for this service. The keyword is sent once to each, after you confirm.",
       "readOnly": true
     },
     "keyword": {
@@ -34,12 +49,13 @@
         "QUIT"
       ],
       "title": "Text that will be sent",
-      "description": "Carrier-standard opt-out keywords only."
+      "description": "Carrier-standard opt-out keywords only. STOP is used when the text does not name one.",
+      "default": "STOP"
     },
-    "messagesFromSender": {
+    "messagesInGroup": {
       "type": "integer",
       "minimum": 1,
-      "title": "Texts from this sender",
+      "title": "Texts from this service",
       "readOnly": true
     },
     "reason": {

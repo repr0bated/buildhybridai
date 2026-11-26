@@ -30,6 +30,7 @@ import com.example.callguardian.methods.MethodRegistry
 import com.example.callguardian.methods.PolicyDecision
 import com.example.callguardian.model.Channel
 import com.example.callguardian.model.GuardianMethod
+import com.example.callguardian.model.guardianMethodFromAlias
 import com.example.callguardian.model.RiskLevel
 import com.example.callguardian.model.ScamCategory
 import com.example.callguardian.model.VerdictSource
@@ -66,10 +67,15 @@ fun EventDetailScreen(vm: AppViewModel, id: Long, onBack: () -> Unit, onReceipt:
         )
         val ev = e ?: return@Column
         Column(Modifier.verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Header(ev)
-            Verdict(ev)
-            ev.body?.let { MessageCard(ev, it) }
-            Pipeline(vm, ev, receipts, onReceipt)
+            com.example.callguardian.privacy.PrivateGate(hidden = com.example.callguardian.privacy.LocalPrivacy.current.event(ev)) {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Header(ev)
+                    Verdict(ev)
+                    ev.body?.let { MessageCard(ev, it) }
+                    Pipeline(vm, ev, receipts, onReceipt)
+                }
+            }
+            PrivacyActions(vm, ev) { userSheet = it }
             Actions(vm, ev) { m -> sheet = m to vm.defaultInput(ev, m) }
             CloudCard(vm, ev, receipts, onAsk = { sheet = GuardianMethod.EXPLAIN_CLOUD to vm.defaultInput(ev, GuardianMethod.EXPLAIN_CLOUD) },
                 onOffer = { m -> sheet = m to vm.defaultInput(ev, m) })
@@ -160,14 +166,16 @@ private fun Pipeline(vm: AppViewModel, e: ScreeningEventEntity, receipts: List<R
         SectionTitle("How this was decided")
         Step(1, "Rules", Brand.Rules, "score ${e.rulesScore} → ${e.rulesRisk.lowercase()} · ${e.rulesMicros} µs",
             e.rulesFlags.lines().filter { it.isNotBlank() }.joinToString(" · ").ifBlank { "No red flags" })
+        val cloud = e.aiSource == "IN_CLOUD"
         val aiLine = when (e.aiStatus) {
-            AiStatus.DONE, AiStatus.REJECTED -> "${if (e.aiSource == "IN_CLOUD") "Cloud fallback" else "On-device"} · ${e.aiModel?.let { prettyModel(it) } ?: "model"} · ${e.aiLatencyMs ?: 0} ms"
+            AiStatus.DONE, AiStatus.REJECTED -> "${if (cloud) "Cloud fallback" else "On-device"} · ${e.aiModel?.let { prettyModel(it) } ?: "model"} · ${e.aiLatencyMs ?: 0} ms"
             AiStatus.PENDING -> "Queued: runs when the app is open"
             AiStatus.RUNNING -> "Running on this phone…"
             AiStatus.FAILED -> "Failed"
             else -> "Not needed"
         }
-        Step(2, "On-device model", Brand.Device, aiLine, e.aiError)
+        Step(2, if (cloud && e.aiStatus == AiStatus.DONE) "Cloud fallback" else "On-device model",
+            if (cloud) Brand.Cloud else Brand.Device, aiLine, e.aiError)
         if (e.aiStatus in listOf(AiStatus.PENDING, AiStatus.FAILED, AiStatus.NOT_RUN))
             FilledTonalButton(onClick = { vm.analyze(e.id) }) { Icon(Icons.Default.Memory, null); Spacer(Modifier.width(6.dp)); Text("Analyze on device") }
         e.schemaValid?.let { ok ->
@@ -201,10 +209,31 @@ private fun Step(n: Int, title: String, color: Color, line: String, detail: Stri
 }
 
 @OptIn(ExperimentalLayoutApi::class)
+
+@Composable
+private fun PrivacyActions(vm: AppViewModel, e: ScreeningEventEntity, open: (PendingUserMethod) -> Unit) {
+    val priv = com.example.callguardian.privacy.LocalPrivacy.current
+    val eventPrivate = com.example.callguardian.privacy.PrivacyKeys.event(e.id) in priv.marks
+    val threadPrivate = e.number?.let { com.example.callguardian.privacy.PrivacyKeys.thread(it) in priv.marks } == true
+    val contactPrivate = e.number?.let { com.example.callguardian.privacy.PrivacyKeys.contact(it) in priv.marks } == true
+    androidx.compose.foundation.layout.Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (eventPrivate) OutlinedButton(onClick = { open(PendingUserMethod(UserMethod.CLEAR_PRIVATE, vm.clearPrivateInput(e), "Remove privacy", e.id)) }, modifier = Modifier.fillMaxWidth()) { Text("Remove privacy") }
+        else OutlinedButton(onClick = { open(PendingUserMethod(UserMethod.SET_PRIVATE, vm.setPrivateInput(e), "Make private", e.id)) }, modifier = Modifier.fillMaxWidth()) { Text("Make private") }
+        e.number?.let { n ->
+            if (e.channel != "CALL") {
+                if (threadPrivate) TextButton(onClick = { open(PendingUserMethod(UserMethod.CLEAR_PRIVATE, vm.clearThreadPrivateInput(n, e.source), "Show this thread", e.id)) }) { Text("Show this thread") }
+                else TextButton(onClick = { open(PendingUserMethod(UserMethod.SET_PRIVATE, vm.setThreadPrivateInput(n, e.source), "Hide this thread", e.id)) }) { Text("Make thread private") }
+            }
+            if (contactPrivate) TextButton(onClick = { open(PendingUserMethod(UserMethod.CLEAR_PRIVATE, vm.clearContactPrivateInput(n, e.source), "Show this contact", e.id)) }) { Text("Show this contact") }
+            else TextButton(onClick = { open(PendingUserMethod(UserMethod.SET_PRIVATE, vm.setContactPrivateInput(n, e.source), "Hide this contact", e.id)) }) { Text("Make contact private") }
+        }
+    }
+}
+
 @Composable
 private fun Actions(vm: AppViewModel, e: ScreeningEventEntity, open: (GuardianMethod) -> Unit) {
     val channel = Channel.valueOf(e.channel)
-    val offered = GuardianMethod.fromAlias(e.finalAction).takeIf { e.policyDispatch == Dispatch.OFFER.name }
+    val offered = guardianMethodFromAlias(e.finalAction).takeIf { e.policyDispatch == Dispatch.OFFER.name }
     val methods = vm.registry.proposableMethods.filter { m -> m.method != GuardianMethod.EXPLAIN_CLOUD && m.spec.channels.any { it.name == channel.name } }
     SectionCard {
         SectionTitle("Actions")
@@ -227,7 +256,7 @@ private fun CloudCard(vm: AppViewModel, e: ScreeningEventEntity, receipts: List<
     val reg = vm.registry.byMethod(GuardianMethod.EXPLAIN_CLOUD) ?: return
     val latest = receipts.firstOrNull { it.methodId == reg.id && it.status == DispatchResult.STATUS_OK }
     val out = latest?.outputJson?.let { runCatching { MethodRegistry.json.parseToJsonElement(it).jsonObject }.getOrNull() }
-    val proposed = out?.get("proposedMethod")?.jsonPrimitive?.content?.let { GuardianMethod.fromAlias(it) } ?: GuardianMethod.NONE
+    val proposed = out?.get("proposedMethod")?.jsonPrimitive?.content?.let { guardianMethodFromAlias(it) } ?: GuardianMethod.NONE
     var decision by remember(latest?.id) { mutableStateOf<PolicyDecision?>(null) }
     LaunchedEffect(latest?.id) { if (proposed != GuardianMethod.NONE) decision = vm.evaluate(e, proposed, VerdictSource.IN_CLOUD) }
     SectionCard {

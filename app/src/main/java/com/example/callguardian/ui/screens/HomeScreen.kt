@@ -1,201 +1,267 @@
 package com.example.callguardian.ui.screens
 
-import com.example.callguardian.ui.components.GuardianTopBar
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material.icons.filled.Call
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.Memory
+import androidx.compose.material.icons.filled.WarningAmber
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.callguardian.ai.DeviceModelState
-import com.example.callguardian.data.db.ScreeningEventEntity
-import com.example.callguardian.model.RiskLevel
+import com.example.callguardian.data.db.ReceiptEntity
+import com.example.callguardian.privacy.LocalPrivacy
+import com.example.callguardian.privacy.PrivateGate
 import com.example.callguardian.ui.AppViewModel
+import com.example.callguardian.ui.HomeStats
+import com.example.callguardian.ui.ProcessAllState
 import com.example.callguardian.ui.SetupActions
 import com.example.callguardian.ui.components.EventRow
-import com.example.callguardian.ui.components.Pill
+import com.example.callguardian.ui.components.GuardianTopBar
 import com.example.callguardian.ui.components.SectionCard
 import com.example.callguardian.ui.components.SectionTitle
-import com.example.callguardian.ui.components.prettyModel
+import com.example.callguardian.ui.components.relativeTime
 import com.example.callguardian.ui.theme.Brand
 
 @Composable
-fun HomeScreen(vm: AppViewModel, actions: SetupActions, onEvent: (Long) -> Unit, onTab: (String) -> Unit) {
+fun HomeScreen(vm: AppViewModel, actions: SetupActions, onEvent: (Long) -> Unit, onTab: (String) -> Unit, onSearch: () -> Unit = {}) {
     val setup by vm.setup.collectAsState()
     val model by vm.model.collectAsState()
     val recent by vm.recent.collectAsState()
     val receipts by vm.receipts.collectAsState()
     val settings by vm.settings.collectAsState()
+    val quarantined by vm.quarantined.collectAsState()
+    val groups by vm.subscriptions.collectAsState()
+    val process by vm.processAll.collectAsState()
+    val counts = remember(recent, quarantined) { HomeStats.counts(recent, quarantined, System.currentTimeMillis()) }
+    val attention = remember(recent) { HomeStats.needsAttention(recent, 5) }
+    val timeline = remember(receipts) { HomeStats.recentReceipts(receipts, 6) }
 
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        item { Hero(setup.coreReady, setup.online, settings.privateMode) }
-        if (setup.missing > 0) item {
-            SectionCard {
-                SectionTitle("Finish setup")
-                SetupRow(Icons.Default.Call, "Screen incoming calls", "Make Call Guardian your call-screening app", setup.callScreeningRole, actions.requestScreeningRole)
-                SetupRow(Icons.Default.Sms, "Check incoming texts", "Read new SMS to spot scams (never sent anywhere)", setup.smsPermission, actions.requestSms)
-                SetupRow(Icons.Default.Contacts, "Recognize contacts", "Never block people you know", setup.contactsPermission, actions.requestContacts)
-                SetupRow(Icons.Default.Notifications, "Scam alerts", "Warn you when something is flagged", setup.notificationsPermission, actions.requestNotifications)
-                if (setup.listenerAppsInstalled) SetupRow(Icons.Default.Forum, "Google Voice & WhatsApp", "Notification access: screen new messages from those apps (read-only)", setup.notificationAccess, actions.openNotificationAccess)
-                if (!setup.smsPermission) Text("SMS permission greyed out? On Android 15, open App info → ⋮ → Allow restricted settings (needed for sideloaded apps).",
-                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                if (!setup.smsPermission) TextButton(onClick = actions.openAppSettings) { Text("Open App info") }
-            }
-        }
-        item { ModelCard(vm, model) }
-        item { Stats(recent, receipts.count { it.status == "OK" }) }
-        item {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                SectionTitle("Recent", Modifier.weight(1f))
-                if (recent.isNotEmpty()) TextButton(onClick = { onTab("history") }) { Text("See all") }
-            }
-        }
-        if (recent.isEmpty()) item {
-            SectionCard {
-                Text("Nothing screened yet.", style = MaterialTheme.typography.titleSmall)
-                Text("Open Activity → ⋮ → Demo samples to see the on-device model, schema validation and receipts in action.",
-                    style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                FilledTonalButton(onClick = { onTab("activity") }) { Icon(Icons.Default.Science, null); Spacer(Modifier.width(8.dp)); Text("Open Activity") }
-            }
-        }
-        items(recent.take(6), key = { it.id }) { e -> EventRow(e) { onEvent(e.id) } }
-    }
-}
-
-@Composable
-private fun Hero(ready: Boolean, online: Boolean, privateMode: Boolean) {
-    val accent = if (ready) Brand.Lime else Brand.Amber
-    Box(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp))
-            .background(Brush.linearGradient(listOf(accent.copy(alpha = 0.16f), Brand.Glass.copy(alpha = 0.9f), Brand.Void)))
-            .border(1.dp, Brush.linearGradient(listOf(accent.copy(alpha = 0.7f), Brand.Line)), RoundedCornerShape(14.dp))
-            .padding(20.dp),
-    ) {
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(if (ready) "[ armed ]" else "[ setup ]", style = MaterialTheme.typography.labelMedium, color = accent)
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(if (ready) Icons.Default.VerifiedUser else Icons.Default.GppMaybe, null, tint = accent, modifier = Modifier.size(30.dp))
-                Spacer(Modifier.width(10.dp))
-                Text("call_guardian", style = MaterialTheme.typography.headlineMedium, color = Brand.Ink, fontWeight = FontWeight.ExtraBold)
-            }
-            Text(if (ready) "Protection is on. Calls and texts are checked on this phone first." else "Finish setup to start screening calls and texts.",
-                style = MaterialTheme.typography.bodyMedium, color = Brand.InkDim)
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Pill(if (privateMode) "Private mode" else "Hybrid mode", accent, Icons.Default.Lock)
-                Pill(if (online) "Online" else "Offline · on-device", if (online) Brand.Cloud else Brand.InkDim, if (online) Icons.Default.Wifi else Icons.Default.AirplanemodeActive)
-            }
-        }
-    }
-}
-
-@Composable
-private fun SetupRow(icon: ImageVector, title: String, subtitle: String, done: Boolean, onClick: () -> Unit) {
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(36.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)), contentAlignment = Alignment.Center) {
-            Icon(icon, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
-        }
-        Spacer(Modifier.width(12.dp))
-        Column(Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.titleSmall)
-            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        if (done) Icon(Icons.Default.CheckCircle, "Done", tint = Brand.Teal) else FilledTonalButton(onClick = onClick) { Text("Allow") }
-    }
-}
-
-@Composable
-private fun ModelCard(vm: AppViewModel, m: com.example.callguardian.ui.DeviceModelUi) {
-    val settings by vm.settings.collectAsState()
-    SectionCard {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(Icons.Default.Memory, null, tint = Brand.Device)
-            Spacer(Modifier.width(8.dp))
-            Column(Modifier.weight(1f)) {
-                Text("On-device model", style = MaterialTheme.typography.titleMedium)
-                Text(settings.modelChoice.title + " · Firebase AI Logic", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            val (label, color) = when (m.state) {
-                DeviceModelState.AVAILABLE -> "Ready" to Brand.Teal
-                DeviceModelState.DOWNLOADING -> "Downloading" to Brand.Cloud
-                DeviceModelState.DOWNLOADABLE -> "Not downloaded" to MaterialTheme.colorScheme.tertiary
-                DeviceModelState.UNAVAILABLE -> "Unavailable" to MaterialTheme.colorScheme.error
-                DeviceModelState.UNKNOWN -> "Checking" to MaterialTheme.colorScheme.onSurfaceVariant
-            }
-            Pill(label, color)
-        }
-        m.modelName?.let { Text("Running ${prettyModel(it)} ($it)", style = MaterialTheme.typography.bodySmall) }
-        if (m.downloading || m.state == DeviceModelState.DOWNLOADING) {
-            val p = if (m.totalBytes > 0) (m.downloadedBytes.toFloat() / m.totalBytes).coerceIn(0f, 1f) else null
-            if (p != null) LinearProgressIndicator(progress = { p }, Modifier.fillMaxWidth()) else LinearProgressIndicator(Modifier.fillMaxWidth())
-            if (m.totalBytes > 0) Text("${m.downloadedBytes / 1_048_576} / ${m.totalBytes / 1_048_576} MB", style = MaterialTheme.typography.labelSmall)
-        }
-        when (m.state) {
-            DeviceModelState.DOWNLOADABLE -> Button(onClick = vm::downloadModel, enabled = !m.downloading) { Text("Download model") }
-            DeviceModelState.UNAVAILABLE -> Text(
-                "Gemma 4 / Gemini Nano 4 preview needs a supported phone (e.g. Galaxy S25 Ultra) with AICore Developer Preview: " +
-                    "Developer options → AICore Settings → Enable AICore Developer Preview, then update AICore. Until then, rules screen everything and cloud analysis is available on request.",
-                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            else -> {}
-        }
-        m.error?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
-        TextButton(onClick = { vm.refreshModel() }) { Text("Re-check") }
-    }
-}
-
-@Composable
-private fun Stats(events: List<ScreeningEventEntity>, executed: Int) {
-    val weekAgo = System.currentTimeMillis() - 7 * 86_400_000L
-    val week = events.filter { it.receivedAt > weekAgo && !it.isTest }
-    val flagged = week.count { runCatching { RiskLevel.valueOf(it.risk) }.getOrDefault(RiskLevel.SAFE) >= RiskLevel.MEDIUM }
-    val onDevice = events.count { it.aiSource == "ON_DEVICE" }
-    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        Stat("Screened\nthis week", week.size.toString(), Modifier.weight(1f))
-        Stat("Flagged\nthis week", flagged.toString(), Modifier.weight(1f))
-        Stat("On-device\nverdicts", onDevice.toString(), Modifier.weight(1f))
-        Stat("Methods\nexecuted", executed.toString(), Modifier.weight(1f))
-    }
-}
-
-@Composable
-private fun Stat(label: String, value: String, modifier: Modifier) {
-    Column(modifier.clip(RoundedCornerShape(16.dp)).background(MaterialTheme.colorScheme.surfaceContainer).padding(12.dp)) {
-        Text(value, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-        Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun ActivityScreen(vm: AppViewModel, onEvent: (Long) -> Unit) {
-    val recent by vm.recent.collectAsState()
-    var filter by remember { mutableStateOf("All") }
-    val shown = when (filter) {
-        "Flagged" -> recent.filter { runCatching { RiskLevel.valueOf(it.risk) }.getOrDefault(RiskLevel.SAFE) >= RiskLevel.MEDIUM }
-        "Calls" -> recent.filter { it.channel == "CALL" }
-        "Texts" -> recent.filter { it.channel == "SMS" }
-        else -> recent
-    }
     Column(Modifier.fillMaxSize()) {
-        GuardianTopBar(title = { Text("History") })
-        Row(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            listOf("All", "Flagged", "Calls", "Texts").forEach { f -> FilterChip(filter == f, { filter = f }, label = { Text(f) }) }
+        GuardianTopBar(title = { Text("home") }, onSearch = onSearch)
+        LazyColumn(
+            Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            item {
+                StatusStrip(
+                    protectionOn = setup.coreReady,
+                    screenerOn = setup.callScreeningRole,
+                    nano = model.state,
+                    privateMode = settings.privateMode,
+                    onSetup = if (setup.missing > 0) ({ onTab("settings") }) else null,
+                    missing = setup.missing,
+                )
+            }
+            item {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    StatCard("blocked today", counts.blockedToday.toString(), Brand.Threat, Modifier.weight(1f)) { onTab("activity/processed") }
+                    StatCard("scams flagged", counts.scamsFlagged.toString(), Brand.Amber, Modifier.weight(1f)) { onTab("activity/processed") }
+                }
+                Spacer(Modifier.height(8.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    StatCard("unprocessed", counts.unprocessed.toString(), if (counts.unprocessed > 0) Brand.Lime else Brand.InkDim, Modifier.weight(1f)) { onTab("activity") }
+                    StatCard("quarantined", counts.quarantined.toString(), Brand.InkDim, Modifier.weight(1f)) { onTab("activity/quarantined") }
+                }
+            }
+            item { ProcessAllButton(process, onStart = { vm.startProcessAll(includeLogs = true) }, onCancel = vm::cancelProcessAll) }
+            item {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    SectionTitle("Needs attention", Modifier.weight(1f))
+                    if (counts.unprocessed > attention.size) TextButton(onClick = { onTab("activity") }) { Text("See all") }
+                }
+            }
+            if (attention.isEmpty()) item {
+                SectionCard {
+                    Text("Queue is clear.", style = MaterialTheme.typography.titleSmall)
+                    Text("New calls and texts show up here when they need a look.", style = MaterialTheme.typography.bodySmall, color = Brand.InkDim)
+                }
+            } else {
+                items(attention, key = { "att-${it.id}" }) { e -> EventRow(e) { onEvent(e.id) } }
+            }
+            item {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    SectionTitle("Recent receipts", Modifier.weight(1f))
+                    if (timeline.isNotEmpty()) TextButton(onClick = { onTab("activity/processed") }) { Text("See all") }
+                }
+            }
+            if (timeline.isEmpty()) item {
+                Text("No receipts yet.", style = MaterialTheme.typography.bodySmall, color = Brand.InkDim)
+            } else {
+                items(timeline, key = { "rcpt-${it.id}" }) { r -> ReceiptLine(vm, r) { onTab("receipt/${r.id}") } }
+            }
+            item {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    SectionTitle("Subscriptions", Modifier.weight(1f))
+                    if (!groups.isNullOrEmpty()) TextButton(onClick = { onTab("subscriptions") }) { Text("See all") }
+                }
+            }
+            val list = groups
+            when {
+                list == null -> item { Text("Scanning inbox…", style = MaterialTheme.typography.bodySmall, color = Brand.InkDim) }
+                list.isEmpty() -> item { Text("No subscription senders found.", style = MaterialTheme.typography.bodySmall, color = Brand.InkDim) }
+                else -> items(list.take(6), key = { "sub-${it.serviceKey}" }) { g ->
+                    val priv = LocalPrivacy.current
+                    val hidden = g.senders.any { priv.address(it) } || priv.address(g.service)
+                    PrivateGate(hidden = hidden) {
+                        Row(
+                            Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
+                                .clickable { onTab("subscriptions") }
+                                .background(Brand.Glass.copy(alpha = 0.8f))
+                                .border(1.dp, Brand.Line, RoundedCornerShape(8.dp))
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(g.service.ifBlank { g.sender }, style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text("${g.count}", style = MaterialTheme.typography.labelMedium, color = Brand.Lime)
+                        }
+                    }
+                }
+            }
+            if (setup.missing > 0) item {
+                Text(
+                    "Setup · ${setup.missing} step${if (setup.missing == 1) "" else "s"} left. Open Settings to finish.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Brand.Amber,
+                    modifier = Modifier.clickable { actions.openAppSettings(); onTab("settings") },
+                )
+            }
+            item { Spacer(Modifier.height(8.dp)) }
         }
-        LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            if (shown.isEmpty()) item { Text("No events.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
-            items(shown, key = { it.id }) { e -> EventRow(e) { onEvent(e.id) } }
+    }
+}
+
+@Composable
+private fun StatusStrip(
+    protectionOn: Boolean,
+    screenerOn: Boolean,
+    nano: DeviceModelState,
+    privateMode: Boolean,
+    onSetup: (() -> Unit)?,
+    missing: Int,
+) {
+    val nanoLabel = when (nano) {
+        DeviceModelState.AVAILABLE -> "nano:ready"
+        DeviceModelState.DOWNLOADING -> "nano:downloading"
+        DeviceModelState.UNAVAILABLE, DeviceModelState.DOWNLOADABLE -> "cloud fallback"
+        DeviceModelState.UNKNOWN -> "nano:…"
+        else -> "cloud fallback"
+    }
+    val nanoOk = nano == DeviceModelState.AVAILABLE
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        StatusChip(if (protectionOn) "prot:on" else "prot:off", if (protectionOn) Brand.Lime else Brand.Amber)
+        StatusChip(if (screenerOn) "screener:on" else "screener:off", if (screenerOn) Brand.Lime else Brand.InkDim)
+        StatusChip(nanoLabel, if (nanoOk) Brand.Lime else Brand.Cloud)
+        if (privateMode) StatusChip("private", Brand.Lime)
+        if (onSetup != null) StatusChip("setup:$missing", Brand.Amber, onSetup)
+    }
+}
+
+@Composable
+private fun StatusChip(text: String, color: Color, onClick: (() -> Unit)? = null) {
+    val shape = RoundedCornerShape(8.dp)
+    Text(
+        text,
+        style = MaterialTheme.typography.labelMedium,
+        color = color,
+        modifier = Modifier
+            .clip(shape)
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+            .background(color.copy(alpha = 0.12f))
+            .border(1.dp, color.copy(alpha = 0.45f), shape)
+            .padding(horizontal = 8.dp, vertical = 8.dp),
+        maxLines = 1,
+    )
+}
+
+@Composable
+private fun StatCard(label: String, value: String, accent: Color, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    Column(
+        modifier
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(onClick = onClick)
+            .background(Brand.Glass.copy(alpha = 0.9f))
+            .border(1.dp, accent.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
+            .padding(12.dp),
+    ) {
+        Text(value, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, color = accent)
+        Spacer(Modifier.height(4.dp))
+        Text(label, style = MaterialTheme.typography.labelSmall, color = Brand.InkDim, maxLines = 1)
+    }
+}
+
+@Composable
+fun ProcessAllButton(state: ProcessAllState, onStart: () -> Unit, onCancel: () -> Unit, modifier: Modifier = Modifier) {
+    Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (state.running) {
+            LinearProgressIndicator(progress = { state.fraction }, modifier = Modifier.fillMaxWidth(), color = Brand.Lime, trackColor = Brand.Line)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "${state.current}/${state.total}" + (state.label?.let { " · $it" } ?: ""),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = Brand.InkDim,
+                    modifier = Modifier.weight(1f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                TextButton(onClick = onCancel) { Text("Cancel") }
+            }
+        } else {
+            Button(
+                onClick = onStart,
+                modifier = Modifier.fillMaxWidth().height(48.dp),
+                shape = RoundedCornerShape(8.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Brand.Lime, contentColor = Brand.OnLime),
+            ) { Text("Process all", fontWeight = FontWeight.Bold) }
+            if (state.cancelled) Text("Cancelled · ${state.done} done.", style = MaterialTheme.typography.labelSmall, color = Brand.InkDim)
+            else if (state.total > 0 && state.done + state.failed > 0) {
+                Text("Last run · ${state.done} analyzed" + if (state.failed > 0) ", ${state.failed} failed" else "", style = MaterialTheme.typography.labelSmall, color = Brand.InkDim)
+            }
         }
+    }
+}
+
+@Composable
+private fun ReceiptLine(vm: AppViewModel, r: ReceiptEntity, onClick: () -> Unit) {
+    val title = vm.registry.byId(r.methodId)?.spec?.title ?: r.methodId.substringAfter('.').substringBefore('@').replace('_', ' ')
+    Row(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).clickable(onClick = onClick).padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(relativeTime(r.createdAt), style = MaterialTheme.typography.labelSmall, color = Brand.InkDim, modifier = Modifier.width(48.dp))
+        Text(title, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(r.status.lowercase(), style = MaterialTheme.typography.labelSmall, color = statusColor(r.status))
     }
 }

@@ -11,6 +11,7 @@ import com.example.callguardian.data.db.AiStatus
 import com.example.callguardian.data.db.ScreeningEventDao
 import com.example.callguardian.data.db.ScreeningEventEntity
 import com.example.callguardian.integrations.IntegrationPrefs
+import com.example.callguardian.privacy.PrivacyStore
 import com.example.callguardian.jev.JevClient
 import com.example.callguardian.methods.gen.GuardianCallReviewV1Input
 import com.example.callguardian.methods.gen.GuardianCallReviewV1Output
@@ -24,6 +25,10 @@ import com.example.callguardian.methods.gen.GuardianSmsMuteV1Input
 import com.example.callguardian.methods.gen.GuardianSmsMuteV1Output
 import com.example.callguardian.methods.gen.GuardianSmsUnsubscribeV1Input
 import com.example.callguardian.methods.gen.GuardianSmsUnsubscribeV1Output
+import com.example.callguardian.methods.gen.GuardianPrivacySet_privateV1Input
+import com.example.callguardian.methods.gen.GuardianPrivacySet_privateV1Output
+import com.example.callguardian.methods.gen.GuardianPrivacyClear_privateV1Input
+import com.example.callguardian.methods.gen.GuardianPrivacyClear_privateV1Output
 import com.example.callguardian.model.Channel
 import com.example.callguardian.model.MessageSource
 import com.example.callguardian.screening.HeuristicScanner
@@ -48,6 +53,7 @@ class UserMethodHandlers @Inject constructor(
     private val jev: JevClient,
     private val subs: SubscriptionPrefs,
     private val integrations: IntegrationPrefs,
+    private val privacy: PrivacyStore,
 ) {
     private val json = MethodRegistry.json
     private fun <I> decode(s: KSerializer<I>, input: JsonObject): I = json.decodeFromJsonElement(s, input)
@@ -60,7 +66,8 @@ class UserMethodHandlers @Inject constructor(
         UserMethod.MANAGE_SUBSCRIPTION -> manage(decode(GuardianSmsManage_subscriptionV1Input.serializer(), input))
         UserMethod.MUTE_SENDER -> {
             val i = decode(GuardianSmsMuteV1Input.serializer(), input)
-            subs.setMode(i.sender, i.mode.name)
+            val targets = i.senders?.takeIf { it.isNotEmpty() } ?: listOf(i.sender)
+            subs.setMode(targets, i.mode.name)
             HandlerOutcome(out(GuardianSmsMuteV1Output.serializer(), GuardianSmsMuteV1Output(i.sender, GuardianSmsMuteV1Output.Mode.valueOf(i.mode.name), System.currentTimeMillis())),
                 notes = listOf("Saved on this phone only."))
         }
@@ -70,6 +77,20 @@ class UserMethodHandlers @Inject constructor(
             integrations.set(i.integration.name, i.enabled)
             HandlerOutcome(out(GuardianIntegrationSetV1Output.serializer(), GuardianIntegrationSetV1Output(
                 GuardianIntegrationSetV1Output.Integration.valueOf(i.integration.name), i.enabled, prev, System.currentTimeMillis())))
+        }
+        UserMethod.SET_PRIVATE -> {
+            val i = decode(GuardianPrivacySet_privateV1Input.serializer(), input)
+            val key = privacy.set(i.kind.name, i.eventId, i.address, i.callLogId)
+            HandlerOutcome(out(GuardianPrivacySet_privateV1Output.serializer(), GuardianPrivacySet_privateV1Output(
+                GuardianPrivacySet_privateV1Output.Kind.valueOf(i.kind.name), key, true, System.currentTimeMillis())),
+                notes = listOf("Hidden on this phone. Unlock with fingerprint, face or your device PIN to see it."))
+        }
+        UserMethod.CLEAR_PRIVATE -> {
+            val i = decode(GuardianPrivacyClear_privateV1Input.serializer(), input)
+            val key = privacy.clear(i.kind.name, i.eventId, i.address, i.callLogId)
+            HandlerOutcome(out(GuardianPrivacyClear_privateV1Output.serializer(), GuardianPrivacyClear_privateV1Output(
+                GuardianPrivacyClear_privateV1Output.Kind.valueOf(i.kind.name), key, false, System.currentTimeMillis())),
+                notes = listOf("This item is visible again."))
         }
     }
 
@@ -111,11 +132,17 @@ class UserMethodHandlers @Inject constructor(
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.SEND_SMS) != PackageManager.PERMISSION_GRANTED)
             error("SEND_SMS permission not granted")
         val sms = if (android.os.Build.VERSION.SDK_INT >= 31) context.getSystemService(SmsManager::class.java) else SmsManager.getDefault()
-        sms.sendTextMessage(i.recipient, null, i.keyword.name, null, null)
-        subs.markUnsubscribed(i.recipient)
+        val now = System.currentTimeMillis()
+        val results = i.recipients.map { recipient ->
+            val queued = runCatching { sms.sendTextMessage(recipient, null, i.keyword.name, null, null) }.isSuccess
+            GuardianSmsUnsubscribeV1Output.Result(recipient, queued)
+        }
+        subs.markUnsubscribed(i.recipients.toList())
+        val allQueued = results.all { it.queued }
         return HandlerOutcome(out(GuardianSmsUnsubscribeV1Output.serializer(), GuardianSmsUnsubscribeV1Output(
-            i.recipient, GuardianSmsUnsubscribeV1Output.Keyword.valueOf(i.keyword.name), true, System.currentTimeMillis())),
-            notes = listOf("Sent \"${i.keyword.name}\" to ${i.recipient} after your confirmation."))
+            i.service, i.recipients.toList(), results, GuardianSmsUnsubscribeV1Output.Keyword.valueOf(i.keyword.name), allQueued, now)),
+            notes = listOf("Sent \"${i.keyword.name}\" to ${i.service} (${results.size} number(s)) after your confirmation.") +
+                results.map { "${it.recipient}: ${if (it.queued) "queued" else "failed"}" })
     }
 
     private fun manage(i: GuardianSmsManage_subscriptionV1Input): HandlerOutcome {

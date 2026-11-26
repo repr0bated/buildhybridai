@@ -34,5 +34,7 @@ class SubscriptionPrefs @Inject constructor(@ApplicationContext context: Context
         when (mode) { "MUTE" -> p[muted] = p[muted].orEmpty() + sender; "KEEP" -> p[kept] = p[kept].orEmpty() + sender }
     }
     suspend fun markUnsubscribed(sender: String) = store.edit { it[unsub] = it[unsub].orEmpty() + sender }
+    suspend fun markUnsubscribed(senders: Collection<String>) = store.edit { it[unsub] = it[unsub].orEmpty() + senders }
+    suspend fun setMode(senders: Collection<String>, mode: String) { senders.forEach { setMode(it, mode) } }
 }
 

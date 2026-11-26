@@ -1,5 +1,7 @@
 package com.example.callguardian.screening
 
+import com.example.callguardian.sms.QuarantineInbox
+
 import android.content.Context
 import com.example.callguardian.ai.HybridScamAnalyzer
 import com.example.callguardian.ai.Prompts
@@ -70,6 +72,7 @@ class ScreeningEngine @Inject constructor(
     private val io: CoroutineDispatcher,
     private val subscriptionPrefs: com.example.callguardian.subscriptions.SubscriptionPrefs,
     private val integrationPrefs: com.example.callguardian.integrations.IntegrationPrefs,
+    private val quarantineInbox: QuarantineInbox,
 ) {
     private val json = Json { ignoreUnknownKeys = false }
     val verdictValidator by lazy { SchemaValidator(asset("schemas/scam_verdict.schema.json"), "scam_verdict.schema.json") }
@@ -87,6 +90,8 @@ class ScreeningEngine @Inject constructor(
         rawNumber: String?, body: String, isTest: Boolean = false, runAi: Boolean = true,
         source: MessageSource = if (isTest) MessageSource.LAB_SAMPLE else MessageSource.SMS, senderName: String? = null,
         integration: String? = if (source == MessageSource.SMS && !isTest) "phone_sms" else null,
+        smsUri: String? = null,
+        applyActions: Boolean = true,
     ): Long = withContext(io) {
         // Notification sources (Google Voice, WhatsApp) may give a name instead of a number.
         val number = normalize(rawNumber)?.takeIf { it.contains('@') || it.trimStart('+').length >= 3 }
@@ -105,10 +110,11 @@ class ScreeningEngine @Inject constructor(
             aiStatus = if (wantsAi) AiStatus.PENDING else AiStatus.NOT_RUN,
             risk = (if (blocked) maxOf(scan.riskLevel, RiskLevel.HIGH) else scan.riskLevel).name, category = scan.category.name,
             confidence = scan.score, reasons = scan.reasons.joinToString("\n"),
-            userAction = if (blocked) "BLOCKED_BY_LIST" else null, quarantined = blocked,
+            userAction = if (blocked) "BLOCKED_BY_LIST" else null, quarantined = blocked, smsUri = smsUri,
         ))
-        if (!blocked) decideAndDispatch(id, MethodProposal(scan.method, scan.riskLevel, scan.score, scan.reasons, VerdictSource.RULES))
+        if (applyActions && !blocked) decideAndDispatch(id, MethodProposal(scan.method, scan.riskLevel, scan.score, scan.reasons, VerdictSource.RULES))
         val saved = events.get(id)!!
+        if (blocked) quarantineInbox.hide(saved)
         val alert = !isTest && !muted
         if (alert) notifier.notifyEvent(saved, aiPending = wantsAi)
         if (wantsAi) {
@@ -133,18 +139,18 @@ class ScreeningEngine @Inject constructor(
 
     private val subscriptionValidator by lazy { SchemaValidator(asset("schemas/subscription_check.schema.json"), "subscription_check.schema.json") }
 
-    data class SubscriptionConfirm(val isSubscription: Boolean, val link: com.example.callguardian.subscriptions.LinkCandidate?, val model: String?)
+    data class SubscriptionConfirm(val isSubscription: Boolean, val link: com.example.callguardian.subscriptions.LinkCandidate?, val model: String?, val service: String? = null)
 
     /** Gemini Nano 4 confirms a rule-detected subscription sender and picks the unsubscribe link. ONLY_ON_DEVICE. */
     suspend fun confirmSubscription(g: com.example.callguardian.subscriptions.SubscriptionGroup, recent: List<String>): SubscriptionConfirm? = withContext(io) {
         if (!AppForeground.isForeground) return@withContext null
         val run = runCatching {
-            aiMutex.withLock { withTimeout(20_000) { analyzer.subscriptionCheck(Prompts.subscription(g.sender, g.source.label, recent, g.links.map { it.url }), prefs.current().modelChoice) } }
+            aiMutex.withLock { withTimeout(20_000) { analyzer.subscriptionCheck(Prompts.subscription(g.service, g.senders, g.source.label, recent, g.links.map { it.url }), prefs.current().modelChoice) } }
         }.getOrElse { Timber.w(it, "Subscription check failed"); return@withContext null }
         val report = subscriptionValidator.validate(run.rawText)
         if (!report.valid) return@withContext null
         val c = runCatching { json.decodeFromString(com.example.callguardian.ai.SubscriptionCheck.serializer(), report.json) }.getOrNull() ?: return@withContext null
-        SubscriptionConfirm(c.isSubscription, g.links.getOrNull(c.unsubscribeLink - 1), run.modelName)
+        SubscriptionConfirm(c.isSubscription, g.links.getOrNull(c.unsubscribeLink - 1), run.modelName, c.service.trim().takeIf { it.isNotEmpty() })
     }
 
     // ---------------------------------------------------------------- Calls
@@ -274,7 +280,7 @@ class ScreeningEngine @Inject constructor(
 
     // ---------------------------------------------------------------- Tier 2: on-device
 
-    suspend fun analyzeOnDevice(id: Long, fromBackground: Boolean = false, notify: Boolean = true): ScreeningEventEntity? = withContext(io) {
+    suspend fun analyzeOnDevice(id: Long, fromBackground: Boolean = false, notify: Boolean = true, applyActions: Boolean = true): ScreeningEventEntity? = withContext(io) {
         val e = events.get(id) ?: return@withContext null
         val settings = prefs.current()
         val channel = Channel.valueOf(e.channel)
@@ -301,7 +307,7 @@ class ScreeningEngine @Inject constructor(
         val report = verdictValidator.validate(run.rawText)
         val base = events.get(id)!!.copy(
             aiSource = run.source.name, aiModel = run.modelName, aiRaw = report.json.ifBlank { run.rawText }, aiLatencyMs = run.latencyMs,
-            schemaValid = report.valid, schemaErrors = report.errors.joinToString("\n").ifBlank { null }, aiError = null,
+            schemaValid = report.valid, schemaErrors = report.errors.joinToString("\n").ifBlank { null }, aiError = run.fallbackNote,
         )
         val verdict = if (report.valid) runCatching { json.decodeFromString(ScamVerdict.serializer(), report.json) }.getOrNull() else null
         if (verdict == null) {
@@ -317,11 +323,35 @@ class ScreeningEngine @Inject constructor(
         ))
         // Don't re-run a method the rules already executed for this event.
         val alreadyRan = e.autoApplied && e.finalAction == verdict.method.alias
-        if (!alreadyRan) decideAndDispatch(id, MethodProposal(verdict.method, verdict.riskLevel, verdict.confidence, verdict.reasons, run.source))
+        if (applyActions && !alreadyRan) decideAndDispatch(id, MethodProposal(verdict.method, verdict.riskLevel, verdict.confidence, verdict.reasons, run.source))
         val final = events.get(id)!!
         if (notify && !e.isTest && (verdict.riskLevel >= RiskLevel.MEDIUM || final.policyDispatch != Dispatch.DENY.name)) notifier.notifyEvent(final, aiPending = false)
         else if (notify && !e.isTest) notifier.cancel(id)
         final
+    }
+
+
+    /** Rules-only review of a historical call-log row. Does not dispatch actions. */
+    suspend fun reviewCallLog(
+        number: String?, cachedName: String?, isContact: Boolean, callType: String,
+        durationSec: Long, callAt: Long, callsFromNumber30d: Int, callsWithin15Min: Int,
+    ): Long = withContext(io) {
+        val scan = HeuristicScanner.scan(ScanInput(Channel.CALL, number, isContact = isContact, callerIdHidden = number == null,
+            recentCallsFromNumber = callsWithin15Min.toInt()))
+        val facts = listOfNotNull(
+            "call log: ${callType.lowercase()}", "${durationSec} s",
+            "$callsFromNumber30d call(s) from this number in 30 days",
+            callsWithin15Min.takeIf { it > 0 }?.let { "$it other call(s) in the 15 minutes before" },
+            cachedName?.let { "caller ID name \"$it\"" },
+        ).joinToString(" · ")
+        events.insert(ScreeningEventEntity(
+            channel = Channel.CALL.name, number = number, displayName = cachedName, isContact = isContact, isTest = true,
+            source = MessageSource.CALL_LOG.wire, receivedAt = callAt, lookupSummary = facts,
+            rulesScore = scan.score, rulesRisk = scan.riskLevel.name, rulesFlags = scan.reasons.joinToString("\n"), rulesMicros = scan.elapsedMicros,
+            aiStatus = AiStatus.PENDING,
+            risk = scan.riskLevel.name, category = scan.category.name, confidence = scan.score, reasons = scan.reasons.joinToString("\n"),
+            gateNotes = "Process all / call-log review: analysis only; no action is taken.",
+        ))
     }
 
     suspend fun processPending() {

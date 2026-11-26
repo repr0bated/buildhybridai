@@ -12,6 +12,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -23,7 +24,7 @@ class RegistryTest {
             .jsonArray.map { it.jsonPrimitive.content }.toSet()
 
     @Test fun registryLoadsAndIsVersioned() {
-        assertEquals(13, reg.methods.size)
+        assertEquals(15, reg.methods.size)
         assertEquals(7, reg.proposableMethods.size)
         assertTrue(Regex("^[0-9]{4}\\.[0-9]{2}\\.[0-9]+$").matches(reg.version))
         reg.methods.forEach { assertTrue(it.id, Regex("^guardian\\.[a-z]+\\.[a-z_]+@v[0-9]+$").matches(it.id)) }
@@ -37,6 +38,11 @@ class RegistryTest {
         assertEquals(names - "EXPLAIN_CLOUD", enumOf("deep_analysis.schema.json", "method"))
         assertEquals(GuardianMethod.entries.filter { it != GuardianMethod.NONE }.map { it.alias }.toSet(), reg.proposableMethods.map { it.spec.alias }.toSet())
         GuardianMethod.entries.filter { it != GuardianMethod.NONE }.forEach { assertNotNull(it.name, reg.byMethod(it)) }
+    }
+
+    @Test fun guardianMethodHasNoCompanionValue() {
+        assertTrue(com.example.callguardian.model.GuardianMethod.entries.none { it.name == "Companion" })
+        assertEquals(com.example.callguardian.model.GuardianMethod.NONE, com.example.callguardian.model.guardianMethodFromAlias("Companion"))
     }
 
     @Test fun categoryAndRiskEnumsMatchSchema() {

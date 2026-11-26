@@ -115,4 +115,30 @@ class UserMethodSchemaTest {
     }
 
     @Test fun noLinkMeansNoBest() = assertNull(SubscriptionDetector.bestLink(SubscriptionDetector.links("Acme: shop acme.com today")))
+
+    @Test fun setAndClearPrivateInputsValidate() {
+        val set = UserMethodInputs.setPrivate("EVENT", "Hide Ann", eventId = 3, address = "5550100", source = "sms")
+        val rs = m(UserMethod.SET_PRIVATE).inputValidator.validate(set.toString())
+        assertTrue(rs.errors.toString(), rs.valid)
+        val thread = UserMethodInputs.setPrivate("THREAD", "Hide texts from 72975", address = "72975", source = "sms")
+        assertTrue(m(UserMethod.SET_PRIVATE).inputValidator.validate(thread.toString()).valid)
+        val clear = UserMethodInputs.clearPrivate("CONTACT", "Show this contact again", address = "5550100", source = "call_log")
+        val rc = m(UserMethod.CLEAR_PRIVATE).inputValidator.validate(clear.toString())
+        assertTrue(rc.errors.toString(), rc.valid)
+        assertFalse(m(UserMethod.SET_PRIVATE).inputValidator.validate(UserMethodInputs.setPrivate("FOLDER", "x").toString()).valid)
+    }
+
+    @Test fun cashAppSendersMergeIntoOneService() {
+        val rows = listOf(
+            InboxSms(1, "443634", "Cash App: you paid \$4. Reply STOP to opt out", 1),
+            InboxSms(2, "72975", "Cash App: your code is on the way. Reply STOP to end", 2),
+        )
+        val g = SubscriptionDetector.group(rows)
+        assertEquals(1, g.size)
+        assertTrue(g[0].senders.toSet().containsAll(setOf("443634", "72975")))
+        assertEquals(2, g[0].count)
+        val r = m(UserMethod.UNSUBSCRIBE_SMS).inputValidator.validate(UserMethodInputs.unsubscribe(g[0]).toString())
+        assertTrue(r.errors.toString(), r.valid)
+    }
 }
+

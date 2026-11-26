@@ -1,0 +1,65 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/repr0bated/callguardian-android/schemas/methods/guardian.privacy.clear_private.v1.input.json",
+  "title": "ClearPrivateInput",
+  "description": "Stop hiding this item. It will show normally in lists, details and notifications.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "kind",
+    "label"
+  ],
+  "properties": {
+    "kind": {
+      "type": "string",
+      "enum": [
+        "EVENT",
+        "THREAD",
+        "CONTACT",
+        "CALL"
+      ],
+      "title": "Scope",
+      "readOnly": true
+    },
+    "label": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80,
+      "title": "What this applies to",
+      "readOnly": true
+    },
+    "eventId": {
+      "type": "integer",
+      "minimum": 1,
+      "title": "Event",
+      "readOnly": true
+    },
+    "address": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[^\\n\\r]{1,64}$",
+      "title": "Sender or number",
+      "readOnly": true
+    },
+    "callLogId": {
+      "type": "integer",
+      "minimum": 1,
+      "title": "Call log entry",
+      "readOnly": true
+    },
+    "source": {
+      "type": "string",
+      "enum": [
+        "sms",
+        "google_voice",
+        "whatsapp",
+        "call_log",
+        "call_screening",
+        "lab_sample"
+      ],
+      "title": "Source",
+      "readOnly": true
+    }
+  }
+}

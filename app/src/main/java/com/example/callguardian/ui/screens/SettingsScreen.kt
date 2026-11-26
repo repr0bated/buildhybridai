@@ -4,6 +4,8 @@ import com.example.callguardian.ui.components.GuardianTopBar
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import android.widget.Toast
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -43,7 +45,9 @@ fun SettingsScreen(vm: AppViewModel, actions: SetupActions, onLists: () -> Unit)
             SectionCard {
                 SectionTitle("Privacy")
                 ToggleRow("Private mode", "Message content is analyzed only on this phone (ONLY_ON_DEVICE). Cloud analysis still needs your tap and only sees redacted text.", s.privateMode, vm::setPrivateMode)
+                Text("Make private on a call or text hides the number, body and analysis behind a blur until you unlock with fingerprint, face or your device PIN.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
+            DefaultSmsCard(vm, actions)
             SectionCard {
                 SectionTitle("On-device model")
                 OnDeviceModelChoice.entries.forEach { c ->
@@ -112,6 +116,23 @@ private fun ToggleRow(title: String, subtitle: String, checked: Boolean, onChang
     }
 }
 
+
+@Composable
+private fun KeyField(value: String, onValue: (String) -> Unit, label: String, getKeyUrl: String) {
+    val context = LocalContext.current
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedTextField(
+            value, onValue, label = { Text(label) }, singleLine = true,
+            visualTransformation = PasswordVisualTransformation(), modifier = Modifier.weight(1f),
+        )
+        TextButton(onClick = {
+            runCatching {
+                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(getKeyUrl)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            }
+        }) { Text("Get a key") }
+    }
+}
+
 @Composable
 private fun LookupCard(vm: AppViewModel) {
     val s by vm.settings.collectAsState()
@@ -123,8 +144,8 @@ private fun LookupCard(vm: AppViewModel) {
     SectionCard {
         SectionTitle("Caller lookup (optional)")
         Text("Reverse lookup for unknown callers. Keys stay on this phone.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        OutlinedTextField(num, { num = it }, label = { Text("NumLookupAPI key") }, singleLine = true, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
-        OutlinedTextField(abs, { abs = it }, label = { Text("Abstract API key") }, singleLine = true, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
+        KeyField(num, { num = it }, "NumLookupAPI key", "https://numlookup.com")
+        KeyField(abs, { abs = it }, "Abstract API key", "https://www.abstractapi.com/api/phone-validation-api")
         OutlinedTextField(url, { url = it }, label = { Text("Custom endpoint ({number} placeholder)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedTextField(hn, { hn = it }, label = { Text("Header") }, singleLine = true, modifier = Modifier.weight(1f))
@@ -192,6 +213,24 @@ private fun IntegrationsCard(vm: AppViewModel, actions: SetupActions) {
                     TextButton(onClick = actions.openAppSettings) { Text("App info") }
                 }
             }
+        }
+    }
+}
+
+
+@Composable
+private fun DefaultSmsCard(vm: AppViewModel, actions: SetupActions) {
+    val setup by vm.setup.collectAsState()
+    SectionCard {
+        SectionTitle("Default SMS app")
+        Text("Optional. When Call Guardian is the default, Quarantine can hide scam texts from the system inbox. You can switch back anytime.",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (setup.smsRole) {
+            Text("Call Guardian is the default SMS app.", style = MaterialTheme.typography.bodyMedium)
+            val prev = setup.previousSmsLabel
+            TextButton(onClick = actions.openSmsRoleSettings) { Text(if (prev != null) "Switch back to $prev" else "Change default SMS app") }
+        } else {
+            TextButton(onClick = actions.requestSmsRole) { Text("Make default SMS app") }
         }
     }
 }

@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.Rule
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Sms
 import androidx.compose.material.icons.filled.Smartphone
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
@@ -46,6 +47,7 @@ import androidx.compose.ui.unit.dp
 import com.example.callguardian.data.db.AiStatus
 import com.example.callguardian.data.db.ScreeningEventEntity
 import com.example.callguardian.model.GuardianMethod
+import com.example.callguardian.model.guardianMethodFromAlias
 import com.example.callguardian.model.RiskLevel
 import com.example.callguardian.model.ScamCategory
 import com.example.callguardian.model.VerdictSource
@@ -109,6 +111,7 @@ fun SectionTitle(text: String, modifier: Modifier = Modifier) =
 fun GuardianTopBar(
     title: @Composable () -> Unit,
     navigationIcon: @Composable () -> Unit = {},
+    onSearch: (() -> Unit)? = null,
     actions: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit = {},
 ) {
     val blink = androidx.compose.animation.core.rememberInfiniteTransition(label = "cursor")
@@ -131,6 +134,9 @@ fun GuardianTopBar(
                         Box(Modifier.padding(start = 3.dp).size(width = 10.dp, height = 20.dp).background(MaterialTheme.colorScheme.primary.copy(alpha = a)))
                     }
                 }
+            }
+            if (onSearch != null) androidx.compose.material3.IconButton(onClick = onSearch) {
+                androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Default.Search, "Search")
             }
             actions()
         }
@@ -169,7 +175,9 @@ fun EventRow(e: ScreeningEventEntity, onClick: () -> Unit) {
     val risk = runCatching { RiskLevel.valueOf(e.risk) }.getOrDefault(RiskLevel.SAFE)
     val source = runCatching { VerdictSource.valueOf(e.decidedBy) }.getOrDefault(VerdictSource.RULES)
     val category = runCatching { ScamCategory.valueOf(e.category) }.getOrDefault(ScamCategory.NONE)
-    val action = GuardianMethod.fromAlias(e.finalAction)
+    val action = guardianMethodFromAlias(e.finalAction)
+    val hidden = com.example.callguardian.privacy.LocalPrivacy.current.event(e)
+    com.example.callguardian.privacy.PrivateGate(hidden = hidden) {
     Row(
         Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable(onClick = onClick)
             .background(Brand.Glass.copy(alpha = 0.85f)).border(1.dp, risk.color().copy(alpha = if (risk >= RiskLevel.MEDIUM) 0.55f else 0.18f), RoundedCornerShape(12.dp))
@@ -214,6 +222,7 @@ fun EventRow(e: ScreeningEventEntity, onClick: () -> Unit) {
             if (tag != null) Text(tag,
                 style = MaterialTheme.typography.labelSmall, color = risk.color())
         }
+    }
     }
 }
 

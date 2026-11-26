@@ -15,15 +15,21 @@ import com.example.callguardian.R
 import com.example.callguardian.data.db.ScreeningEventEntity
 import com.example.callguardian.model.Channel
 import com.example.callguardian.model.GuardianMethod
+import com.example.callguardian.model.guardianMethodFromAlias
 import com.example.callguardian.model.RiskLevel
 import com.example.callguardian.model.ScamCategory
 import com.example.callguardian.model.label
+import com.example.callguardian.privacy.PrivacyKeys
+import com.example.callguardian.privacy.PrivacyStore
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
 
 @Singleton
-class AlertNotifier @Inject constructor(@ApplicationContext private val context: Context) {
+class AlertNotifier @Inject constructor(
+    @ApplicationContext private val context: Context,
+    private val privacy: PrivacyStore,
+) {
 
     private val nm = NotificationManagerCompat.from(context)
 
@@ -40,9 +46,27 @@ class AlertNotifier @Inject constructor(@ApplicationContext private val context:
     fun notifyEvent(e: ScreeningEventEntity, aiPending: Boolean) {
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return
         val risk = runCatching { RiskLevel.valueOf(e.risk) }.getOrDefault(RiskLevel.SAFE)
-        val action = GuardianMethod.fromAlias(e.finalAction)
+        val action = guardianMethodFromAlias(e.finalAction)
         val blockedNow = e.autoApplied && (action == GuardianMethod.BLOCK_NUMBER || action == GuardianMethod.REJECT_CALL)
         val isCall = e.channel == Channel.CALL.name
+        val hidden = PrivacyKeys.coversEvent(privacy.snapshot, e.id, e.number ?: e.displayName, isCall)
+        if (hidden) {
+            val open = PendingIntent.getActivity(context, e.id.toInt(),
+                Intent(context, MainActivity::class.java).putExtra(MainActivity.EXTRA_EVENT_ID, e.id)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP),
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+            val b = NotificationCompat.Builder(context, if (risk >= RiskLevel.MEDIUM) CH_ALERTS else CH_INFO)
+                .setSmallIcon(R.drawable.ic_notification)
+                .setColor(ContextCompat.getColor(context, if (risk >= RiskLevel.HIGH) R.color.risk_high else R.color.brand))
+                .setContentTitle("Private ${if (isCall) "call" else "text"}")
+                .setContentText("Unlock in Call Guardian to see this.")
+                .setContentIntent(open)
+                .setAutoCancel(true)
+                .setCategory(NotificationCompat.CATEGORY_STATUS)
+                .setVisibility(NotificationCompat.VISIBILITY_SECRET)
+            nm.notify(e.id.toInt(), b.build())
+            return
+        }
         val who = e.displayName ?: e.number ?: "Hidden number"
         val title = when {
             e.userAction == "BLOCKED_BY_LIST" -> "Blocked ${if (isCall) "call" else "message"} from $who"

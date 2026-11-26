@@ -26,6 +26,8 @@ class SmsReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != Telephony.Sms.Intents.SMS_RECEIVED_ACTION) return
+        // Default SMS app gets SMS_DELIVER instead; skip to avoid double screening.
+        if (SmsRole.held(context)) return
         val messages = Telephony.Sms.Intents.getMessagesFromIntent(intent) ?: return
         if (messages.isEmpty()) return
         // A multipart SMS arrives as several PDUs; group by sender.

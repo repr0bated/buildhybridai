@@ -2,6 +2,7 @@ package com.example.callguardian.data.db
 
 import androidx.room.ColumnInfo
 import androidx.room.Entity
+import androidx.room.Fts4
 import androidx.room.Index
 import androidx.room.PrimaryKey
 import com.example.callguardian.model.BlockMode
@@ -65,6 +66,8 @@ data class ScreeningEventEntity(
     @ColumnInfo(defaultValue = "sms") val source: String = "sms",
     /** integrations.json id it arrived through (phone_sms, google_voice, whatsapp_business, …). */
     val integration: String? = null,
+    /** System inbox URI, when we wrote the SMS as the default SMS app. */
+    @ColumnInfo(name = "sms_uri") val smsUri: String? = null,
 )
 
 object AiStatus {
@@ -116,4 +119,44 @@ data class ReceiptEntity(
     val notes: String = "",
     @ColumnInfo(name = "created_at") val createdAt: Long = System.currentTimeMillis(),
     @ColumnInfo(name = "duration_ms") val durationMs: Long = 0,
+)
+
+/** A text hidden from the system inbox because the user (or policy) quarantined it. Only used when we are the default SMS app. */
+@Entity(tableName = "quarantined_sms")
+data class QuarantinedSmsEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val address: String,
+    val body: String,
+    val date: Long,
+    @ColumnInfo(name = "date_sent") val dateSent: Long = 0,
+    @ColumnInfo(name = "event_id") val eventId: Long? = null,
+    @ColumnInfo(name = "hidden_at") val hiddenAt: Long,
+    @ColumnInfo(name = "telephony_uri") val telephonyUri: String? = null,
+)
+
+
+/** A user-marked private event, thread, contact or call-log row. Content is blurred until biometric unlock. */
+@Entity(tableName = "privacy_marks", indices = [Index("kind"), Index("address")])
+data class PrivacyMarkEntity(
+    @PrimaryKey val key: String,
+    val kind: String,
+    val address: String? = null,
+    @ColumnInfo(name = "event_id") val eventId: Long? = null,
+    @ColumnInfo(name = "created_at") val createdAt: Long,
+)
+
+
+/** FTS4 index of screening-event message bodies and identity fields. contentEntity keeps it in sync. */
+@Fts4(contentEntity = ScreeningEventEntity::class)
+@Entity(tableName = "screening_events_fts")
+data class ScreeningEventFts(
+    val body: String?,
+    val number: String?,
+    @ColumnInfo(name = "display_name") val displayName: String?,
+    val category: String,
+    val risk: String,
+    val source: String,
+    val reasons: String,
+    val advice: String?,
+    @ColumnInfo(name = "lookup_summary") val lookupSummary: String?,
 )

@@ -1,5 +1,5 @@
 {
-  "registryVersion": "2026.11.2",
+  "registryVersion": "2026.11.4",
   "methods": [
     {
       "id": "guardian.call.block@v1",
@@ -171,7 +171,7 @@
       "alias": "unsubscribe_sms",
       "version": 1,
       "title": "Unsubscribe by text",
-      "description": "Text the sender's opt-out keyword (STOP by default). Sent only after you confirm.",
+      "description": "Text the sender's opt-out keyword once to each number for this service (STOP by default, including when the message only has an unsubscribe or manage-subscription link). Sent only after you confirm. One receipt lists every number.",
       "capability": "sms.send",
       "execution": "device",
       "channels": [
@@ -240,6 +240,46 @@
       "proposable": false,
       "input": "methods/guardian.integration.set.v1.input.json",
       "output": "methods/guardian.integration.set.v1.output.json"
+    },
+    {
+      "id": "guardian.privacy.set_private@v1",
+      "alias": "set_private",
+      "version": 1,
+      "title": "Make private",
+      "description": "Blur this item in lists, details and notifications until you unlock with fingerprint, face or your device PIN. Stored only on this phone.",
+      "capability": "privacy.local",
+      "execution": "device",
+      "channels": [
+        "CALL",
+        "SMS"
+      ],
+      "minRisk": "SAFE",
+      "autoApply": false,
+      "contactSafe": true,
+      "proposable": false,
+      "requiresConsent": true,
+      "input": "methods/guardian.privacy.set_private.v1.input.json",
+      "output": "methods/guardian.privacy.set_private.v1.output.json"
+    },
+    {
+      "id": "guardian.privacy.clear_private@v1",
+      "alias": "clear_private",
+      "version": 1,
+      "title": "Remove privacy",
+      "description": "Stop hiding this item. It will show normally again.",
+      "capability": "privacy.local",
+      "execution": "device",
+      "channels": [
+        "CALL",
+        "SMS"
+      ],
+      "minRisk": "SAFE",
+      "autoApply": false,
+      "contactSafe": true,
+      "proposable": false,
+      "requiresConsent": true,
+      "input": "methods/guardian.privacy.clear_private.v1.input.json",
+      "output": "methods/guardian.privacy.clear_private.v1.output.json"
     }
   ]
 }

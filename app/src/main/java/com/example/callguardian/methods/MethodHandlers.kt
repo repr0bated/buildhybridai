@@ -28,6 +28,7 @@ import com.example.callguardian.methods.gen.GuardianSmsQuarantineV1Output
 import com.example.callguardian.model.BlockMode
 import com.example.callguardian.model.Channel
 import com.example.callguardian.notifications.AlertNotifier
+import com.example.callguardian.sms.QuarantineInbox
 import com.example.callguardian.policy.SchemaValidator
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.withTimeout
@@ -50,6 +51,7 @@ class MethodHandlers @Inject constructor(
     @ApplicationContext private val context: Context,
     private val profiles: PhoneProfileDao,
     private val events: ScreeningEventDao,
+    private val quarantineInbox: QuarantineInbox,
     private val notifier: AlertNotifier,
     private val analyzer: HybridScamAnalyzer,
 ) {
@@ -93,9 +95,16 @@ class MethodHandlers @Inject constructor(
             val e = events.get(i.eventId) ?: error("Event ${i.eventId} not found")
             val updated = e.copy(quarantined = true)
             events.update(updated)
+            val hidden = if (!e.isTest) quarantineInbox.hide(updated) else false
             val posted = if (!e.isTest) { notifier.notifyEvent(updated, aiPending = false); true } else false
-            HandlerOutcome(out(GuardianSmsQuarantineV1Output.serializer(), GuardianSmsQuarantineV1Output(i.eventId, true, posted)),
-                notes = if (e.isTest) listOf("Test event: no notification posted.") else emptyList())
+            val notes = buildList {
+                if (e.isTest) add("Test event: no notification posted.")
+                when {
+                    hidden -> add("Hidden from the system inbox; it's in Call Guardian's Quarantine folder.")
+                    !e.isTest && !quarantineInbox.isDefaultSms() -> add("Flagged only. Make Call Guardian the default SMS app (Settings) to hide this text from the inbox.")
+                }
+            }
+            HandlerOutcome(out(GuardianSmsQuarantineV1Output.serializer(), GuardianSmsQuarantineV1Output(i.eventId, true, posted)), notes = notes)
         }
         com.example.callguardian.model.GuardianMethod.REPORT_SCAM -> {
             val i = decode(GuardianReportScamV1Input.serializer(), input)
