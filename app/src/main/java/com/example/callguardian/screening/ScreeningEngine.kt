@@ -40,6 +40,7 @@ import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -188,9 +189,8 @@ class ScreeningEngine @Inject constructor(
         val alert = !isTest && !muted
         if (alert) notifier.notifyEvent(saved, aiPending = wantsAi)
         if (wantsAi) {
-            // AICore refuses background inference; if so the event stays PENDING and runs when the
-            // app is next opened (or the alert is tapped).
-            analyzeOnDevice(id, fromBackground = !AppForeground.isForeground, notify = alert)
+            // Never call Nano from a receiver: analyzeOnDevice routes to cloud or queues Unprocessed.
+            analyzeOnDevice(id, fromBackground = !AppForeground.isResumed, notify = alert)
         }
         id
     }
@@ -213,7 +213,7 @@ class ScreeningEngine @Inject constructor(
 
     /** Gemini Nano 4 confirms a rule-detected subscription sender and picks the unsubscribe link. ONLY_ON_DEVICE. */
     suspend fun confirmSubscription(g: com.example.callguardian.subscriptions.SubscriptionGroup, recent: List<String>): SubscriptionConfirm? = withContext(io) {
-        if (!AppForeground.isForeground) return@withContext null
+        if (!AppForeground.isResumed) return@withContext null
         val run = runCatching {
             aiMutex.withLock { withTimeout(20_000) { analyzer.subscriptionCheck(Prompts.subscription(g.service, g.senders, g.source.label, recent, g.links.map { it.url }), prefs.current().modelChoice) } }
         }.getOrElse { Timber.w(it, "Subscription check failed"); return@withContext null }
@@ -343,7 +343,7 @@ class ScreeningEngine @Inject constructor(
 
     /** List maintenance from Settings (not a model-callable method). */
     suspend fun unlist(number: String) = withContext(io) {
-        profiles.get(number)?.let { profiles.upsert(it.copy(blockMode = com.example.callguardian.model.BlockMode.NONE.name, trusted = false, updatedAt = System.currentTimeMillis())) }
+        profiles.get(number)?.let { profiles.upsert(it.copy(blockMode = com.example.callguardian.model.BlockMode.NONE.name, trusted = false, watched = false, updatedAt = System.currentTimeMillis())) }
     }
 
     fun defaultInput(e: ScreeningEventEntity, method: GuardianMethod): JsonObject = MethodBinder.bind(method, binding(e))
@@ -364,46 +364,43 @@ class ScreeningEngine @Inject constructor(
             ownedList = ownedListLine(),
         )
 
-        if (!AppForeground.isForeground) {
-            val updated = events.get(id)!!.copy(
-                aiStatus = AiStatus.PENDING,
-                aiError = "The on-device model only runs while Call Guardian is open. It will retry when you come back.",
-            )
-            events.update(updated)
-            return@withContext updated
+        val route = NanoPolicy.route(AppForeground.isResumed, settings.privateMode)
+        if (route == NanoPolicy.Route.QUEUE) {
+            return@withContext queueUnprocessed(id, NanoPolicy.WAITING_FOR_APP)
         }
         events.update(e.copy(aiStatus = AiStatus.RUNNING, aiError = null))
         val run = run {
             var last: Throwable? = null
             var result: com.example.callguardian.ai.ModelRun? = null
-            // Serialize (aiMutex) and back off on ErrorCode 9 (quota / background). Then cloud fallback inside triage.
+            // Serialize (aiMutex) and back off on ErrorCode 9 / cloud 429. Pause immediately if we leave RESUMED.
             for (attempt in 0..2) {
-                if (!AppForeground.isForeground) {
-                    val updated = events.get(id)!!.copy(
-                        aiStatus = AiStatus.PENDING,
-                        aiError = com.example.callguardian.ai.HybridScamAnalyzer.friendlyError(
-                            last ?: IllegalStateException("background"), background = true,
-                        ),
-                    )
-                    events.update(updated)
-                    return@withContext updated
+                if (NanoPolicy.shouldPauseDrain(AppForeground.isResumed) && route != NanoPolicy.Route.CLOUD) {
+                    return@withContext queueUnprocessed(id, NanoPolicy.quietStatus(last))
                 }
-                if (attempt > 0) kotlinx.coroutines.delay(1_000L * (1 shl (attempt - 1)))
+                if (attempt > 0) kotlinx.coroutines.delay(NanoPolicy.nextBackoffMs(NanoPolicy.MIN_BACKOFF_MS, failed = true) * attempt)
                 try {
                     result = aiMutex.withLock { withTimeout(25_000) { analyzer.triage(prompt, settings.modelChoice, settings.privateMode) } }
                     last = null
                     break
                 } catch (t: Throwable) {
+                    if (t is kotlinx.coroutines.CancellationException && t !is TimeoutCancellationException) throw t
                     last = t
-                    Timber.w(t, "On-device triage failed (attempt %s)", attempt + 1)
-                    if (!com.example.callguardian.ai.HybridScamAnalyzer.isError9(t) && t !is TimeoutCancellationException) break
+                    Timber.w(t, "Triage failed (attempt %s)", attempt + 1)
+                    val retry = NanoPolicy.isError9(t) || NanoPolicy.isCloudRateLimited(t) || t is TimeoutCancellationException
+                    if (!retry) break
+                    if (NanoPolicy.shouldPauseDrain(AppForeground.isResumed)) {
+                        return@withContext queueUnprocessed(id, NanoPolicy.quietStatus(t))
+                    }
                 }
             }
             if (result != null) result
             else {
-                val bg = fromBackground || !AppForeground.isForeground
-                val msg = com.example.callguardian.ai.HybridScamAnalyzer.friendlyError(last ?: IllegalStateException("inference failed"), background = bg)
-                val updated = events.get(id)!!.copy(aiStatus = if (bg) AiStatus.PENDING else AiStatus.FAILED, aiError = msg)
+                val t = last ?: IllegalStateException("inference failed")
+                if (NanoPolicy.isError9(t) || NanoPolicy.isCloudRateLimited(t) || !AppForeground.isResumed) {
+                    return@withContext queueUnprocessed(id, NanoPolicy.quietStatus(t))
+                }
+                val msg = com.example.callguardian.ai.HybridScamAnalyzer.friendlyError(t, background = false)
+                val updated = events.get(id)!!.copy(aiStatus = AiStatus.FAILED, aiError = msg)
                 events.update(updated)
                 return@withContext updated
             }
@@ -468,9 +465,31 @@ class ScreeningEngine @Inject constructor(
         ))
     }
 
-    suspend fun processPending() {
-        if (!AppForeground.isForeground) return
-        events.pendingAi().forEach { analyzeOnDevice(it.id) }
+    private suspend fun queueUnprocessed(id: Long, status: String): ScreeningEventEntity? {
+        val updated = events.get(id)?.copy(aiStatus = AiStatus.UNPROCESSED, aiError = status) ?: return null
+        events.update(updated)
+        return updated
+    }
+
+    suspend fun processPending() = drainUnprocessed()
+
+    /**
+     * Process queued (PENDING / UNPROCESSED) events while the app is RESUMED.
+     * Stops immediately when the process leaves the foreground. Serialized through
+     * [aiMutex] with exponential backoff after ErrorCode 9 or a cloud 429.
+     */
+    suspend fun drainUnprocessed() = withContext(io) {
+        if (NanoPolicy.shouldPauseDrain(AppForeground.isResumed)) return@withContext
+        var backoff = NanoPolicy.MIN_BACKOFF_MS
+        for (item in events.pendingAi()) {
+            kotlinx.coroutines.currentCoroutineContext().ensureActive()
+            if (NanoPolicy.shouldPauseDrain(AppForeground.isResumed)) return@withContext
+            kotlinx.coroutines.delay(backoff)
+            if (NanoPolicy.shouldPauseDrain(AppForeground.isResumed)) return@withContext
+            val out = analyzeOnDevice(item.id, fromBackground = false, notify = true)
+            val failed = out == null || AiStatus.isQueued(out.aiStatus)
+            backoff = NanoPolicy.nextBackoffMs(backoff, failed)
+        }
     }
 
     // ---------------------------------------------------------------- Tier 3: cloud (explain_cloud)

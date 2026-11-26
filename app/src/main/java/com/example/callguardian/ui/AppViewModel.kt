@@ -12,6 +12,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.callguardian.ai.DeviceModelState
 import com.example.callguardian.ai.HybridScamAnalyzer
 import com.example.callguardian.data.db.PhoneProfileDao
+import com.example.callguardian.data.db.PhoneProfileEntity
 import com.example.callguardian.data.db.ScreeningEventDao
 import com.example.callguardian.data.db.ScreeningEventEntity
 import com.example.callguardian.data.settings.AppSettings
@@ -97,6 +98,9 @@ class AppViewModel @Inject constructor(
     private val subscriptionStore: com.example.callguardian.subscriptions.SubscriptionStore,
     private val jevSecrets: com.example.callguardian.jev.JevSecrets,
     private val remoteConfig: com.example.callguardian.firebase.GuardianRemoteConfig,
+    private val lookupManager: com.example.callguardian.lookup.ReverseLookupManager,
+    private val lookupSecrets: com.example.callguardian.lookup.LookupSecrets,
+    private val lookupCollector: com.example.callguardian.lookup.LookupNumberCollector,
 ) : AndroidViewModel(app) {
 
     val receipts: StateFlow<List<ReceiptEntity>> = receiptsDao.observeRecent(500).stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
@@ -133,6 +137,8 @@ class AppViewModel @Inject constructor(
     val listed = profilesDao.observeListed().stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
     val ownedAccounts: StateFlow<List<OwnedAccount>> = ownedStore.accounts.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
     val jevKeySaved: StateFlow<Boolean> = jevSecrets.hasKey
+    val twilioKeySaved: StateFlow<Boolean> = lookupSecrets.hasTwilio
+    val telnyxKeySaved: StateFlow<Boolean> = lookupSecrets.hasTelnyx
     fun ownedFor(number: String?) = ownedStore.matchSender(number)
 
     private val _processAll = MutableStateFlow(ProcessAllState())
@@ -204,6 +210,10 @@ class AppViewModel @Inject constructor(
             try {
                 queue.forEachIndexed { i, item ->
                     ensureActive()
+                    if (!com.example.callguardian.screening.AppForeground.isResumed) {
+                        _processAll.value = _processAll.value.copy(running = false, cancelled = true, label = null)
+                        return@launch
+                    }
                     _processAll.value = _processAll.value.copy(current = i, label = item.label.take(40))
                     val ok = runCatching {
                         val id = when (item.kind) {
@@ -223,7 +233,7 @@ class AppViewModel @Inject constructor(
                     _processAll.value = _processAll.value.copy(current = i + 1, done = done, failed = failed)
                     // Give AICore a breath so a 500-item startup batch does not hit ErrorCode 9 (quota).
                     kotlinx.coroutines.delay(300)
-                    if (!com.example.callguardian.screening.AppForeground.isForeground) {
+                    if (!com.example.callguardian.screening.AppForeground.isResumed) {
                         _processAll.value = _processAll.value.copy(running = false, cancelled = true, label = null)
                         return@launch
                     }
@@ -556,5 +566,47 @@ class AppViewModel @Inject constructor(
             methodTitle = { id -> registry.byId(id)?.spec?.title ?: id },
             subscriptionIds = subIds,
         )
+    }
+
+    fun saveTwilio(sid: String, token: String) { lookupSecrets.setTwilio(sid, token) }
+    fun clearTwilio() { lookupSecrets.clearTwilio() }
+    fun saveTelnyx(key: String) { lookupSecrets.setTelnyx(key) }
+    fun clearTelnyx() { lookupSecrets.clearTelnyx() }
+    fun updateProviderOrder(ids: List<String>) = viewModelScope.launch { prefs.updateProviderOrder(ids) }
+
+    suspend fun cachedLookup(number: String) = lookupManager.cached(number)
+    suspend fun refreshLookup(number: String) = lookupManager.lookupMerged(
+        number,
+        budgetMs = com.example.callguardian.lookup.ReverseLookup.USER_BUDGET_MS,
+        forceNetwork = true,
+    )
+    suspend fun historyFor(number: String): List<ScreeningEventEntity> {
+        val seen = HashSet<Long>()
+        val out = mutableListOf<ScreeningEventEntity>()
+        for (v in com.example.callguardian.lookup.ReverseLookup.numberVariants(number)) {
+            for (e in events.byNumber(v)) if (seen.add(e.id)) out.add(e)
+        }
+        return out.sortedByDescending { it.receivedAt }
+    }
+    suspend fun isWatched(number: String): Boolean {
+        val keys = com.example.callguardian.lookup.ReverseLookup.numberVariants(number) +
+            com.example.callguardian.lookup.ReverseLookup.cacheKey(number)
+        return keys.any { profilesDao.get(it)?.watched == true }
+    }
+    fun setWatched(number: String, watched: Boolean = true, onDone: () -> Unit = {}) = viewModelScope.launch {
+        val key = com.example.callguardian.lookup.ReverseLookup.cacheKey(number)
+        val prev = profilesDao.get(key)
+            ?: com.example.callguardian.lookup.ReverseLookup.numberVariants(number).firstNotNullOfOrNull { profilesDao.get(it) }
+            ?: PhoneProfileEntity(phoneNumber = key)
+        profilesDao.upsert(prev.copy(watched = watched, updatedAt = System.currentTimeMillis()))
+        onDone()
+    }
+
+    suspend fun previewBulkLookup(sourceId: String) = lookupCollector.preview(sourceId)
+    fun startBulkLookup(context: android.content.Context, sourceId: String) {
+        com.example.callguardian.lookup.BulkLookupWorker.enqueue(context, sourceId)
+    }
+    fun cancelBulkLookup(context: android.content.Context, sourceId: String) {
+        com.example.callguardian.lookup.BulkLookupWorker.cancel(context, sourceId)
     }
 }

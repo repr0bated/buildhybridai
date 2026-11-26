@@ -73,10 +73,14 @@ data class ScreeningEventEntity(
 object AiStatus {
     const val NOT_RUN = "NOT_RUN"
     const val PENDING = "PENDING"
+    const val UNPROCESSED = "UNPROCESSED" // queued: Nano not allowed (background) or cloud 429
     const val RUNNING = "RUNNING"
     const val DONE = "DONE"
     const val FAILED = "FAILED"
     const val REJECTED = "REJECTED" // ran, but output failed schema validation
+
+    fun isQueued(status: String): Boolean =
+        status == PENDING || status == UNPROCESSED
 }
 
 @Entity(tableName = "phone_profiles")
@@ -90,6 +94,7 @@ data class PhoneProfileEntity(
     val tags: String = "",
     @ColumnInfo(name = "block_mode") val blockMode: String = BlockMode.NONE.name,
     val trusted: Boolean = false,
+    val watched: Boolean = false,
     @ColumnInfo(name = "updated_at") val updatedAt: Long = System.currentTimeMillis(),
 ) {
     val mode: BlockMode get() = runCatching { BlockMode.valueOf(blockMode) }.getOrDefault(BlockMode.NONE)
@@ -209,4 +214,21 @@ data class SubscriptionStatusHistoryEntity(
     val reason: String = "",
     @ColumnInfo(name = "receipt_id") val receiptId: Long? = null,
     @ColumnInfo(name = "event_id") val eventId: Long? = null,
+)
+
+@Entity(
+    tableName = "lookup_cache",
+    primaryKeys = ["phone_number", "source"],
+    indices = [Index("phone_number"), Index("source")],
+)
+data class LookupCacheEntity(
+    @ColumnInfo(name = "phone_number") val phoneNumber: String,
+    val source: String,
+    @ColumnInfo(name = "display_name") val displayName: String? = null,
+    val carrier: String? = null,
+    @ColumnInfo(name = "line_type") val lineType: String? = null,
+    val region: String? = null,
+    val valid: Boolean? = null,
+    @ColumnInfo(name = "raw_json") val rawJson: String? = null,
+    @ColumnInfo(name = "fetched_at") val fetchedAt: Long = 0L,
 )

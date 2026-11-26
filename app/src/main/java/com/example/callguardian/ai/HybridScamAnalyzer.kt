@@ -127,6 +127,7 @@ class HybridScamAnalyzer @Inject constructor(
         triageModel(choice, true).onDeviceExtension?.download() ?: emptyFlow()
 
     suspend fun warmUp(choice: OnDeviceModelChoice) {
+        if (!com.example.callguardian.screening.AppForeground.isResumed) return
         runCatching { triageModel(choice, true).onDeviceExtension?.warmUp() }
             .onFailure { Timber.w(it, "warmUp failed") }
     }
@@ -139,19 +140,39 @@ class HybridScamAnalyzer @Inject constructor(
 
     suspend fun triage(prompt: String, choice: OnDeviceModelChoice, privateMode: Boolean): ModelRun {
         val clipped = clipPrompt(prompt)
-        return try {
-            runOnDevice(clipped, choice, privateMode)
-        } catch (t: Throwable) {
-            if (privateMode) throw t
-            Timber.w(t, "On-device triage failed; falling back to cloud Gemini")
-            val note = "On-device request failed (${shortError(t)}); used cloud Gemini automatically."
-            runCloudTriage(clipped).copy(fallbackNote = note)
+        val route = com.example.callguardian.screening.NanoPolicy.route(
+            com.example.callguardian.screening.AppForeground.isResumed,
+            privateMode,
+        )
+        return when (route) {
+            com.example.callguardian.screening.NanoPolicy.Route.QUEUE ->
+                throw com.example.callguardian.screening.NanoRequiresForegroundException()
+            com.example.callguardian.screening.NanoPolicy.Route.CLOUD -> runCloudTriage(clipped)
+            com.example.callguardian.screening.NanoPolicy.Route.NANO -> try {
+                runOnDevice(clipped, choice, privateMode)
+            } catch (t: Throwable) {
+                if (t is kotlinx.coroutines.CancellationException) throw t
+                val stillResumed = com.example.callguardian.screening.AppForeground.isResumed
+                if (!stillResumed || privateMode) {
+                    if (privateMode || com.example.callguardian.screening.NanoPolicy.isError9(t)) {
+                        throw com.example.callguardian.screening.NanoRequiresForegroundException()
+                    }
+                    throw t
+                }
+                Timber.w(t, "On-device triage failed; falling back to cloud Gemini")
+                val note = "On-device request failed (${shortError(t)}); used cloud Gemini automatically."
+                runCloudTriage(clipped).copy(fallbackNote = note)
+            }
         }
     }
 
     /** Subscription confirmation: always ONLY_ON_DEVICE (inbox content never leaves the phone). */
-    suspend fun subscriptionCheck(prompt: String, choice: OnDeviceModelChoice): ModelRun =
-        runOnDevice(clipPrompt(prompt), choice, privateMode = true)
+    suspend fun subscriptionCheck(prompt: String, choice: OnDeviceModelChoice): ModelRun {
+        if (!com.example.callguardian.screening.AppForeground.isResumed) {
+            throw com.example.callguardian.screening.NanoRequiresForegroundException()
+        }
+        return runOnDevice(clipPrompt(prompt), choice, privateMode = true)
+    }
 
     suspend fun deepAnalysis(prompt: String): ModelRun {
         val t0 = System.currentTimeMillis()
@@ -165,6 +186,9 @@ class HybridScamAnalyzer @Inject constructor(
      */
     private suspend fun runOnDevice(prompt: String, choice: OnDeviceModelChoice, privateMode: Boolean): ModelRun {
         require(prompt.isNotBlank()) { "On-device prompt is empty" }
+        if (!com.example.callguardian.screening.AppForeground.isResumed) {
+            throw com.example.callguardian.screening.NanoRequiresForegroundException()
+        }
         val model = triageModel(choice, privateMode)
         val t0 = System.currentTimeMillis()
         val result = model.generateContent(prompt)
@@ -212,26 +236,32 @@ class HybridScamAnalyzer @Inject constructor(
             return t.take(maxChars).trimEnd() + "\n[truncated]"
         }
 
-        fun isError9(t: Throwable): Boolean {
-            val m = (t.message ?: "") + (t.cause?.message ?: "")
-            return Regex("""ErrorCode\s*9\b""").containsMatchIn(m) ||
-                m.contains("usage quota", true) || m.contains("disallowed background", true)
-        }
+        fun isError9(t: Throwable): Boolean =
+            com.example.callguardian.screening.NanoPolicy.isError9(t)
 
-        /** User-visible copy. Never surfaces a raw ErrorCode. */
+        fun isCloudRateLimited(t: Throwable): Boolean =
+            com.example.callguardian.screening.NanoPolicy.isCloudRateLimited(t)
+
+        /** User-visible copy. ErrorCode 9 is a quiet status, never an error dialog. */
         fun friendlyError(t: Throwable, background: Boolean = false): String {
+            if (isError9(t) || background || isCloudRateLimited(t) ||
+                t is com.example.callguardian.screening.NanoRequiresForegroundException
+            ) {
+                return com.example.callguardian.screening.NanoPolicy.WAITING_FOR_APP
+            }
             val m = t.message.orEmpty()
             return when {
-                t is kotlinx.coroutines.TimeoutCancellationException -> "The on-device model timed out. Try again, or leave the app open."
-                isError9(t) && background -> "The on-device model only runs while Call Guardian is open. It will retry when you come back, or use cloud if that's on."
-                isError9(t) -> "The on-device model is busy or has reached its usage quota. Retrying, then using cloud if needed."
+                t is kotlinx.coroutines.TimeoutCancellationException ->
+                    com.example.callguardian.screening.NanoPolicy.WAITING_FOR_APP
                 m.contains("Invalid arguments", true) -> "The on-device model rejected the request. Trying cloud if that's allowed."
-                Regex("""ErrorCode\s*-?\d+""").containsMatchIn(m) -> "The on-device model couldn't finish this one. Retrying, then using cloud if needed."
+                Regex("""ErrorCode\s*-?\d+""").containsMatchIn(m) ->
+                    "The on-device model couldn't finish this one. Retrying, then using cloud if needed."
                 else -> (t.message ?: t.javaClass.simpleName).take(160)
             }
         }
 
         fun shortError(t: Throwable): String = friendlyError(t)
+
 
     }
 }

@@ -36,11 +36,18 @@ data class AppSettings(
     val customEndpoint: String = "",
     val customHeaderName: String = "",
     val customHeaderValue: String = "",
+    val lookupProviderOrder: List<String> = emptyList(),
 ) {
     val hasNumLookupKey get() = numLookupApiKey.isNotBlank()
     val hasAbstractKey get() = abstractApiKey.isNotBlank()
     val hasCustomEndpoint get() = customEndpoint.isNotBlank()
     val anyLookupConfigured get() = hasNumLookupKey || hasAbstractKey || hasCustomEndpoint
+    fun providerConfigured(id: String): Boolean = when (id) {
+        "numlookup" -> hasNumLookupKey
+        "abstractapi" -> hasAbstractKey
+        "custom" -> hasCustomEndpoint
+        else -> false
+    }
 }
 
 @Singleton
@@ -59,6 +66,7 @@ class LookupPreferences @Inject constructor(@ApplicationContext context: Context
         val customEndpoint = stringPreferencesKey("custom_endpoint")
         val customHeader = stringPreferencesKey("custom_header")
         val customHeaderValue = stringPreferencesKey("custom_header_value")
+        val providerOrder = stringPreferencesKey("lookup_provider_order")
     }
 
     val settings: Flow<AppSettings> = store.data.map { p ->
@@ -74,6 +82,7 @@ class LookupPreferences @Inject constructor(@ApplicationContext context: Context
             customEndpoint = p[K.customEndpoint].orEmpty(),
             customHeaderName = p[K.customHeader].orEmpty(),
             customHeaderValue = p[K.customHeaderValue].orEmpty(),
+            lookupProviderOrder = p[K.providerOrder]?.split(",")?.map { it.trim() }?.filter { it.isNotEmpty() }.orEmpty(),
         )
     }
 
@@ -92,5 +101,8 @@ class LookupPreferences @Inject constructor(@ApplicationContext context: Context
     suspend fun updateAbstractKey(v: String) = store.edit { it[K.abstract] = v.trim() }
     suspend fun updateCustomEndpoint(endpoint: String, headerName: String, headerValue: String) = store.edit {
         it[K.customEndpoint] = endpoint.trim(); it[K.customHeader] = headerName.trim(); it[K.customHeaderValue] = headerValue.trim()
+    }
+    suspend fun updateProviderOrder(ids: List<String>) = store.edit {
+        it[K.providerOrder] = ids.joinToString(",")
     }
 }

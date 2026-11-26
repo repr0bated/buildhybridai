@@ -69,6 +69,7 @@ class ComposeSmsActivity : ComponentActivity() {
                 var address by remember { mutableStateOf(dest.orEmpty()) }
                 var composeTo by remember { mutableStateOf(dest.orEmpty()) }
                 var composeBody by remember { mutableStateOf(prefill.orEmpty()) }
+                com.example.callguardian.ui.lookup.ReverseLookupHost(vm) {
                 when (mode) {
                     "compose" -> ComposeMessageRoute(
                         initialTo = composeTo.ifBlank { null },
@@ -111,6 +112,7 @@ class ComposeSmsActivity : ComponentActivity() {
                             mode = "compose"
                         },
                     )
+                }
                 }
             }
         }

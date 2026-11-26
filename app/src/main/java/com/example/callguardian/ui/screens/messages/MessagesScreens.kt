@@ -79,6 +79,8 @@ import com.example.callguardian.ui.SetupActions
 import com.example.callguardian.ui.components.GuardianTopBar
 import com.example.callguardian.ui.components.SectionCard
 import com.example.callguardian.ui.theme.Brand
+import com.example.callguardian.lookup.ReverseLookup
+import com.example.callguardian.ui.lookup.LocalReverseLookup
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -286,7 +288,14 @@ private fun ConversationCard(
     val hidden = LocalPrivacy.current.address(c.address)
     var menu by remember { mutableStateOf(false) }
     PrivateGate(hidden = hidden) {
-        SectionCard(Modifier.fillMaxWidth().clickable(onClick = onOpen)) {
+        val lookup = LocalReverseLookup.current
+        val lookupTarget = ReverseLookup.lookupTarget(c.address, c.isGroup, c.recipients)
+        SectionCard(
+            Modifier.fillMaxWidth().combinedClickable(
+                onClick = onOpen,
+                onLongClick = { lookupTarget?.let(lookup) },
+            ),
+        ) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Column(Modifier.weight(1f)) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -324,6 +333,7 @@ private fun ConversationCard(
                             DropdownMenuItem(text = { Text(if (c.muted) "Unmute" else "Mute") }, onClick = { menu = false; onMute() })
                             DropdownMenuItem(text = { Text("Delete") }, onClick = { menu = false; onDelete() })
                             DropdownMenuItem(text = { Text("Block") }, onClick = { menu = false; onBlock() })
+                            if (lookupTarget != null) DropdownMenuItem(text = { Text("Reverse lookup") }, onClick = { menu = false; lookup(lookupTarget) })
                         }
                     }
                 }
@@ -558,6 +568,9 @@ fun MessageThreadScreen(
             navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = Brand.Ink) } },
             actions = {
                 if (canStop) TextButton(onClick = onSubscriptions) { Text("STOP / Manage", color = Brand.Lime) }
+                val lookup = LocalReverseLookup.current
+                val lookupTarget = ReverseLookup.lookupTarget(address, isGroup)
+                if (lookupTarget != null) TextButton(onClick = { lookup(lookupTarget) }) { Text("Lookup", color = Brand.Lime) }
                 TextButton(onClick = onBlock) { Text(if (blocked) "Unblock" else "Block", color = Brand.Amber) }
             },
         )

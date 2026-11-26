@@ -8,8 +8,9 @@ import androidx.room.RoomDatabase
         ScreeningEventEntity::class, PhoneProfileEntity::class, ReceiptEntity::class,
         QuarantinedSmsEntity::class, PrivacyMarkEntity::class, ScreeningEventFts::class,
         OwnedAccountEntity::class, SubscriptionEntity::class, SubscriptionStatusHistoryEntity::class,
+        LookupCacheEntity::class,
     ],
-    version = 7,
+    version = 8,
     exportSchema = true,
 )
 abstract class CallGuardianDatabase : RoomDatabase() {
@@ -21,6 +22,7 @@ abstract class CallGuardianDatabase : RoomDatabase() {
     abstract fun ownedAccounts(): OwnedAccountDao
     abstract fun subscriptions(): SubscriptionDao
     abstract fun subscriptionHistory(): SubscriptionHistoryDao
+    abstract fun lookupCache(): LookupCacheDao
 }
 
 /** v5: quarantine folder, optional sms_uri on events, privacy marks, and FTS4 over event bodies. */
@@ -139,5 +141,29 @@ object SubscriptionSchema {
 val MIGRATION_6_7 = object : androidx.room.migration.Migration(6, 7) {
     override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
         SubscriptionSchema.install(db)
+    }
+}
+
+val MIGRATION_7_8 = object : androidx.room.migration.Migration(7, 8) {
+    override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE phone_profiles ADD COLUMN watched INTEGER NOT NULL DEFAULT 0")
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS lookup_cache (
+                phone_number TEXT NOT NULL,
+                source TEXT NOT NULL,
+                display_name TEXT,
+                carrier TEXT,
+                line_type TEXT,
+                region TEXT,
+                valid INTEGER,
+                raw_json TEXT,
+                fetched_at INTEGER NOT NULL,
+                PRIMARY KEY(phone_number, source)
+            )
+            """.trimIndent(),
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS index_lookup_cache_phone_number ON lookup_cache (phone_number)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS index_lookup_cache_source ON lookup_cache (source)")
     }
 }

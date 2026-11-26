@@ -113,6 +113,7 @@ fun CallGuardianApp(vm: AppViewModel, actions: SetupActions, openEventId: Long?,
         ),
         com.example.callguardian.ui.components.LocalOwned provides com.example.callguardian.ui.components.OwnedLookup(owned),
     ) {
+    com.example.callguardian.ui.lookup.ReverseLookupHost(vm) {
     CallGuardianNav(vm, actions, openEventId, onEventOpened, nav, route, openAddress, onAddressOpened)
     val pending by vm.pendingCancelAsk.collectAsState()
     pending?.let { rec ->
@@ -135,6 +136,7 @@ fun CallGuardianApp(vm: AppViewModel, actions: SetupActions, openEventId: Long?,
             confirmButton = { androidx.compose.material3.TextButton(onClick = { vm.confirmCanceled(alsoOwned) }) { androidx.compose.material3.Text("Yes, I canceled") } },
             dismissButton = { androidx.compose.material3.TextButton(onClick = { vm.dismissCancelAsk() }) { androidx.compose.material3.Text("Not yet") } },
         )
+    }
     }
     }
 }

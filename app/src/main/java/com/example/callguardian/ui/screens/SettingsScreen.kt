@@ -16,6 +16,12 @@ import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.work.WorkManager
+import com.example.callguardian.lookup.BulkLookupWorker
+import com.example.callguardian.lookup.LookupCostEstimate
+import com.example.callguardian.lookup.LookupProvider
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -31,6 +37,7 @@ import com.example.callguardian.ui.AppViewModel
 import com.example.callguardian.ui.SetupActions
 import com.example.callguardian.ui.components.SectionCard
 import com.example.callguardian.ui.components.SectionTitle
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -160,6 +167,8 @@ private fun JevKeyCard(vm: AppViewModel) {
 @Composable
 private fun LookupCard(vm: AppViewModel) {
     val s by vm.settings.collectAsState()
+    val twilio by vm.twilioKeySaved.collectAsState()
+    val telnyx by vm.telnyxKeySaved.collectAsState()
     var num by remember(s.numLookupApiKey) { mutableStateOf(s.numLookupApiKey) }
     var abs by remember(s.abstractApiKey) { mutableStateOf(s.abstractApiKey) }
     var url by remember(s.customEndpoint) { mutableStateOf(s.customEndpoint) }
@@ -167,15 +176,144 @@ private fun LookupCard(vm: AppViewModel) {
     var hv by remember(s.customHeaderValue) { mutableStateOf(s.customHeaderValue) }
     SectionCard {
         SectionTitle("Caller lookup (optional)")
-        Text("Reverse lookup for unknown callers. Keys stay on this phone.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        KeyField(num, { num = it }, "NumLookupAPI key", "https://numlookup.com")
-        KeyField(abs, { abs = it }, "Abstract API key", "https://www.abstractapi.com/api/phone-validation-api")
+        Text(
+            "Reverse lookup for unknown callers. Providers run in the order below and their results are merged, each field labeled with its source. " +
+                "Twilio and Telnyx keys are stored encrypted on this phone (Android Keystore) and are never logged.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text("NumLookupAPI", style = MaterialTheme.typography.titleSmall)
+        KeyField(num, { num = it }, "NumLookupAPI key", LookupProvider.NUMLOOKUP.getKeyUrl)
+        LookupAllRow(vm, LookupProvider.NUMLOOKUP, enabled = s.hasNumLookupKey)
+        Text("Abstract API", style = MaterialTheme.typography.titleSmall)
+        KeyField(abs, { abs = it }, "Abstract API key", LookupProvider.ABSTRACT.getKeyUrl)
+        LookupAllRow(vm, LookupProvider.ABSTRACT, enabled = s.hasAbstractKey)
+        TwilioLookupKeys(vm, twilio)
+        LookupAllRow(vm, LookupProvider.TWILIO, enabled = twilio)
+        TelnyxLookupKeys(vm, telnyx)
+        LookupAllRow(vm, LookupProvider.TELNYX, enabled = telnyx)
         OutlinedTextField(url, { url = it }, label = { Text("Custom endpoint ({number} placeholder)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedTextField(hn, { hn = it }, label = { Text("Header") }, singleLine = true, modifier = Modifier.weight(1f))
             OutlinedTextField(hv, { hv = it }, label = { Text("Value") }, singleLine = true, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.weight(1f))
         }
-        Button(onClick = { vm.saveLookup(num, abs, url, hn, hv) }) { Text("Save") }
+        Button(onClick = { vm.saveLookup(num, abs, url, hn, hv) }) { Text("Save NumLookup, Abstract, and custom") }
+        Spacer(Modifier.height(8.dp))
+        ProviderOrderEditor(vm, s.lookupProviderOrder)
+    }
+}
+
+@Composable
+private fun TwilioLookupKeys(vm: AppViewModel, saved: Boolean) {
+    var sid by remember { mutableStateOf("") }
+    var token by remember { mutableStateOf("") }
+    Text("Twilio Lookup v2", style = MaterialTheme.typography.titleSmall)
+    Text(
+        "Account SID and Auth Token. The app requests caller_name and line_type_intelligence.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    if (saved) Text("A SID and Auth Token are saved on this phone.", style = MaterialTheme.typography.bodySmall, color = com.example.callguardian.ui.theme.Brand.Lime)
+    KeyField(sid, { sid = it }, "Twilio Account SID", LookupProvider.TWILIO.getKeyUrl)
+    OutlinedTextField(token, { token = it }, label = { Text("Twilio Auth Token") }, singleLine = true, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Button(onClick = { vm.saveTwilio(sid, token); sid = ""; token = "" }, enabled = sid.isNotBlank() && token.isNotBlank()) { Text("Save Twilio") }
+        if (saved) TextButton(onClick = { vm.clearTwilio(); sid = ""; token = "" }) { Text("Remove Twilio") }
+    }
+}
+
+@Composable
+private fun TelnyxLookupKeys(vm: AppViewModel, saved: Boolean) {
+    var key by remember { mutableStateOf("") }
+    Text("Telnyx Number Lookup", style = MaterialTheme.typography.titleSmall)
+    Text(
+        "API key. The app requests carrier and caller-name.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    if (saved) Text("A key is saved on this phone.", style = MaterialTheme.typography.bodySmall, color = com.example.callguardian.ui.theme.Brand.Lime)
+    KeyField(key, { key = it }, "Telnyx API key", LookupProvider.TELNYX.getKeyUrl)
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Button(onClick = { vm.saveTelnyx(key); key = "" }, enabled = key.isNotBlank()) { Text("Save Telnyx") }
+        if (saved) TextButton(onClick = { vm.clearTelnyx(); key = "" }) { Text("Remove Telnyx") }
+    }
+}
+
+@Composable
+private fun LookupAllRow(vm: AppViewModel, provider: LookupProvider, enabled: Boolean) {
+    val context = LocalContext.current
+    val work by remember(provider.id, context) {
+        WorkManager.getInstance(context).getWorkInfosForUniqueWorkFlow(BulkLookupWorker.uniqueName(provider.id))
+    }.collectAsState(initial = emptyList())
+    val running = work.any { !it.state.isFinished }
+    val progress = work.firstOrNull { !it.state.isFinished }?.progress
+    var pending by remember { mutableStateOf<LookupCostEstimate?>(null) }
+    var loading by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (running) {
+            val done = progress?.getInt(BulkLookupWorker.KEY_DONE, 0) ?: 0
+            val total = progress?.getInt(BulkLookupWorker.KEY_TOTAL, 0) ?: 0
+            Text("Looking up $done of $total…", style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+            TextButton(onClick = { vm.cancelBulkLookup(context, provider.id) }) { Text("Cancel") }
+        } else {
+            TextButton(
+                onClick = {
+                    loading = true
+                    scope.launch {
+                        pending = runCatching { vm.previewBulkLookup(provider.id) }.getOrNull()
+                        loading = false
+                    }
+                },
+                enabled = enabled && !loading,
+            ) { Text(if (loading) "Counting…" else "Look up all") }
+        }
+    }
+    pending?.let { est ->
+        AlertDialog(
+            onDismissRequest = { pending = null },
+            title = { Text("Look up all with ${est.providerLabel}?") },
+            text = { Text(est.confirmMessage()) },
+            confirmButton = {
+                TextButton(onClick = {
+                    if (est.toQueryCount > 0) vm.startBulkLookup(context, provider.id)
+                    pending = null
+                }) { Text(if (est.toQueryCount == 0) "OK" else "Start lookup") }
+            },
+            dismissButton = { if (est.toQueryCount > 0) TextButton(onClick = { pending = null }) { Text("Cancel") } },
+        )
+    }
+}
+
+@Composable
+private fun ProviderOrderEditor(vm: AppViewModel, stored: List<String>) {
+    val order = remember(stored) { LookupProvider.ordered(stored).toMutableStateList() }
+    Text("Provider order", style = MaterialTheme.typography.titleSmall)
+    Text(
+        "Enabled providers run in this order. The lookup sheet merges fields and labels each one with its source.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    order.forEachIndexed { i, p ->
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("${i + 1}. ${p.displayName}", modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+            IconButton(onClick = {
+                if (i > 0) {
+                    val prev = order[i - 1]
+                    order[i - 1] = p
+                    order[i] = prev
+                    vm.updateProviderOrder(order.map { it.id })
+                }
+            }, enabled = i > 0) { Icon(Icons.Default.KeyboardArrowUp, "Move ${p.displayName} up") }
+            IconButton(onClick = {
+                if (i < order.lastIndex) {
+                    val next = order[i + 1]
+                    order[i + 1] = p
+                    order[i] = next
+                    vm.updateProviderOrder(order.map { it.id })
+                }
+            }, enabled = i < order.lastIndex) { Icon(Icons.Default.KeyboardArrowDown, "Move ${p.displayName} down") }
+        }
     }
 }
 
@@ -192,7 +330,14 @@ fun ListsScreen(vm: AppViewModel, onBack: () -> Unit) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
                             Text(p.displayName ?: p.phoneNumber, style = MaterialTheme.typography.titleSmall)
-                            Text(if (p.trusted) "Allowed" else "Blocked: ${p.mode.name.lowercase()}", style = MaterialTheme.typography.bodySmall)
+                            Text(
+                                buildList {
+                                    if (p.trusted) add("Allowed")
+                                    if (p.mode != com.example.callguardian.model.BlockMode.NONE) add("Blocked: ${p.mode.name.lowercase()}")
+                                    if (p.watched) add("Watched")
+                                }.joinToString(" · ").ifBlank { "Listed" },
+                                style = MaterialTheme.typography.bodySmall,
+                            )
                         }
                         TextButton(onClick = { vm.unlist(p.phoneNumber) }) { Text("Remove") }
                     }

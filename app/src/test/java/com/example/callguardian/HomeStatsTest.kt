@@ -30,6 +30,7 @@ class HomeStatsTest {
 
     @Test fun unprocessedIncludesPendingFailedAndNotRun() {
         assertTrue(HomeStats.isUnprocessed(ev(1, ai = AiStatus.PENDING)))
+        assertTrue(HomeStats.isUnprocessed(ev(11, ai = AiStatus.UNPROCESSED)))
         assertTrue(HomeStats.isUnprocessed(ev(2, ai = AiStatus.FAILED)))
         assertTrue(HomeStats.isUnprocessed(ev(3, ai = AiStatus.NOT_RUN)))
         assertFalse(HomeStats.isUnprocessed(ev(4, ai = AiStatus.DONE)))

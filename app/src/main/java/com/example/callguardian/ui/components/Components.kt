@@ -205,7 +205,8 @@ fun EventRow(e: ScreeningEventEntity, onClick: () -> Unit) {
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                 RiskPill(risk)
                 when (e.aiStatus) {
-                    AiStatus.PENDING, AiStatus.RUNNING -> Pill("Analyzing", Brand.Device)
+                    AiStatus.RUNNING -> Pill("Analyzing", Brand.Device)
+                    AiStatus.PENDING, AiStatus.UNPROCESSED -> Pill("Waiting", Brand.Device)
                     else -> SourcePill(source)
                 }
                 if (category != ScamCategory.NONE) Text(category.label(), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)

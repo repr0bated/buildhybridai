@@ -58,15 +58,31 @@ class CustomEndpointLookupSource @Inject constructor(
             val region = payload[KNOWN_KEYS.region] as? String
                 ?: payload["country"] as? String
             val spamScore = (payload[KNOWN_KEYS.spamScore] as? Number)?.toInt()
+            val lineType = payload["line_type"] as? String
+                ?: payload["lineType"] as? String
+                ?: payload["type"] as? String
+            val valid = when (val v = payload["valid"]) {
+                is Boolean -> v
+                is Number -> v.toInt() != 0
+                is String -> when (v.trim().lowercase()) {
+                    "true", "1", "yes", "valid" -> true
+                    "false", "0", "no", "invalid" -> false
+                    else -> null
+                }
+                else -> null
+            }
 
             return LookupResult(
                 phoneNumber = phoneNumber,
                 displayName = name,
                 carrier = carrier,
                 region = region,
+                lineType = lineType,
                 spamScore = spamScore,
                 source = displayName,
-                rawPayload = payload
+                rawPayload = payload,
+                valid = valid,
+                sourceId = id,
             )
         }
     }

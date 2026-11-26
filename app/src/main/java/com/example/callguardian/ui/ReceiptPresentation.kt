@@ -153,4 +153,16 @@ object ReceiptPresentation {
     }
 
     private fun firstNonBlank(vararg values: String?): String? = values.firstOrNull { !it.isNullOrBlank() }
+
+    fun lookupNumber(event: ScreeningEventEntity?, input: JsonObject?, output: JsonObject?): String? {
+        val n = firstNonBlank(
+            event?.number,
+            str(input, "number"), str(output, "number"),
+            str(input, "sender"), str(output, "sender"),
+            str(input, "address"), str(output, "address"),
+            firstListItem(input, "recipients"), firstListItem(output, "recipients"),
+            str(input, "recipient"), str(output, "recipient"),
+        )
+        return n?.takeIf { it.any(Char::isDigit) }
+    }
 }

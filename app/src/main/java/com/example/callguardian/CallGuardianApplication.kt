@@ -30,6 +30,7 @@ class CallGuardianApplication : Application(), Configuration.Provider {
     @Inject lateinit var screening: ScreeningEngine
     @Inject lateinit var integrations: IntegrationPrefs
     @Inject lateinit var conversationNotifier: ConversationNotifier
+    @Inject lateinit var unprocessedDrain: com.example.callguardian.screening.UnprocessedDrain
 
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -39,6 +40,7 @@ class CallGuardianApplication : Application(), Configuration.Provider {
         if (BuildConfig.DEBUG) Timber.plant(Timber.DebugTree())
         FirebaseBootstrap.init(this)
         notifier.ensureChannels()
+        unprocessedDrain.attach()
         runCatching { assets.open("schemas/official_domains.json").bufferedReader().use { OfficialDomains.load(it.readText()) } }
         gateway.startEngineMaintenance()
         app.clearsms.HostIncoming.mmsListener = app.clearsms.IncomingMmsListener { sender, body, _, recipients ->

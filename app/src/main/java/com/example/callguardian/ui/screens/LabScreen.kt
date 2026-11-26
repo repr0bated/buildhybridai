@@ -1,5 +1,7 @@
 package com.example.callguardian.ui.screens
 
+import com.example.callguardian.ui.lookup.LocalReverseLookup
+
 import com.example.callguardian.ui.components.GuardianTopBar
 import android.Manifest
 import android.content.Intent
@@ -261,8 +263,11 @@ private fun CallRow(c: CallLogItem, onClick: () -> Unit) {
     val hidden = com.example.callguardian.privacy.LocalPrivacy.current.call(c.id, c.number)
     com.example.callguardian.privacy.PrivateGate(hidden = hidden) {
     SectionCard(Modifier.clickable(onClick = onClick)) {
-        Row {
+        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
             Text(c.cachedName ?: c.number ?: "Hidden number", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+            val lookup = LocalReverseLookup.current
+            val num = c.number
+            if (!num.isNullOrBlank()) TextButton(onClick = { lookup(num) }) { Text("Lookup") }
             Text(time(c.date), style = MaterialTheme.typography.labelSmall)
         }
         Text(listOfNotNull(c.number?.takeIf { c.cachedName != null }, c.type.name.lowercase().replaceFirstChar { it.uppercase() },

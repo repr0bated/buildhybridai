@@ -60,7 +60,9 @@ class AbstractApiSource @Inject constructor(
                     "carrier" to payload.carrier,
                     "risk" to payload.risk,
                     "location" to payload.location
-                )
+                ),
+                valid = payload.valid,
+                sourceId = id,
             )
         }
     }

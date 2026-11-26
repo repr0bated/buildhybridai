@@ -1,0 +1,1021 @@
+{
+  "formatVersion": 1,
+  "database": {
+    "version": 8,
+    "identityHash": "576cdaa6b2141094f5563b0fef856c38",
+    "entities": [
+      {
+        "tableName": "screening_events",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `channel` TEXT NOT NULL, `number` TEXT, `display_name` TEXT, `body` TEXT, `received_at` INTEGER NOT NULL, `is_contact` INTEGER NOT NULL, `is_test` INTEGER NOT NULL, `lookup_summary` TEXT, `rules_score` INTEGER NOT NULL, `rules_risk` TEXT NOT NULL, `rules_flags` TEXT NOT NULL, `rules_micros` INTEGER NOT NULL, `ai_status` TEXT NOT NULL, `ai_source` TEXT, `ai_model` TEXT, `ai_raw` TEXT, `ai_latency_ms` INTEGER, `ai_error` TEXT, `schema_valid` INTEGER, `schema_errors` TEXT, `risk` TEXT NOT NULL, `category` TEXT NOT NULL, `confidence` INTEGER NOT NULL, `reasons` TEXT NOT NULL, `advice` TEXT, `decided_by` TEXT NOT NULL, `proposed_action` TEXT NOT NULL, `final_action` TEXT NOT NULL, `auto_applied` INTEGER NOT NULL, `gate_notes` TEXT NOT NULL, `deep_status` TEXT NOT NULL, `deep_raw` TEXT, `deep_redacted_input` TEXT, `deep_latency_ms` INTEGER, `deep_error` TEXT, `deep_schema_valid` INTEGER, `user_action` TEXT, `policy_dispatch` TEXT NOT NULL, `quarantined` INTEGER NOT NULL, `source` TEXT NOT NULL DEFAULT 'sms', `integration` TEXT, `sms_uri` TEXT)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "channel",
+            "columnName": "channel",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "number",
+            "columnName": "number",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "displayName",
+            "columnName": "display_name",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "body",
+            "columnName": "body",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "receivedAt",
+            "columnName": "received_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isContact",
+            "columnName": "is_contact",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isTest",
+            "columnName": "is_test",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lookupSummary",
+            "columnName": "lookup_summary",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "rulesScore",
+            "columnName": "rules_score",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "rulesRisk",
+            "columnName": "rules_risk",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "rulesFlags",
+            "columnName": "rules_flags",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "rulesMicros",
+            "columnName": "rules_micros",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "aiStatus",
+            "columnName": "ai_status",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "aiSource",
+            "columnName": "ai_source",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "aiModel",
+            "columnName": "ai_model",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "aiRaw",
+            "columnName": "ai_raw",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "aiLatencyMs",
+            "columnName": "ai_latency_ms",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "aiError",
+            "columnName": "ai_error",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "schemaValid",
+            "columnName": "schema_valid",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "schemaErrors",
+            "columnName": "schema_errors",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "risk",
+            "columnName": "risk",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "category",
+            "columnName": "category",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "confidence",
+            "columnName": "confidence",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "reasons",
+            "columnName": "reasons",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "advice",
+            "columnName": "advice",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "decidedBy",
+            "columnName": "decided_by",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "proposedAction",
+            "columnName": "proposed_action",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "finalAction",
+            "columnName": "final_action",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "autoApplied",
+            "columnName": "auto_applied",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "gateNotes",
+            "columnName": "gate_notes",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "deepStatus",
+            "columnName": "deep_status",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "deepRaw",
+            "columnName": "deep_raw",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "deepRedactedInput",
+            "columnName": "deep_redacted_input",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "deepLatencyMs",
+            "columnName": "deep_latency_ms",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "deepError",
+            "columnName": "deep_error",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "deepSchemaValid",
+            "columnName": "deep_schema_valid",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "userAction",
+            "columnName": "user_action",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "policyDispatch",
+            "columnName": "policy_dispatch",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "quarantined",
+            "columnName": "quarantined",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "source",
+            "columnName": "source",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "'sms'"
+          },
+          {
+            "fieldPath": "integration",
+            "columnName": "integration",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "smsUri",
+            "columnName": "sms_uri",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_screening_events_number",
+            "unique": false,
+            "columnNames": [
+              "number"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_screening_events_number` ON `${TABLE_NAME}` (`number`)"
+          },
+          {
+            "name": "index_screening_events_received_at",
+            "unique": false,
+            "columnNames": [
+              "received_at"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_screening_events_received_at` ON `${TABLE_NAME}` (`received_at`)"
+          }
+        ]
+      },
+      {
+        "tableName": "phone_profiles",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`phone_number` TEXT NOT NULL, `display_name` TEXT, `carrier` TEXT, `region` TEXT, `line_type` TEXT, `spam_score` INTEGER, `tags` TEXT NOT NULL, `block_mode` TEXT NOT NULL, `trusted` INTEGER NOT NULL, `watched` INTEGER NOT NULL, `updated_at` INTEGER NOT NULL, PRIMARY KEY(`phone_number`))",
+        "fields": [
+          {
+            "fieldPath": "phoneNumber",
+            "columnName": "phone_number",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "displayName",
+            "columnName": "display_name",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "carrier",
+            "columnName": "carrier",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "region",
+            "columnName": "region",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "lineType",
+            "columnName": "line_type",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "spamScore",
+            "columnName": "spam_score",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "tags",
+            "columnName": "tags",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "blockMode",
+            "columnName": "block_mode",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "trusted",
+            "columnName": "trusted",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "watched",
+            "columnName": "watched",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updated_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "phone_number"
+          ]
+        }
+      },
+      {
+        "tableName": "method_receipts",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `event_id` INTEGER, `method_id` TEXT NOT NULL, `registry_version` TEXT NOT NULL, `input_schema` TEXT NOT NULL, `output_schema` TEXT NOT NULL, `input_json` TEXT NOT NULL, `output_json` TEXT, `executed_on` TEXT NOT NULL, `proposed_by` TEXT NOT NULL, `dispatch` TEXT NOT NULL, `status` TEXT NOT NULL, `notes` TEXT NOT NULL, `created_at` INTEGER NOT NULL, `duration_ms` INTEGER NOT NULL)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "eventId",
+            "columnName": "event_id",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "methodId",
+            "columnName": "method_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "registryVersion",
+            "columnName": "registry_version",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "inputSchema",
+            "columnName": "input_schema",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "outputSchema",
+            "columnName": "output_schema",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "inputJson",
+            "columnName": "input_json",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "outputJson",
+            "columnName": "output_json",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "executedOn",
+            "columnName": "executed_on",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "proposedBy",
+            "columnName": "proposed_by",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "dispatch",
+            "columnName": "dispatch",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "status",
+            "columnName": "status",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "notes",
+            "columnName": "notes",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "created_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "durationMs",
+            "columnName": "duration_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_method_receipts_event_id",
+            "unique": false,
+            "columnNames": [
+              "event_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_method_receipts_event_id` ON `${TABLE_NAME}` (`event_id`)"
+          },
+          {
+            "name": "index_method_receipts_created_at",
+            "unique": false,
+            "columnNames": [
+              "created_at"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_method_receipts_created_at` ON `${TABLE_NAME}` (`created_at`)"
+          }
+        ]
+      },
+      {
+        "tableName": "quarantined_sms",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `address` TEXT NOT NULL, `body` TEXT NOT NULL, `date` INTEGER NOT NULL, `date_sent` INTEGER NOT NULL, `event_id` INTEGER, `hidden_at` INTEGER NOT NULL, `telephony_uri` TEXT)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "address",
+            "columnName": "address",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "body",
+            "columnName": "body",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "date",
+            "columnName": "date",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "dateSent",
+            "columnName": "date_sent",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "eventId",
+            "columnName": "event_id",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "hiddenAt",
+            "columnName": "hidden_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "telephonyUri",
+            "columnName": "telephony_uri",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        }
+      },
+      {
+        "tableName": "privacy_marks",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`key` TEXT NOT NULL, `kind` TEXT NOT NULL, `address` TEXT, `event_id` INTEGER, `created_at` INTEGER NOT NULL, PRIMARY KEY(`key`))",
+        "fields": [
+          {
+            "fieldPath": "key",
+            "columnName": "key",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "kind",
+            "columnName": "kind",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "address",
+            "columnName": "address",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "eventId",
+            "columnName": "event_id",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "created_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "key"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_privacy_marks_kind",
+            "unique": false,
+            "columnNames": [
+              "kind"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_privacy_marks_kind` ON `${TABLE_NAME}` (`kind`)"
+          },
+          {
+            "name": "index_privacy_marks_address",
+            "unique": false,
+            "columnNames": [
+              "address"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_privacy_marks_address` ON `${TABLE_NAME}` (`address`)"
+          }
+        ]
+      },
+      {
+        "tableName": "screening_events_fts",
+        "createSql": "CREATE VIRTUAL TABLE IF NOT EXISTS `${TABLE_NAME}` USING FTS4(`body` TEXT, `number` TEXT, `display_name` TEXT, `category` TEXT NOT NULL, `risk` TEXT NOT NULL, `source` TEXT NOT NULL, `reasons` TEXT NOT NULL, `advice` TEXT, `lookup_summary` TEXT, content=`screening_events`)",
+        "fields": [
+          {
+            "fieldPath": "body",
+            "columnName": "body",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "number",
+            "columnName": "number",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "displayName",
+            "columnName": "display_name",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "category",
+            "columnName": "category",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "risk",
+            "columnName": "risk",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "source",
+            "columnName": "source",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "reasons",
+            "columnName": "reasons",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "advice",
+            "columnName": "advice",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "lookupSummary",
+            "columnName": "lookup_summary",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": []
+        },
+        "ftsVersion": "FTS4",
+        "ftsOptions": {
+          "tokenizer": "simple",
+          "tokenizerArgs": [],
+          "contentTable": "screening_events",
+          "languageIdColumnName": "",
+          "matchInfo": "FTS4",
+          "notIndexedColumns": [],
+          "prefixSizes": [],
+          "preferredOrder": "ASC"
+        },
+        "contentSyncTriggers": [
+          "CREATE TRIGGER IF NOT EXISTS room_fts_content_sync_screening_events_fts_BEFORE_UPDATE BEFORE UPDATE ON `screening_events` BEGIN DELETE FROM `screening_events_fts` WHERE `docid`=OLD.`rowid`; END",
+          "CREATE TRIGGER IF NOT EXISTS room_fts_content_sync_screening_events_fts_BEFORE_DELETE BEFORE DELETE ON `screening_events` BEGIN DELETE FROM `screening_events_fts` WHERE `docid`=OLD.`rowid`; END",
+          "CREATE TRIGGER IF NOT EXISTS room_fts_content_sync_screening_events_fts_AFTER_UPDATE AFTER UPDATE ON `screening_events` BEGIN INSERT INTO `screening_events_fts`(`docid`, `body`, `number`, `display_name`, `category`, `risk`, `source`, `reasons`, `advice`, `lookup_summary`) VALUES (NEW.`rowid`, NEW.`body`, NEW.`number`, NEW.`display_name`, NEW.`category`, NEW.`risk`, NEW.`source`, NEW.`reasons`, NEW.`advice`, NEW.`lookup_summary`); END",
+          "CREATE TRIGGER IF NOT EXISTS room_fts_content_sync_screening_events_fts_AFTER_INSERT AFTER INSERT ON `screening_events` BEGIN INSERT INTO `screening_events_fts`(`docid`, `body`, `number`, `display_name`, `category`, `risk`, `source`, `reasons`, `advice`, `lookup_summary`) VALUES (NEW.`rowid`, NEW.`body`, NEW.`number`, NEW.`display_name`, NEW.`category`, NEW.`risk`, NEW.`source`, NEW.`reasons`, NEW.`advice`, NEW.`lookup_summary`); END"
+        ]
+      },
+      {
+        "tableName": "owned_accounts",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `service` TEXT NOT NULL, `senders` TEXT NOT NULL, `domains` TEXT NOT NULL, `created_at` INTEGER NOT NULL, `updated_at` INTEGER NOT NULL)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "service",
+            "columnName": "service",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "senders",
+            "columnName": "senders",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "domains",
+            "columnName": "domains",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "created_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updated_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_owned_accounts_service",
+            "unique": false,
+            "columnNames": [
+              "service"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_owned_accounts_service` ON `${TABLE_NAME}` (`service`)"
+          }
+        ]
+      },
+      {
+        "tableName": "subscriptions",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `sender` TEXT NOT NULL, `service` TEXT NOT NULL, `source` TEXT NOT NULL, `keyword` TEXT, `link_url` TEXT, `link_domain` TEXT, `link_kind` TEXT, `status` TEXT NOT NULL, `created_at` INTEGER NOT NULL, `updated_at` INTEGER NOT NULL, `stop_sent_at` INTEGER, `unsubscribed_at` INTEGER, `canceled_at` INTEGER, `stop_receipt_id` INTEGER, `unsubscribed_event_id` INTEGER, `unsubscribed_receipt_id` INTEGER, `canceled_receipt_id` INTEGER, `pending_cancel_ask` INTEGER NOT NULL, `muted` INTEGER NOT NULL)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sender",
+            "columnName": "sender",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "service",
+            "columnName": "service",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "source",
+            "columnName": "source",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "keyword",
+            "columnName": "keyword",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "linkUrl",
+            "columnName": "link_url",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "linkDomain",
+            "columnName": "link_domain",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "linkKind",
+            "columnName": "link_kind",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "status",
+            "columnName": "status",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "created_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updated_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "stopSentAt",
+            "columnName": "stop_sent_at",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "unsubscribedAt",
+            "columnName": "unsubscribed_at",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "canceledAt",
+            "columnName": "canceled_at",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "stopReceiptId",
+            "columnName": "stop_receipt_id",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "unsubscribedEventId",
+            "columnName": "unsubscribed_event_id",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "unsubscribedReceiptId",
+            "columnName": "unsubscribed_receipt_id",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "canceledReceiptId",
+            "columnName": "canceled_receipt_id",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "pendingCancelAsk",
+            "columnName": "pending_cancel_ask",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "muted",
+            "columnName": "muted",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_subscriptions_sender",
+            "unique": false,
+            "columnNames": [
+              "sender"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_subscriptions_sender` ON `${TABLE_NAME}` (`sender`)"
+          },
+          {
+            "name": "index_subscriptions_status",
+            "unique": false,
+            "columnNames": [
+              "status"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_subscriptions_status` ON `${TABLE_NAME}` (`status`)"
+          }
+        ]
+      },
+      {
+        "tableName": "subscription_status_history",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `subscription_id` INTEGER NOT NULL, `from_status` TEXT NOT NULL, `to_status` TEXT NOT NULL, `at` INTEGER NOT NULL, `reason` TEXT NOT NULL, `receipt_id` INTEGER, `event_id` INTEGER)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "subscriptionId",
+            "columnName": "subscription_id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "fromStatus",
+            "columnName": "from_status",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "toStatus",
+            "columnName": "to_status",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "at",
+            "columnName": "at",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "reason",
+            "columnName": "reason",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "receiptId",
+            "columnName": "receipt_id",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "eventId",
+            "columnName": "event_id",
+            "affinity": "INTEGER"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_subscription_status_history_subscription_id",
+            "unique": false,
+            "columnNames": [
+              "subscription_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_subscription_status_history_subscription_id` ON `${TABLE_NAME}` (`subscription_id`)"
+          }
+        ]
+      },
+      {
+        "tableName": "lookup_cache",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`phone_number` TEXT NOT NULL, `source` TEXT NOT NULL, `display_name` TEXT, `carrier` TEXT, `line_type` TEXT, `region` TEXT, `valid` INTEGER, `raw_json` TEXT, `fetched_at` INTEGER NOT NULL, PRIMARY KEY(`phone_number`, `source`))",
+        "fields": [
+          {
+            "fieldPath": "phoneNumber",
+            "columnName": "phone_number",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "source",
+            "columnName": "source",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "displayName",
+            "columnName": "display_name",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "carrier",
+            "columnName": "carrier",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "lineType",
+            "columnName": "line_type",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "region",
+            "columnName": "region",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "valid",
+            "columnName": "valid",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "rawJson",
+            "columnName": "raw_json",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "fetchedAt",
+            "columnName": "fetched_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "phone_number",
+            "source"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_lookup_cache_phone_number",
+            "unique": false,
+            "columnNames": [
+              "phone_number"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_lookup_cache_phone_number` ON `${TABLE_NAME}` (`phone_number`)"
+          },
+          {
+            "name": "index_lookup_cache_source",
+            "unique": false,
+            "columnNames": [
+              "source"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_lookup_cache_source` ON `${TABLE_NAME}` (`source`)"
+          }
+        ]
+      }
+    ],
+    "setupQueries": [
+      "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '576cdaa6b2141094f5563b0fef856c38')"
+    ]
+  }
+}

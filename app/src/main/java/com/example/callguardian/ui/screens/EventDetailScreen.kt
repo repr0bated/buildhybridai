@@ -133,7 +133,7 @@ private fun Verdict(e: ScreeningEventEntity) {
             androidx.compose.foundation.layout.Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                     RiskPill(risk)
-                    if (e.aiStatus == AiStatus.PENDING || e.aiStatus == AiStatus.RUNNING) Pill("Analyzing", Brand.Device)
+                    if (e.aiStatus == AiStatus.RUNNING) Pill("Analyzing", Brand.Device) else if (e.aiStatus == AiStatus.PENDING || e.aiStatus == AiStatus.UNPROCESSED) Pill("Waiting", Brand.Device)
                 }
                 Text(when {
                     risk >= RiskLevel.HIGH -> "Likely scam" + if (cat != ScamCategory.NONE) ": ${cat.label()}" else ""
@@ -174,14 +174,16 @@ private fun Pipeline(vm: AppViewModel, e: ScreeningEventEntity, receipts: List<R
         val cloud = e.aiSource == "IN_CLOUD"
         val aiLine = when (e.aiStatus) {
             AiStatus.DONE, AiStatus.REJECTED -> "${if (cloud) "Cloud fallback" else "On-device"} · ${e.aiModel?.let { prettyModel(it) } ?: "model"} · ${e.aiLatencyMs ?: 0} ms"
-            AiStatus.PENDING -> "Queued: runs when the app is open"
+            AiStatus.PENDING, AiStatus.UNPROCESSED -> com.example.callguardian.screening.NanoPolicy.WAITING_FOR_APP
             AiStatus.RUNNING -> "Running on this phone…"
             AiStatus.FAILED -> "Failed"
             else -> "Not needed"
         }
+        val quietWait = e.aiError == com.example.callguardian.screening.NanoPolicy.WAITING_FOR_APP ||
+            e.aiStatus == AiStatus.UNPROCESSED || e.aiStatus == AiStatus.PENDING
         Step(2, if (cloud && e.aiStatus == AiStatus.DONE) "Cloud fallback" else "On-device model",
-            if (cloud) Brand.Cloud else Brand.Device, aiLine, e.aiError)
-        if (e.aiStatus in listOf(AiStatus.PENDING, AiStatus.FAILED, AiStatus.NOT_RUN))
+            if (cloud) Brand.Cloud else Brand.Device, aiLine, e.aiError.takeUnless { quietWait && it == com.example.callguardian.screening.NanoPolicy.WAITING_FOR_APP })
+        if (e.aiStatus in listOf(AiStatus.PENDING, AiStatus.UNPROCESSED, AiStatus.FAILED, AiStatus.NOT_RUN))
             FilledTonalButton(onClick = { vm.analyze(e.id) }) { Icon(Icons.Default.Memory, null); Spacer(Modifier.width(6.dp)); Text("Analyze on device") }
         e.schemaValid?.let { ok ->
             Step(3, "Schema check", if (ok) Brand.Teal else MaterialTheme.colorScheme.error,

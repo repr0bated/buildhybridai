@@ -74,4 +74,7 @@ object ContactDirectory {
         }.onFailure { Timber.w(it, "Contact search failed") }
         return out.values.toList()
     }
+
+    /** Every phone number on the device address book, deduped by thread key. */
+    fun allPhones(context: Context): List<ContactHit> = search(context, query = "", limit = 50_000)
 }

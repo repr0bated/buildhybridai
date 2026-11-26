@@ -14,7 +14,8 @@ import java.util.TimeZone
 object HomeStats {
     fun isUnprocessed(e: ScreeningEventEntity): Boolean =
         e.aiStatus == AiStatus.NOT_RUN || e.aiStatus == AiStatus.PENDING ||
-            e.aiStatus == AiStatus.FAILED || e.aiStatus == AiStatus.RUNNING
+            e.aiStatus == AiStatus.UNPROCESSED || e.aiStatus == AiStatus.FAILED ||
+            e.aiStatus == AiStatus.RUNNING
 
     fun risk(e: ScreeningEventEntity): RiskLevel =
         runCatching { RiskLevel.valueOf(e.risk) }.getOrDefault(RiskLevel.SAFE)

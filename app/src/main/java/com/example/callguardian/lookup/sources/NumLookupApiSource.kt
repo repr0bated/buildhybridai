@@ -68,7 +68,9 @@ class NumLookupApiSource @Inject constructor(
                     "carrier" to payload.carrier,
                     "country" to payload.countryCode,
                     "line_type" to payload.lineType
-                )
+                ),
+                valid = payload.valid,
+                sourceId = id,
             )
         }
     }

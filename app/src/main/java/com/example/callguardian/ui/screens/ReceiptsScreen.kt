@@ -1,5 +1,7 @@
 package com.example.callguardian.ui.screens
 
+import com.example.callguardian.ui.lookup.LocalReverseLookup
+
 import com.example.callguardian.ui.components.GuardianTopBar
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -98,6 +100,11 @@ fun ReceiptRow(registry: MethodRegistry, r: ReceiptEntity, event: ScreeningEvent
                     ReceiptBadge(view.outcome, view.outcomeTone)
                     ReceiptBadge(view.status, view.statusTone)
                 }
+                val lookup = LocalReverseLookup.current
+                val number = remember(r.id, event?.id, r.inputJson, r.outputJson) {
+                    ReceiptPresentation.lookupNumber(event, parseObj(r.inputJson), parseObj(r.outputJson))
+                }
+                if (number != null) TextButton(onClick = { lookup(number) }) { Text("Lookup") }
                 Text(relativeTime(r.createdAt), style = MaterialTheme.typography.labelSmall, color = Brand.InkDim)
             }
         }

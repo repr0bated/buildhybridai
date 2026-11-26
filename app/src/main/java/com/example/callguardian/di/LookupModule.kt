@@ -4,6 +4,8 @@ import com.example.callguardian.lookup.ReverseLookupSource
 import com.example.callguardian.lookup.sources.AbstractApiSource
 import com.example.callguardian.lookup.sources.CustomEndpointLookupSource
 import com.example.callguardian.lookup.sources.NumLookupApiSource
+import com.example.callguardian.lookup.sources.TelnyxLookupSource
+import com.example.callguardian.lookup.sources.TwilioLookupSource
 import dagger.Binds
 import dagger.Module
 import dagger.hilt.InstallIn
@@ -25,4 +27,12 @@ abstract class LookupModule {
     @Binds
     @IntoSet
     abstract fun bindAbstractApiSource(source: AbstractApiSource): ReverseLookupSource
+
+    @Binds
+    @IntoSet
+    abstract fun bindTwilioSource(source: TwilioLookupSource): ReverseLookupSource
+
+    @Binds
+    @IntoSet
+    abstract fun bindTelnyxSource(source: TelnyxLookupSource): ReverseLookupSource
 }

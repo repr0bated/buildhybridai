@@ -18,7 +18,7 @@ abstract class ScreeningEventDao {
     @Query("SELECT * FROM screening_events ORDER BY received_at DESC LIMIT :limit") abstract fun observeRecent(limit: Int = 200): Flow<List<ScreeningEventEntity>>
     @Query("SELECT COUNT(*) FROM screening_events WHERE channel = 'CALL' AND number = :number AND received_at > :since")
     abstract suspend fun countCallsSince(number: String, since: Long): Int
-    @Query("SELECT * FROM screening_events WHERE ai_status = 'PENDING' ORDER BY received_at DESC LIMIT 10")
+    @Query("SELECT * FROM screening_events WHERE ai_status IN ('PENDING', 'UNPROCESSED') ORDER BY received_at ASC LIMIT 100")
     abstract suspend fun pendingAi(): List<ScreeningEventEntity>
     @Query("SELECT * FROM screening_events WHERE source IN (:sources) AND channel = 'SMS' ORDER BY received_at DESC LIMIT :limit")
     abstract suspend fun bySource(sources: List<String>, limit: Int): List<ScreeningEventEntity>
@@ -51,7 +51,7 @@ abstract class ScreeningEventDao {
 interface PhoneProfileDao {
     @Query("SELECT * FROM phone_profiles WHERE phone_number = :n") suspend fun get(n: String): PhoneProfileEntity?
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun upsert(p: PhoneProfileEntity)
-    @Query("SELECT * FROM phone_profiles WHERE block_mode != 'NONE' OR trusted = 1 ORDER BY updated_at DESC")
+    @Query("SELECT * FROM phone_profiles WHERE block_mode != 'NONE' OR trusted = 1 OR watched = 1 ORDER BY updated_at DESC")
     fun observeListed(): Flow<List<PhoneProfileEntity>>
 }
 
@@ -128,4 +128,22 @@ interface SubscriptionHistoryDao {
     suspend fun forSubscription(id: Long): List<SubscriptionStatusHistoryEntity>
     @Insert
     suspend fun insert(row: SubscriptionStatusHistoryEntity): Long
+}
+
+@Dao
+interface LookupCacheDao {
+    @Query("SELECT * FROM lookup_cache WHERE phone_number = :number")
+    suspend fun forNumber(number: String): List<LookupCacheEntity>
+
+    @Query("SELECT * FROM lookup_cache WHERE phone_number = :number AND source = :source")
+    suspend fun get(number: String, source: String): LookupCacheEntity?
+
+    @Query("SELECT phone_number FROM lookup_cache WHERE source = :source")
+    suspend fun numbersForSource(source: String): List<String>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(row: LookupCacheEntity)
+
+    @Query("DELETE FROM lookup_cache WHERE fetched_at < :before")
+    suspend fun evictOlderThan(before: Long)
 }
