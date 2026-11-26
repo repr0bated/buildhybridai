@@ -21,6 +21,7 @@
     <uses-permission android:name="android.permission.READ_CALL_LOG" />
     <!-- Never block or warn on saved contacts. -->
     <uses-permission android:name="android.permission.READ_CONTACTS" />
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
 
     <!-- Tablets without telephony can still install (Lab + cloud analysis work). -->
     <uses-feature android:name="android.hardware.telephony" android:required="false" />
@@ -91,6 +92,9 @@
                 <data android:mimeType="application/vnd.wap.mms-message" />
             </intent-filter>
         </receiver>
+        <receiver
+            android:name=".sms.QuickReplyReceiver"
+            android:exported="false" />
         <service
             android:name=".sms.HeadlessSmsSendService"
             android:exported="true"

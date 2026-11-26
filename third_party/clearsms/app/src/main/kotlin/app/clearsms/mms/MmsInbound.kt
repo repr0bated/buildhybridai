@@ -185,7 +185,16 @@ class MmsInbound
             staged.delete()
             // An MMS notifies exactly like an SMS: same router, same gates
             // (blocked senders silent, categories decide the channel).
-            if (entity != null) incomingMessageRouter.route(entity)
+            if (entity != null) {
+                // Host owns notification + screening so Call Guardian can
+                // post a per-conversation channel with quick reply.
+                app.clearsms.HostIncoming.mmsListener?.onDownloaded(
+                    entity.sender,
+                    entity.body,
+                    entity.timestamp,
+                    parsed.recipients,
+                )
+            }
         }
 
         companion object {

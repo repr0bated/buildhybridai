@@ -40,3 +40,14 @@ The host `Application` implements WorkManager `Configuration.Provider` with
 (`SMS_DELIVER`, `WAP_PUSH_DELIVER`, `RESPONSE_SMS`, `SENDTO`) stay in Call
 Guardian; the library only registers non-exported result/boot/notification
 receivers. Do not also register Clear SMS's `SMS_DELIVER` / `WAP_PUSH_DELIVER`.
+
+Additional host patches in this snapshot:
+
+- `MmsSendReqEncoder` writes one To header per comma-separated address so
+  group MMS can be sent.
+- After an MMS download completes, `HostIncoming.mmsListener` is invoked so
+  Call Guardian can screen the message and post a per-conversation
+  notification. SMS delivery reports are supported via `UiPrefs` and
+  `SmsSentReceiver`. MMS delivery reports are not available from the
+  platform MMS service this encoder hands off to (send result only).
+

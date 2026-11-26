@@ -3,18 +3,22 @@ package com.example.callguardian.sms
 import android.app.Service
 import android.content.Intent
 import android.os.IBinder
-import android.telephony.SmsManager
+import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import timber.log.Timber
+import javax.inject.Inject
 
 /**
  * RESPOND_VIA_MESSAGE — required of a default SMS app so other apps can send a text through us.
  */
+@AndroidEntryPoint
 class HeadlessSmsSendService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    @Inject lateinit var gateway: MessagingGateway
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -29,10 +33,8 @@ class HeadlessSmsSendService : Service() {
         }
         scope.launch {
             try {
-                @Suppress("DEPRECATION")
-                val sms = if (android.os.Build.VERSION.SDK_INT >= 31) getSystemService(SmsManager::class.java) else SmsManager.getDefault()
-                sms.sendTextMessage(dest, null, body, null, null)
-                TelephonySms.insertSent(this@HeadlessSmsSendService, dest, body)
+                val result = gateway.send(MessagePresentation.splitRecipients(dest), body)
+                if (!result.ok) Timber.w("RESPOND_VIA_MESSAGE send failed: %s", result.error)
             } catch (t: Throwable) {
                 Timber.w(t, "RESPOND_VIA_MESSAGE send failed")
             } finally {

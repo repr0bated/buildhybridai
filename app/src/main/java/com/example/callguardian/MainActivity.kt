@@ -33,6 +33,7 @@ class MainActivity : FragmentActivity() {
 
     private val vm: AppViewModel by viewModels()
     private val openEvent = mutableStateOf<Long?>(null)
+    private val openAddress = mutableStateOf<String?>(null)
 
     @Inject lateinit var smsRolePrefs: SmsRolePrefs
 
@@ -71,7 +72,7 @@ class MainActivity : FragmentActivity() {
         )
         setContent {
             CallGuardianTheme {
-                CallGuardianApp(vm, actions, openEvent.value, onEventOpened = { openEvent.value = null })
+                CallGuardianApp(vm, actions, openEvent.value, onEventOpened = { openEvent.value = null }, openAddress = openAddress.value, onAddressOpened = { openAddress.value = null })
             }
         }
     }
@@ -89,6 +90,8 @@ class MainActivity : FragmentActivity() {
     private fun handleIntent(i: Intent?) {
         val id = i?.getLongExtra(EXTRA_EVENT_ID, -1) ?: -1
         if (id > 0) openEvent.value = id
+        val address = i?.getStringExtra(com.example.callguardian.sms.ConversationNotifier.EXTRA_OPEN_ADDRESS)
+        if (!address.isNullOrBlank()) openAddress.value = address
     }
 
     private fun requestScreeningRole() {

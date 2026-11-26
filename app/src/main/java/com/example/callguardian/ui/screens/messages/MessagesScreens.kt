@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+
 package com.example.callguardian.ui.screens.messages
 
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -83,6 +85,38 @@ import kotlinx.coroutines.withContext
 import java.text.DateFormat
 import java.util.Date
 
+import android.app.DatePickerDialog
+import android.app.TimePickerDialog
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.unit.IntOffset
+import com.example.callguardian.ai.SmartReplies
+import com.example.callguardian.sms.BlockedNumbers
+import com.example.callguardian.sms.ContactDirectory
+import com.example.callguardian.sms.ContactHit
+import com.example.callguardian.sms.MessagingGateway
+import com.example.callguardian.sms.MessagingGatewayEntryPoint
+import com.example.callguardian.sms.MmsPartRef
+import dagger.hilt.android.EntryPointAccessors
+import java.util.Calendar
+import kotlin.math.roundToInt
+
 /**
  * Conversation list, thread, and compose screens for Call Guardian.
  *
@@ -153,6 +187,13 @@ fun MessagesListRoute(
                 scope.launch(Dispatchers.IO) { MessagingQueries.deleteThread(context, addr) }.invokeOnCompletion { reload() }
             }
         },
+        onBlock = { addr ->
+            scope.launch {
+                withContext(Dispatchers.IO) { MessagingGateway.from(context).block(addr) }
+                Toast.makeText(context, "Blocked $addr", Toast.LENGTH_SHORT).show()
+                reload()
+            }
+        },
     )
 }
 
@@ -172,6 +213,7 @@ fun MessagesListScreen(
     onArchive: (String) -> Unit,
     onMute: (String) -> Unit,
     onDelete: (String) -> Unit,
+    onBlock: (String) -> Unit = {},
 ) {
     Column(Modifier.fillMaxSize()) {
         GuardianTopBar(
@@ -202,7 +244,15 @@ fun MessagesListScreen(
                 }
             }
             items(rows, key = { it.address }) { c ->
-                ConversationCard(c, onOpen = { onOpen(c.address) }, onPin = { onPin(c.address) }, onArchive = { onArchive(c.address) }, onMute = { onMute(c.address) }, onDelete = { onDelete(c.address) })
+                SwipeableConversation(
+                    c = c,
+                    onOpen = { onOpen(c.address) },
+                    onPin = { onPin(c.address) },
+                    onArchive = { onArchive(c.address) },
+                    onMute = { onMute(c.address) },
+                    onDelete = { onDelete(c.address) },
+                    onBlock = { onBlock(c.address) },
+                )
             }
         }
     }
@@ -231,6 +281,7 @@ private fun ConversationCard(
     onArchive: () -> Unit,
     onMute: () -> Unit,
     onDelete: () -> Unit,
+    onBlock: () -> Unit = {},
 ) {
     val hidden = LocalPrivacy.current.address(c.address)
     var menu by remember { mutableStateOf(false) }
@@ -248,6 +299,7 @@ private fun ConversationCard(
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f, fill = false),
                         )
+                        if (c.isGroup) Text("GROUP", style = MaterialTheme.typography.labelSmall, color = Brand.Cloud)
                         if (c.pinned) Text("PIN", style = MaterialTheme.typography.labelSmall, color = Brand.Lime)
                         if (c.muted) Text("MUTE", style = MaterialTheme.typography.labelSmall, color = Brand.InkDim)
                     }
@@ -271,6 +323,7 @@ private fun ConversationCard(
                             DropdownMenuItem(text = { Text(if (c.archived) "Move to inbox" else "Archive") }, onClick = { menu = false; onArchive() })
                             DropdownMenuItem(text = { Text(if (c.muted) "Unmute" else "Mute") }, onClick = { menu = false; onMute() })
                             DropdownMenuItem(text = { Text("Delete") }, onClick = { menu = false; onDelete() })
+                            DropdownMenuItem(text = { Text("Block") }, onClick = { menu = false; onBlock() })
                         }
                     }
                 }
@@ -312,6 +365,7 @@ private fun UnreadMark(count: Int) {
 }
 
 @Composable
+
 fun MessageThreadRoute(
     address: String,
     vm: AppViewModel,
@@ -322,12 +376,27 @@ fun MessageThreadRoute(
 ) {
     val context = LocalContext.current
     val prefs = remember { ConversationPrefs(context) }
+    val gateway = remember { MessagingGateway.from(context) }
+    val smart = remember {
+        EntryPointAccessors.fromApplication(context.applicationContext, MessagingGatewayEntryPoint::class.java).smartReplies()
+    }
     val events by vm.recent.collectAsState()
     val setup by vm.setup.collectAsState()
     val key = remember(address) { MessagePresentation.threadKey(address) }
+    val recipients = remember(address) { MessagePresentation.splitRecipients(address) }
+    val title = remember(address) { ContactDirectory.displayName(context, address) }
     var bubbles by remember { mutableStateOf<List<ThreadBubble>>(emptyList()) }
     var body by remember { mutableStateOf(prefs.draft(key)) }
+    var attachments by remember { mutableStateOf<List<android.net.Uri>>(emptyList()) }
+    var sims by remember { mutableStateOf(gateway.activeSims()) }
+    var subscriptionId by remember { mutableStateOf(gateway.defaultSmsSubscriptionId()) }
+    var replies by remember { mutableStateOf<List<String>>(emptyList()) }
+    var blocked by remember { mutableStateOf(gateway.isBlocked(address)) }
+    val threadId = remember(address) { MessagingQueries.threadIdFor(context, recipients) }
     val scope = rememberCoroutineScope()
+    val pickAttachments = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        attachments = (attachments + uris).distinct()
+    }
     fun reload() {
         scope.launch {
             val raw = withContext(Dispatchers.IO) { MessagingQueries.thread(context, address) }
@@ -336,22 +405,49 @@ fun MessageThreadRoute(
             }
         }
     }
+    LaunchedEffect(address) {
+        threadId?.let { id ->
+            val room = gateway.draftFor(id)
+            if (!room.isNullOrBlank()) body = room
+        }
+    }
     LaunchedEffect(address, events) { reload() }
+    LaunchedEffect(bubbles) {
+        replies = emptyList()
+        val last = bubbles.lastOrNull() ?: return@LaunchedEffect
+        if (!last.incoming) return@LaunchedEffect
+        replies = withContext(Dispatchers.IO) {
+            smart.suggest(bubbles.takeLast(8).map { it.body }, incomingLast = true)
+        }
+    }
     val hidden = LocalPrivacy.current.address(address)
     MessageThreadScreen(
         address = address,
+        title = title,
+        isGroup = recipients.size > 1,
         bubbles = bubbles,
         body = body,
-        onBody = { body = it; prefs.saveDraft(key, it) },
+        onBody = { text ->
+            body = text
+            prefs.saveDraft(key, text)
+            threadId?.let { id -> scope.launch { gateway.saveDraft(id, text) } }
+        },
         smsRoleHeld = setup.smsRole,
         previousSmsLabel = setup.previousSmsLabel,
         onRequestSmsRole = actions.requestSmsRole,
         onBack = onBack,
         onSend = {
             val text = body.trim()
-            if (text.isBlank()) return@MessageThreadScreen
-            if (sendSms(context, address, text)) {
-                body = ""; prefs.saveDraft(key, ""); reload()
+            if (text.isBlank() && attachments.isEmpty()) return@MessageThreadScreen
+            scope.launch {
+                val result = gateway.send(recipients, text, attachments, subscriptionId)
+                if (result.ok) {
+                    body = ""; prefs.saveDraft(key, ""); threadId?.let { gateway.saveDraft(it, "") }
+                    attachments = emptyList()
+                    reload()
+                } else {
+                    Toast.makeText(context, result.error ?: "Couldn't send.", Toast.LENGTH_SHORT).show()
+                }
             }
         },
         onCopy = { text ->
@@ -360,11 +456,54 @@ fun MessageThreadRoute(
         },
         onForward = onForward,
         onDelete = { id ->
-            scope.launch(Dispatchers.IO) { MessagingQueries.deleteMessage(context, id) }.invokeOnCompletion { reload() }
+            scope.launch(Dispatchers.IO) { MessagingQueries.deleteMessage(context, id, false) }.invokeOnCompletion { reload() }
+        },
+        onDeleteWithMms = { id, isMms ->
+            scope.launch(Dispatchers.IO) { MessagingQueries.deleteMessage(context, id, isMms) }.invokeOnCompletion { reload() }
         },
         onSubscriptions = onSubscriptions,
         privateHidden = hidden,
         canStop = bubbles.any { it.badge?.id == MessageBadge.SUBSCRIPTION || it.badge?.id == MessageBadge.CANCELED },
+        attachments = attachments,
+        onAttach = { pickAttachments.launch(arrayOf("image/*", "video/*", "audio/*", "*/*")) },
+        onRemoveAttachment = { uri -> attachments = attachments.filterNot { it == uri } },
+        sims = sims.map { Triple(it.subscriptionId, "SIM ${it.slotIndex + 1}", it.displayName) },
+        selectedSim = subscriptionId,
+        onSim = { subscriptionId = it },
+        onSchedule = {
+            val text = body.trim()
+            if (text.isBlank()) {
+                Toast.makeText(context, "Write a message to schedule.", Toast.LENGTH_SHORT).show()
+                return@MessageThreadScreen
+            }
+            pickDateTime(context) { at ->
+                scope.launch {
+                    val result = gateway.send(recipients, text, emptyList(), subscriptionId, scheduledAtMs = at)
+                    if (result.ok) {
+                        body = ""; prefs.saveDraft(key, ""); threadId?.let { gateway.saveDraft(it, "") }
+                        Toast.makeText(context, "Scheduled.", Toast.LENGTH_SHORT).show()
+                        reload()
+                    } else {
+                        Toast.makeText(context, result.error ?: "Couldn't schedule.", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+        },
+        smartReplies = replies,
+        onPickReply = { body = it },
+        blocked = blocked,
+        onBlock = {
+            scope.launch {
+                if (blocked) gateway.unblock(address) else gateway.block(address)
+                blocked = gateway.isBlocked(address)
+                Toast.makeText(context, if (blocked) "Blocked" else "Unblocked", Toast.LENGTH_SHORT).show()
+            }
+        },
+        onOpenAttachment = { part ->
+            runCatching {
+                context.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(part.uri, part.mime).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))
+            }
+        },
     )
 }
 
@@ -381,94 +520,165 @@ fun MessageThreadScreen(
     onSend: () -> Unit,
     onCopy: (String) -> Unit,
     onForward: (String) -> Unit,
-    onDelete: (Long) -> Unit,
+    onDelete: (Long) -> Unit = {},
     onSubscriptions: () -> Unit,
     privateHidden: Boolean,
     canStop: Boolean,
+    title: String? = null,
+    isGroup: Boolean = false,
+    onDeleteMms: (Long, Boolean) -> Unit = { id, _ -> onDelete(id) },
+    attachments: List<android.net.Uri> = emptyList(),
+    onAttach: () -> Unit = {},
+    onRemoveAttachment: (android.net.Uri) -> Unit = {},
+    sims: List<Triple<Int, String, String>> = emptyList(),
+    selectedSim: Int? = null,
+    onSim: (Int) -> Unit = {},
+    onSchedule: () -> Unit = {},
+    smartReplies: List<String> = emptyList(),
+    onPickReply: (String) -> Unit = {},
+    blocked: Boolean = false,
+    onBlock: () -> Unit = {},
+    onOpenAttachment: (MmsPartRef) -> Unit = {},
+    onDeleteWithMms: ((Long, Boolean) -> Unit)? = null,
 ) {
-    val listState = rememberLazyListState()
-    LaunchedEffect(bubbles.size) { if (bubbles.isNotEmpty()) listState.scrollToItem(bubbles.lastIndex) }
+    // Prefer the (id, isMms) delete path when callers supply it via the route overload name.
+    val deleteMessage: (Long, Boolean) -> Unit = { id, isMms ->
+        if (onDeleteWithMms != null) onDeleteWithMms(id, isMms) else onDeleteMms(id, isMms)
+    }
     val segs = MessagePresentation.segments(body)
+    val heading = title ?: address
     Column(Modifier.fillMaxSize()) {
         GuardianTopBar(
-            title = { Text(address, maxLines = 1, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurface) },
+            title = {
+                Column {
+                    Text(heading, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    if (isGroup) Text("${MessagePresentation.splitRecipients(address).size} recipients", style = MaterialTheme.typography.labelSmall, color = Brand.Cloud)
+                }
+            },
             navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = Brand.Ink) } },
+            actions = {
+                if (canStop) TextButton(onClick = onSubscriptions) { Text("STOP / Manage", color = Brand.Lime) }
+                TextButton(onClick = onBlock) { Text(if (blocked) "Unblock" else "Block", color = Brand.Amber) }
+            },
         )
         if (!smsRoleHeld) DefaultSmsBanner(previousSmsLabel, onRequestSmsRole)
-        if (canStop) {
-            Row(Modifier.padding(horizontal = 16.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = onSubscriptions) { Text("STOP / Manage") }
+        if (isGroup) {
+            Text(
+                MessagePresentation.joinRecipients(MessagePresentation.splitRecipients(address)),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+            )
+        }
+        val listState = rememberLazyListState()
+        LaunchedEffect(bubbles.size) { if (bubbles.isNotEmpty()) listState.animateScrollToItem(bubbles.lastIndex) }
+        LazyColumn(
+            Modifier.weight(1f).fillMaxWidth(),
+            state = listState,
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            if (bubbles.isEmpty()) {
+                item { Text("No messages in this thread.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            }
+            itemsIndexed(bubbles, key = { _, b -> "${b.isMms}-${b.id}" }) { index, b ->
+                val prev = bubbles.getOrNull(index - 1)?.date
+                if (MessagePresentation.shouldShowDateDivider(prev, b.date)) {
+                    Text(
+                        DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(b.date)),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                    )
+                }
+                BubbleRow(b, privateHidden, onCopy, onForward, onDelete = { deleteMessage(b.id, b.isMms) }, onOpenAttachment = onOpenAttachment)
             }
         }
-        PrivateGate(hidden = privateHidden, modifier = Modifier.weight(1f)) {
-            LazyColumn(
-                state = listState,
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(16.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+        if (smartReplies.isNotEmpty()) {
+            LazyRow(
+                Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                itemsIndexed(bubbles, key = { _, b -> b.id }) { i, m ->
-                    val prev = bubbles.getOrNull(i - 1)?.date
-                    if (MessagePresentation.shouldShowDateDivider(prev, m.date)) {
-                        Text(
-                            DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(m.date)),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                        )
-                    }
-                    BubbleRow(m, onCopy, onForward, onDelete, canDelete = smsRoleHeld)
+                items(smartReplies, key = { it }) { reply ->
+                    AssistChip(onClick = { onPickReply(reply) }, label = { Text(reply) })
                 }
             }
         }
-        ComposeBar(body, onBody, segs.label, enabled = body.isNotBlank() && smsRoleHeld, onSend = onSend, hint = if (smsRoleHeld) "Message" else "Set as default SMS app to send")
+        AttachmentStrip(attachments, onRemoveAttachment)
+        SimPickerRow(sims, selectedSim, onSim)
+        ComposeBar(
+            body, onBody, segs.label,
+            enabled = (body.isNotBlank() || attachments.isNotEmpty()) && smsRoleHeld,
+            onSend = onSend,
+            hint = if (smsRoleHeld) "Message" else "Set as default SMS app to send",
+            onAttach = onAttach,
+            onSchedule = onSchedule,
+            attachEnabled = smsRoleHeld,
+        )
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun BubbleRow(
-    m: ThreadBubble,
+    b: ThreadBubble,
+    privateHidden: Boolean,
     onCopy: (String) -> Unit,
     onForward: (String) -> Unit,
-    onDelete: (Long) -> Unit,
-    canDelete: Boolean,
+    onDelete: () -> Unit,
+    onOpenAttachment: (MmsPartRef) -> Unit = {},
 ) {
+    val incoming = b.incoming
     var menu by remember { mutableStateOf(false) }
-    val status = when {
-        m.incoming -> null
-        m.status == Telephony.Sms.STATUS_FAILED -> "Failed"
-        m.status == Telephony.Sms.STATUS_PENDING -> "Sending"
-        else -> "Sent"
-    }
-    Column(
+    Row(
         Modifier.fillMaxWidth(),
-        horizontalAlignment = if (m.incoming) Alignment.Start else Alignment.End,
+        horizontalArrangement = if (incoming) Arrangement.Start else Arrangement.End,
     ) {
-        Box {
-            Column(
-                Modifier
-                    .widthIn(max = 320.dp)
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(if (m.incoming) Brand.Glass2 else Brand.Lime.copy(alpha = 0.16f))
-                    .combinedClickable(onClick = {}, onLongClick = { menu = true })
-                    .padding(10.dp),
-            ) {
-                Text(m.body, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(m.date)),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    status?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                    m.badge?.let { InlineBadge(it) }
+        Column(Modifier.widthIn(max = 320.dp), horizontalAlignment = if (incoming) Alignment.Start else Alignment.End) {
+            PrivateGate(hidden = privateHidden && incoming) {
+                Box {
+                    Column(
+                        Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(if (incoming) Brand.Glass2 else Brand.Lime.copy(alpha = 0.16f))
+                            .combinedClickable(onClick = {}, onLongClick = { menu = true })
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                    ) {
+                        if (b.body.isNotBlank()) {
+                            Text(b.body, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
+                        }
+                        if (b.attachments.isNotEmpty()) {
+                            b.attachments.forEach { part ->
+                                Text(
+                                    when {
+                                        part.mime.startsWith("image/") -> "Photo"
+                                        part.mime.startsWith("video/") -> "Video"
+                                        part.mime.startsWith("audio/") -> "Audio"
+                                        else -> part.name ?: "Attachment"
+                                    },
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = Brand.Lime,
+                                    modifier = Modifier.clickable { onOpenAttachment(part) }.padding(top = 4.dp),
+                                )
+                            }
+                        }
+                    }
+                    DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                        DropdownMenuItem(text = { Text("Copy") }, onClick = { menu = false; onCopy(b.body) })
+                        DropdownMenuItem(text = { Text("Forward") }, onClick = { menu = false; onForward(b.body) })
+                        DropdownMenuItem(text = { Text("Delete") }, onClick = { menu = false; onDelete() })
+                    }
                 }
             }
-            DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                DropdownMenuItem(text = { Text("Copy") }, onClick = { menu = false; onCopy(m.body) })
-                DropdownMenuItem(text = { Text("Forward") }, onClick = { menu = false; onForward(m.body) })
-                if (canDelete) DropdownMenuItem(text = { Text("Delete") }, onClick = { menu = false; onDelete(m.id) })
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                b.badge?.let { InlineBadge(it) }
+                Text(
+                    DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(b.date)),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                b.deliveryLabel?.let {
+                    Text(it, style = MaterialTheme.typography.labelSmall, color = Brand.Cloud)
+                }
             }
         }
     }
@@ -485,22 +695,77 @@ fun ComposeMessageRoute(
 ) {
     val context = LocalContext.current
     val setup by vm.setup.collectAsState()
-    var to by remember { mutableStateOf(initialTo.orEmpty()) }
+    val gateway = remember { MessagingGateway.from(context) }
+    var recipients by remember { mutableStateOf(MessagePresentation.splitRecipients(initialTo.orEmpty()).toMutableList()) }
+    var toText by remember { mutableStateOf(if (recipients.isEmpty()) initialTo.orEmpty() else "") }
     var body by remember { mutableStateOf(initialBody.orEmpty()) }
+    var attachments by remember { mutableStateOf<List<android.net.Uri>>(emptyList()) }
+    var contactQuery by remember { mutableStateOf("") }
+    var hits by remember { mutableStateOf<List<ContactHit>>(emptyList()) }
+    var sims by remember { mutableStateOf(gateway.activeSims()) }
+    var subscriptionId by remember { mutableStateOf(gateway.defaultSmsSubscriptionId()) }
+    val scope = rememberCoroutineScope()
+    val pickAttachments = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        attachments = (attachments + uris).distinct()
+    }
+    LaunchedEffect(contactQuery, toText) {
+        val q = contactQuery.ifBlank { toText }
+        hits = withContext(Dispatchers.IO) { ContactDirectory.search(context, q) }
+            .filter { hit -> recipients.none { MessagePresentation.threadKey(it) == MessagePresentation.threadKey(hit.number) } }
+    }
+    fun allDestinations(): List<String> {
+        val typed = MessagePresentation.splitRecipients(toText)
+        return (recipients + typed).distinct()
+    }
     ComposeMessageScreen(
-        to = to,
+        to = toText,
         body = body,
-        onTo = { to = it },
+        onTo = { toText = it; contactQuery = it },
         onBody = { body = it },
         smsRoleHeld = setup.smsRole,
         previousSmsLabel = setup.previousSmsLabel,
         onRequestSmsRole = actions.requestSmsRole,
         onBack = onBack,
         onSend = {
-            val dest = to.trim()
+            val dests = allDestinations()
             val text = body.trim()
-            if (dest.isBlank() || text.isBlank()) return@ComposeMessageScreen
-            if (sendSms(context, dest, text)) onSent(dest)
+            if (dests.isEmpty() || (text.isBlank() && attachments.isEmpty())) return@ComposeMessageScreen
+            scope.launch {
+                val result = gateway.send(dests, text, attachments, subscriptionId)
+                if (result.ok) onSent(MessagePresentation.joinRecipients(dests))
+                else Toast.makeText(context, result.error ?: "Couldn't send.", Toast.LENGTH_SHORT).show()
+            }
+        },
+        recipients = recipients,
+        onAddRecipient = { number ->
+            if (recipients.none { MessagePresentation.threadKey(it) == MessagePresentation.threadKey(number) }) {
+                recipients = (recipients + number).toMutableList()
+            }
+            toText = ""
+            contactQuery = ""
+        },
+        onRemoveRecipient = { number -> recipients = recipients.filterNot { it == number }.toMutableList() },
+        contactHits = hits,
+        attachments = attachments,
+        onAttach = { pickAttachments.launch(arrayOf("image/*", "video/*", "audio/*", "*/*")) },
+        onRemoveAttachment = { uri -> attachments = attachments.filterNot { it == uri } },
+        sims = sims.map { Triple(it.subscriptionId, "SIM ${it.slotIndex + 1}", it.displayName) },
+        selectedSim = subscriptionId,
+        onSim = { subscriptionId = it },
+        onSchedule = {
+            val dests = allDestinations()
+            val text = body.trim()
+            if (dests.size != 1 || text.isBlank()) {
+                Toast.makeText(context, "Scheduled send is SMS-only (one recipient, no attachments).", Toast.LENGTH_SHORT).show()
+                return@ComposeMessageScreen
+            }
+            pickDateTime(context) { at ->
+                scope.launch {
+                    val result = gateway.send(dests, text, emptyList(), subscriptionId, scheduledAtMs = at)
+                    if (result.ok) onSent(MessagePresentation.joinRecipients(dests))
+                    else Toast.makeText(context, result.error ?: "Couldn't schedule.", Toast.LENGTH_SHORT).show()
+                }
+            }
         },
     )
 }
@@ -516,8 +781,20 @@ fun ComposeMessageScreen(
     onRequestSmsRole: () -> Unit,
     onBack: () -> Unit,
     onSend: () -> Unit,
+    recipients: List<String> = emptyList(),
+    onAddRecipient: (String) -> Unit = {},
+    onRemoveRecipient: (String) -> Unit = {},
+    contactHits: List<ContactHit> = emptyList(),
+    attachments: List<android.net.Uri> = emptyList(),
+    onAttach: () -> Unit = {},
+    onRemoveAttachment: (android.net.Uri) -> Unit = {},
+    sims: List<Triple<Int, String, String>> = emptyList(),
+    selectedSim: Int? = null,
+    onSim: (Int) -> Unit = {},
+    onSchedule: () -> Unit = {},
 ) {
     val segs = MessagePresentation.segments(body)
+    val canSend = (recipients.isNotEmpty() || to.isNotBlank()) && (body.isNotBlank() || attachments.isNotEmpty()) && smsRoleHeld
     Column(Modifier.fillMaxSize()) {
         GuardianTopBar(
             title = { Text("compose") },
@@ -525,14 +802,37 @@ fun ComposeMessageScreen(
         )
         if (!smsRoleHeld) DefaultSmsBanner(previousSmsLabel, onRequestSmsRole)
         Column(Modifier.padding(16.dp).weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            if (recipients.isNotEmpty()) {
+                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    recipients.forEach { r ->
+                        AssistChip(
+                            onClick = { onRemoveRecipient(r) },
+                            label = { Text(ContactDirectory.lookupName(LocalContext.current, r) ?: r, maxLines = 1) },
+                            trailingIcon = { Icon(Icons.Default.Close, "Remove", Modifier.size(14.dp)) },
+                        )
+                    }
+                }
+            }
             OutlinedTextField(
                 to, onTo,
-                label = { Text("To (number or short code)") },
+                label = { Text(if (recipients.isEmpty()) "To (name or number)" else "Add another recipient") },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
+            if (contactHits.isNotEmpty()) {
+                Column(Modifier.fillMaxWidth().heightIn(max = 180.dp)) {
+                    contactHits.take(8).forEach { hit ->
+                        Text(
+                            hit.display,
+                            modifier = Modifier.fillMaxWidth().clickable { onAddRecipient(hit.number) }.padding(vertical = 8.dp),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                    }
+                }
+            }
             Text(
-                "Group MMS and attachments are on the way. RCS is not available to third-party Android apps.",
+                "Attach a picture, video, or audio to send as MMS. Several recipients go as group MMS. RCS is not available to third-party Android apps.",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -541,8 +841,10 @@ fun ComposeMessageScreen(
                 label = { Text(if (smsRoleHeld) "Message" else "Set as default SMS app to send") },
                 modifier = Modifier.fillMaxWidth().weight(1f, fill = false).height(180.dp),
             )
+            AttachmentStrip(attachments, onRemoveAttachment)
+            SimPickerRow(sims, selectedSim, onSim)
         }
-        ComposeBar(body, onBody, segs.label, enabled = to.isNotBlank() && body.isNotBlank() && smsRoleHeld, onSend = onSend, hint = "Message")
+        ComposeBar(body, onBody, segs.label, enabled = canSend, onSend = onSend, hint = "Message", onAttach = onAttach, onSchedule = onSchedule, attachEnabled = smsRoleHeld)
     }
 }
 
@@ -554,9 +856,18 @@ private fun ComposeBar(
     enabled: Boolean,
     onSend: () -> Unit,
     hint: String,
+    onAttach: () -> Unit = {},
+    onSchedule: () -> Unit = {},
+    attachEnabled: Boolean = false,
 ) {
     Column(Modifier.fillMaxWidth().background(Brand.Void).padding(horizontal = 12.dp, vertical = 8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            IconButton(onClick = onAttach, enabled = attachEnabled) {
+                Icon(Icons.Default.AttachFile, "Attach", tint = if (attachEnabled) Brand.Lime else Brand.InkDim)
+            }
+            IconButton(onClick = onSchedule, enabled = attachEnabled) {
+                Icon(Icons.Default.Schedule, "Schedule", tint = if (attachEnabled) Brand.Cloud else Brand.InkDim)
+            }
             OutlinedTextField(
                 body, onBody,
                 label = { Text(hint) },
@@ -568,6 +879,104 @@ private fun ComposeBar(
         }
         Text(counter, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
+}
+
+@Composable
+private fun AttachmentStrip(attachments: List<android.net.Uri>, onRemove: (android.net.Uri) -> Unit) {
+    if (attachments.isEmpty()) return
+    Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        attachments.forEach { uri ->
+            AssistChip(
+                onClick = { onRemove(uri) },
+                label = { Text(uri.lastPathSegment ?: "attachment", maxLines = 1) },
+                trailingIcon = { Icon(Icons.Default.Close, "Remove", Modifier.size(14.dp)) },
+            )
+        }
+    }
+}
+
+@Composable
+private fun SimPickerRow(sims: List<Triple<Int, String, String>>, selectedSim: Int?, onSim: (Int) -> Unit) {
+    if (sims.size < 2) return
+    Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        sims.forEach { (id, slot, name) ->
+            FilterChip(
+                selected = selectedSim == id,
+                onClick = { onSim(id) },
+                label = { Text("$slot · $name") },
+            )
+        }
+    }
+}
+
+@Composable
+private fun SwipeableConversation(
+    c: ConversationRow,
+    onOpen: () -> Unit,
+    onPin: () -> Unit,
+    onArchive: () -> Unit,
+    onMute: () -> Unit,
+    onDelete: () -> Unit,
+    onBlock: () -> Unit = {},
+) {
+    var offset by remember { mutableFloatStateOf(0f) }
+    val shown by animateFloatAsState(targetValue = offset, label = "swipe")
+    val max = 280f
+    Box {
+        Row(
+            Modifier.matchParentSize(),
+            horizontalArrangement = Arrangement.End,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            TextButton(onClick = { offset = 0f; onPin() }) { Text("Pin", color = Brand.Lime) }
+            TextButton(onClick = { offset = 0f; onArchive() }) { Text("Archive", color = Brand.Cloud) }
+            TextButton(onClick = { offset = 0f; onMute() }) { Text("Mute", color = Brand.Amber) }
+            TextButton(onClick = { offset = 0f; onDelete() }) { Text("Delete", color = Brand.Threat) }
+        }
+        Box(
+            Modifier
+                .offset { IntOffset(shown.roundToInt(), 0) }
+                .pointerInput(c.address) {
+                    detectHorizontalDragGestures(
+                        onDragEnd = { offset = if (offset < -80f) -max else 0f },
+                        onHorizontalDrag = { _, dx -> offset = (offset + dx).coerceIn(-max, 0f) },
+                    )
+                },
+        ) {
+            ConversationCard(c, onOpen, onPin, onArchive, onMute, onDelete, onBlock)
+        }
+    }
+}
+
+private fun pickDateTime(context: android.content.Context, onPicked: (Long) -> Unit) {
+    val cal = Calendar.getInstance().apply { add(Calendar.MINUTE, 10) }
+    DatePickerDialog(
+        context,
+        { _, y, m, d ->
+            TimePickerDialog(
+                context,
+                { _, hour, minute ->
+                    cal.set(Calendar.YEAR, y)
+                    cal.set(Calendar.MONTH, m)
+                    cal.set(Calendar.DAY_OF_MONTH, d)
+                    cal.set(Calendar.HOUR_OF_DAY, hour)
+                    cal.set(Calendar.MINUTE, minute)
+                    cal.set(Calendar.SECOND, 0)
+                    if (cal.timeInMillis <= System.currentTimeMillis()) {
+                        Toast.makeText(context, "Pick a time in the future.", Toast.LENGTH_SHORT).show()
+                    } else {
+                        onPicked(cal.timeInMillis)
+                    }
+                },
+                cal.get(Calendar.HOUR_OF_DAY),
+                cal.get(Calendar.MINUTE),
+                false,
+            ).show()
+        },
+        cal.get(Calendar.YEAR),
+        cal.get(Calendar.MONTH),
+        cal.get(Calendar.DAY_OF_MONTH),
+    ).show()
 }
 
 internal fun sendSms(context: android.content.Context, to: String, body: String): Boolean {

@@ -45,9 +45,22 @@ object MessagePresentation {
     private val GSM7_EXT = "^{}\\[~]|€".toSet()
 
     fun threadKey(address: String): String {
-        val digits = address.filter { it.isDigit() }
-        return digits.ifBlank { address.trim().lowercase() }
+        val parts = splitRecipients(address)
+        if (parts.size > 1) {
+            return parts.map { threadKey(it) }.sorted().joinToString(",")
+        }
+        val single = parts.singleOrNull() ?: address
+        val digits = single.filter { it.isDigit() }
+        return digits.ifBlank { single.trim().lowercase() }
     }
+
+    fun splitRecipients(raw: String): List<String> =
+        raw.split(',', ';').map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+
+    fun joinRecipients(recipients: Collection<String>): String =
+        recipients.map { it.trim() }.filter { it.isNotEmpty() }.distinct().joinToString(", ")
+
+    fun isGroup(address: String): Boolean = splitRecipients(address).size > 1
 
     fun matchesQuery(address: String, snippet: String, displayName: String?, query: String): Boolean {
         val q = query.trim()

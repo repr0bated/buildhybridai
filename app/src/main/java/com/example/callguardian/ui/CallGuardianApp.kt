@@ -93,7 +93,7 @@ private fun DrawScope.gridBackdrop() {
 }
 
 @Composable
-fun CallGuardianApp(vm: AppViewModel, actions: SetupActions, openEventId: Long?, onEventOpened: () -> Unit) {
+fun CallGuardianApp(vm: AppViewModel, actions: SetupActions, openEventId: Long?, onEventOpened: () -> Unit, openAddress: String? = null, onAddressOpened: () -> Unit = {}) {
     val nav = rememberNavController()
     val entry by nav.currentBackStackEntryAsState()
     val route = entry?.destination?.route
@@ -113,7 +113,7 @@ fun CallGuardianApp(vm: AppViewModel, actions: SetupActions, openEventId: Long?,
         ),
         com.example.callguardian.ui.components.LocalOwned provides com.example.callguardian.ui.components.OwnedLookup(owned),
     ) {
-    CallGuardianNav(vm, actions, openEventId, onEventOpened, nav, route)
+    CallGuardianNav(vm, actions, openEventId, onEventOpened, nav, route, openAddress, onAddressOpened)
     val pending by vm.pendingCancelAsk.collectAsState()
     pending?.let { rec ->
         val ownedMatch = com.example.callguardian.ui.components.LocalOwned.current.forSender(rec.sender) != null
@@ -141,10 +141,16 @@ fun CallGuardianApp(vm: AppViewModel, actions: SetupActions, openEventId: Long?,
 
 
 @Composable
-private fun CallGuardianNav(vm: AppViewModel, actions: SetupActions, openEventId: Long?, onEventOpened: () -> Unit, nav: androidx.navigation.NavHostController, route: String?) {
+private fun CallGuardianNav(vm: AppViewModel, actions: SetupActions, openEventId: Long?, onEventOpened: () -> Unit, nav: androidx.navigation.NavHostController, route: String?, openAddress: String? = null, onAddressOpened: () -> Unit = {}) {
 
     LaunchedEffect(openEventId) {
         if (openEventId != null && openEventId > 0) { nav.navigate("event/$openEventId"); onEventOpened() }
+    }
+    LaunchedEffect(openAddress) {
+        if (!openAddress.isNullOrBlank()) {
+            nav.navigate("messages/thread/" + android.net.Uri.encode(openAddress))
+            onAddressOpened()
+        }
     }
 
     Scaffold(

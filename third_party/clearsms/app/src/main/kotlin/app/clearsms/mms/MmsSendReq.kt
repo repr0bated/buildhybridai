@@ -72,8 +72,12 @@ object MmsSendReqEncoder {
         writer.writeByte(MmsHeaders.FROM)
         writer.writeValueLength(1)
         writer.writeByte(INSERT_ADDRESS_TOKEN)
-        writer.writeByte(MmsHeaders.TO)
-        writer.writeTextString("${request.to}/TYPE=PLMN")
+        // Multiple To headers encode a group MMS. Destinations may be a
+        // single address or a comma-separated list supplied by the host.
+        for (addr in request.to.split(',').map { it.trim() }.filter { it.isNotEmpty() }) {
+            writer.writeByte(MmsHeaders.TO)
+            writer.writeTextString("$addr/TYPE=PLMN")
+        }
         // Content-Type is last; the multipart body follows immediately.
         writer.writeByte(MmsHeaders.CONTENT_TYPE)
         writer.writeShortInteger(MULTIPART_MIXED)
