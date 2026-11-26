@@ -8,34 +8,42 @@ import androidx.room.Update
 import kotlinx.coroutines.flow.Flow
 
 @Dao
-interface ScreeningEventDao {
-    @Insert suspend fun insert(e: ScreeningEventEntity): Long
-    @Update suspend fun update(e: ScreeningEventEntity)
-    @Query("SELECT * FROM screening_events WHERE id = :id") suspend fun get(id: Long): ScreeningEventEntity?
-    @Query("SELECT * FROM screening_events WHERE id = :id") fun observe(id: Long): Flow<ScreeningEventEntity?>
-    @Query("SELECT * FROM screening_events ORDER BY received_at DESC LIMIT :limit") fun observeRecent(limit: Int = 200): Flow<List<ScreeningEventEntity>>
+abstract class ScreeningEventDao {
+    @Insert abstract suspend fun insertOrThrow(e: ScreeningEventEntity): Long
+    @Update abstract suspend fun updateOrThrow(e: ScreeningEventEntity)
+    suspend fun insert(e: ScreeningEventEntity): Long = SafeDb.write("screening_events.insert") { insertOrThrow(e) } ?: 0L
+    suspend fun update(e: ScreeningEventEntity) { SafeDb.write("screening_events.update") { updateOrThrow(e) } }
+    @Query("SELECT * FROM screening_events WHERE id = :id") abstract suspend fun get(id: Long): ScreeningEventEntity?
+    @Query("SELECT * FROM screening_events WHERE id = :id") abstract fun observe(id: Long): Flow<ScreeningEventEntity?>
+    @Query("SELECT * FROM screening_events ORDER BY received_at DESC LIMIT :limit") abstract fun observeRecent(limit: Int = 200): Flow<List<ScreeningEventEntity>>
     @Query("SELECT COUNT(*) FROM screening_events WHERE channel = 'CALL' AND number = :number AND received_at > :since")
-    suspend fun countCallsSince(number: String, since: Long): Int
+    abstract suspend fun countCallsSince(number: String, since: Long): Int
     @Query("SELECT * FROM screening_events WHERE ai_status = 'PENDING' ORDER BY received_at DESC LIMIT 10")
-    suspend fun pendingAi(): List<ScreeningEventEntity>
+    abstract suspend fun pendingAi(): List<ScreeningEventEntity>
     @Query("SELECT * FROM screening_events WHERE source IN (:sources) AND channel = 'SMS' ORDER BY received_at DESC LIMIT :limit")
-    suspend fun bySource(sources: List<String>, limit: Int): List<ScreeningEventEntity>
+    abstract suspend fun bySource(sources: List<String>, limit: Int): List<ScreeningEventEntity>
     @Query("SELECT * FROM screening_events WHERE integration = :integration AND is_test = 0 ORDER BY received_at DESC LIMIT :limit")
-    fun observeIntegration(integration: String, limit: Int = 300): Flow<List<ScreeningEventEntity>>
-    @Query("DELETE FROM screening_events WHERE id = :id") suspend fun delete(id: Long)
-    @Query("DELETE FROM screening_events") suspend fun clear()
+    abstract fun observeIntegration(integration: String, limit: Int = 300): Flow<List<ScreeningEventEntity>>
+    @Query("DELETE FROM screening_events WHERE id = :id") abstract suspend fun deleteOrThrow(id: Long)
+    suspend fun delete(id: Long) { SafeDb.write("screening_events.delete") { deleteOrThrow(id) } }
+    @Query("DELETE FROM screening_events") abstract suspend fun clearOrThrow()
+    suspend fun clear() { SafeDb.write("screening_events.clear") { clearOrThrow() } }
+    @Query("SELECT COUNT(*) FROM screening_events WHERE number = :number")
+    abstract suspend fun countByNumber(number: String): Int
+    @Query("SELECT * FROM screening_events WHERE number = :number ORDER BY received_at DESC LIMIT :limit")
+    abstract suspend fun byNumber(number: String, limit: Int = 50): List<ScreeningEventEntity>
     @Query("""
         SELECT * FROM screening_events
         WHERE id IN (SELECT rowid FROM screening_events_fts WHERE screening_events_fts MATCH :match)
         ORDER BY received_at DESC LIMIT :limit
     """)
-    suspend fun searchFts(match: String, limit: Int = 200): List<ScreeningEventEntity>
+    abstract suspend fun searchFts(match: String, limit: Int = 200): List<ScreeningEventEntity>
     @Query("""
         SELECT * FROM screening_events
         WHERE number LIKE '%' || :digits || '%' OR display_name LIKE '%' || :raw || '%'
         ORDER BY received_at DESC LIMIT :limit
     """)
-    suspend fun searchNumberOrName(digits: String, raw: String, limit: Int = 200): List<ScreeningEventEntity>
+    abstract suspend fun searchNumberOrName(digits: String, raw: String, limit: Int = 200): List<ScreeningEventEntity>
 }
 
 
@@ -76,4 +84,21 @@ interface PrivacyMarkDao {
     suspend fun upsert(row: PrivacyMarkEntity)
     @Query("DELETE FROM privacy_marks WHERE `key` = :key")
     suspend fun delete(key: String)
+}
+
+
+@Dao
+interface OwnedAccountDao {
+    @Query("SELECT * FROM owned_accounts ORDER BY updated_at DESC")
+    fun observeAll(): Flow<List<OwnedAccountEntity>>
+    @Query("SELECT * FROM owned_accounts ORDER BY updated_at DESC")
+    suspend fun all(): List<OwnedAccountEntity>
+    @Query("SELECT * FROM owned_accounts WHERE id = :id")
+    suspend fun get(id: Long): OwnedAccountEntity?
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(row: OwnedAccountEntity): Long
+    @Update
+    suspend fun update(row: OwnedAccountEntity)
+    @Query("DELETE FROM owned_accounts WHERE id = :id")
+    suspend fun delete(id: Long)
 }

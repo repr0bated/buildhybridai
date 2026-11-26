@@ -160,3 +160,15 @@ data class ScreeningEventFts(
     val advice: String?,
     @ColumnInfo(name = "lookup_summary") val lookupSummary: String?,
 )
+
+
+/** A service the user has an account with: senders (numbers / short codes) and official domains. */
+@Entity(tableName = "owned_accounts", indices = [Index("service")])
+data class OwnedAccountEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val service: String,
+    val senders: String = "",
+    val domains: String = "",
+    @ColumnInfo(name = "created_at") val createdAt: Long = 0,
+    @ColumnInfo(name = "updated_at") val updatedAt: Long = 0,
+)

@@ -193,6 +193,7 @@ fun EventRow(e: ScreeningEventEntity, onClick: () -> Unit) {
                 Text(e.displayName ?: e.number ?: "Hidden number", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold,
                     maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
                 if (e.isTest) { Spacer(Modifier.width(6.dp)); Pill("Test", MaterialTheme.colorScheme.onSurfaceVariant) }
+                if (LocalOwned.current.forSender(e.number) != null) { Spacer(Modifier.width(6.dp)); OwnedPill() }
             }
             Text(
                 e.body?.replace('\n', ' ') ?: (e.lookupSummary ?: "Incoming call"),
@@ -238,3 +239,13 @@ fun relativeTime(ts: Long): String {
 }
 
 fun fullTime(ts: Long): String = DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(ts))
+
+
+val LocalOwned = androidx.compose.runtime.staticCompositionLocalOf { OwnedLookup(emptyList()) }
+
+data class OwnedLookup(val accounts: List<com.example.callguardian.accounts.OwnedAccount>) {
+    fun forSender(number: String?) = accounts.firstOrNull { it.matchesSender(number) }
+}
+
+@Composable
+fun OwnedPill() = Pill("Owned", Brand.Lime)

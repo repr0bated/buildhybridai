@@ -23,7 +23,10 @@ enum class UserMethod(val alias: String) {
     MUTE_SENDER("mute_sender"),
     SET_INTEGRATION("set_integration"),
     SET_PRIVATE("set_private"),
-    CLEAR_PRIVATE("clear_private");
+    CLEAR_PRIVATE("clear_private"),
+    MARK_OWNED("mark_owned"),
+    UNMARK_OWNED("unmark_owned"),
+    NOT_SCAM("not_a_scam");
 
     companion object { fun fromAlias(a: String) = entries.firstOrNull { it.alias == a } }
 }
@@ -115,6 +118,28 @@ object UserMethodInputs {
         put("senders", JsonArray(g.senders.map { JsonPrimitive(it.take(64)) }))
         put("source", g.source.wire)
         put("mode", mode)
+    }
+
+    fun markOwned(service: String, senders: List<String>, domains: List<String> = emptyList(), eventId: Long? = null): JsonObject = buildJsonObject {
+        put("service", service.take(80))
+        put("senders", JsonArray(senders.map { JsonPrimitive(it.take(64)) }))
+        if (domains.isNotEmpty()) put("domains", JsonArray(domains.map { JsonPrimitive(it.take(120)) }))
+        if (eventId != null) put("eventId", eventId)
+    }
+
+    fun unmarkOwned(accountId: Long, service: String, label: String? = null): JsonObject = buildJsonObject {
+        put("accountId", accountId)
+        put("service", service.take(80))
+        put("label", (label ?: "Remove $service from Owned accounts").take(160))
+    }
+
+    fun notScam(eventId: Long, number: String, label: String, markOwned: Boolean = false, service: String? = null, domains: List<String> = emptyList()): JsonObject = buildJsonObject {
+        put("eventId", eventId)
+        put("number", number.take(64))
+        put("label", label.take(80))
+        put("markOwned", markOwned)
+        if (!service.isNullOrBlank()) put("service", service.take(80))
+        if (domains.isNotEmpty()) put("domains", JsonArray(domains.map { JsonPrimitive(it.take(120)) }))
     }
 
     /** Jev probabilities from the function → output object (verdict decided here, in code). */

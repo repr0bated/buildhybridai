@@ -1,0 +1,17 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/repr0bated/callguardian-android/schemas/methods/guardian.feedback.not_scam.v1.output.json",
+  "title": "NotScamOutput",
+  "description": "Result of guardian.feedback.not_scam@v1.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["eventId", "trusted", "feedbackRecorded", "ownedMarked", "changedAt"],
+  "properties": {
+    "eventId": { "type": "integer", "minimum": 1, "title": "Text", "readOnly": true },
+    "trusted": { "type": "boolean", "title": "Sender trusted" },
+    "feedbackRecorded": { "type": "boolean", "title": "Feedback saved" },
+    "ownedMarked": { "type": "boolean", "title": "Marked as owned" },
+    "service": { "type": "string", "maxLength": 80, "title": "Service name" },
+    "changedAt": { "type": "integer", "minimum": 0, "format": "epoch-millis", "title": "Changed at" }
+  }
+}

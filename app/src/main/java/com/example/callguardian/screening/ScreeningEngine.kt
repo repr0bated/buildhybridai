@@ -1,6 +1,8 @@
 package com.example.callguardian.screening
 
 import com.example.callguardian.sms.QuarantineInbox
+import com.example.callguardian.accounts.OwnedStore
+import com.example.callguardian.accounts.SenderIds
 
 import android.content.Context
 import com.example.callguardian.ai.HybridScamAnalyzer
@@ -73,6 +75,7 @@ class ScreeningEngine @Inject constructor(
     private val subscriptionPrefs: com.example.callguardian.subscriptions.SubscriptionPrefs,
     private val integrationPrefs: com.example.callguardian.integrations.IntegrationPrefs,
     private val quarantineInbox: QuarantineInbox,
+    private val ownedStore: OwnedStore,
 ) {
     private val json = Json { ignoreUnknownKeys = false }
     val verdictValidator by lazy { SchemaValidator(asset("schemas/scam_verdict.schema.json"), "scam_verdict.schema.json") }
@@ -82,6 +85,62 @@ class ScreeningEngine @Inject constructor(
 
     fun normalize(number: String?): String? = number?.trim()?.let { n ->
         if (n.contains('@')) n else n.filter { it.isDigit() || it == '+' }.ifBlank { null }
+    }
+
+
+    private suspend fun profileFor(number: String?) = number?.let { n ->
+        profiles.get(n) ?: n.let { SenderIds.normalize(it) }.takeIf { it != n }?.let { profiles.get(it) }
+    }
+
+    private suspend fun historyCount(number: String?): Int {
+        if (number.isNullOrBlank()) return 0
+        val a = events.countByNumber(number)
+        val norm = SenderIds.normalize(number)
+        val b = if (norm != number) events.countByNumber(norm) else 0
+        return maxOf(a, b)
+    }
+
+    private suspend fun scanInput(channel: Channel, number: String?, body: String?, isContact: Boolean, extra: ScanInput.() -> ScanInput = { this }): ScanInput {
+        val owned = ownedStore.matchSender(number)
+        val trusted = profileFor(number)?.trusted == true
+        val shortHist = SenderIds.isShortCode(number) && historyCount(number) >= 1
+        return ScanInput(channel, number, body, isContact = isContact, isTrusted = trusted, shortCodeHistory = shortHist, owned = owned, allOwned = ownedStore.snapshot).extra()
+    }
+
+    private fun senderFeatureLine(input: ScanInput, number: String?): String {
+        val f = VerdictCalibrator.features(input)
+        return listOfNotNull(
+            number?.let { "number $it" },
+            if (SenderIds.isShortCode(number)) "short code" else null,
+            if (input.isContact) "saved contact" else "not in contacts",
+            if (input.isTrusted) "trusted" else null,
+            if (input.shortCodeHistory) "known short code with prior history" else null,
+            input.owned?.let { "owned account ${it.service}" },
+            f.officialHost?.let { "official link $it" },
+            f.lookalikeHost?.let { "look-alike link $it" },
+        ).joinToString("; ")
+    }
+
+    private fun linkDomainLine(body: String?): String? {
+        val hosts = OfficialDomains.hostsIn(body.orEmpty())
+        if (hosts.isEmpty()) return null
+        return hosts.joinToString(", ") { h ->
+            when {
+                OfficialDomains.isAnyOfficialHost(h) -> "$h (official)"
+                OfficialDomains.mentionedBrands(body.orEmpty()).any { OfficialDomains.isLookalike(h, it) } -> "$h (look-alike)"
+                else -> h
+            }
+        }
+    }
+
+    private fun ownedListLine(): String? {
+        val list = ownedStore.snapshot
+        if (list.isEmpty()) return null
+        return list.joinToString("; ") { a ->
+            val senders = a.senders.joinToString("/").ifBlank { "no senders yet" }
+            val domains = a.domains.joinToString("/").ifBlank { "no domains yet" }
+            "${a.service} [senders $senders, domains $domains]"
+        }
     }
 
     // ---------------------------------------------------------------- SMS
@@ -98,22 +157,25 @@ class ScreeningEngine @Inject constructor(
         val muted = (number ?: senderName)?.let { it in subscriptionPrefs.current().muted } == true ||
             rawNumber?.trim()?.let { it in subscriptionPrefs.current().muted } == true
         val contact = number?.let { runCatching { contacts.lookupContact(it) }.getOrNull() }
-        val profile = number?.let { profiles.get(it) }
-        val scan = HeuristicScanner.scan(ScanInput(Channel.SMS, number, body, isContact = contact != null))
+        val profile = profileFor(number)
+        val input = scanInput(Channel.SMS, number, body, isContact = contact != null)
+        val scan = HeuristicScanner.scan(input)
+        val cal = VerdictCalibrator.fuse(scan, VerdictCalibrator.features(input), channel = Channel.SMS)
         val blocked = profile?.shouldBlockMessages() == true
-        val wantsAi = runAi && (scan.riskLevel >= RiskLevel.LOW || contact == null)
+        val wantsAi = runAi && !(cal.band == VerdictCalibrator.Band.CLEAR && input.owned != null) && (cal.risk >= RiskLevel.LOW || contact == null)
 
         val id = events.insert(ScreeningEventEntity(
             channel = Channel.SMS.name, number = number, displayName = contact?.displayName ?: profile?.displayName ?: senderName,
             body = body, isContact = contact != null, isTest = isTest, source = source.wire, integration = integration,
             rulesScore = scan.score, rulesRisk = scan.riskLevel.name, rulesFlags = scan.reasons.joinToString("\n"), rulesMicros = scan.elapsedMicros,
             aiStatus = if (wantsAi) AiStatus.PENDING else AiStatus.NOT_RUN,
-            risk = (if (blocked) maxOf(scan.riskLevel, RiskLevel.HIGH) else scan.riskLevel).name, category = scan.category.name,
-            confidence = scan.score, reasons = scan.reasons.joinToString("\n"),
+            risk = (if (blocked) maxOf(cal.risk, RiskLevel.HIGH) else cal.risk).name, category = cal.category.name,
+            confidence = cal.confidence, reasons = cal.reasons.joinToString("\n"), advice = cal.advice,
             userAction = if (blocked) "BLOCKED_BY_LIST" else null, quarantined = blocked, smsUri = smsUri,
         ))
-        if (applyActions && !blocked) decideAndDispatch(id, MethodProposal(scan.method, scan.riskLevel, scan.score, scan.reasons, VerdictSource.RULES))
-        val saved = events.get(id)!!
+        if (id <= 0L) return@withContext 0L
+        if (applyActions && !blocked) decideAndDispatch(id, MethodProposal(cal.method, cal.risk, cal.confidence, cal.reasons, VerdictSource.RULES))
+        val saved = events.get(id) ?: return@withContext id
         if (blocked) quarantineInbox.hide(saved)
         val alert = !isTest && !muted
         if (alert) notifier.notifyEvent(saved, aiPending = wantsAi)
@@ -284,9 +346,15 @@ class ScreeningEngine @Inject constructor(
         val e = events.get(id) ?: return@withContext null
         val settings = prefs.current()
         val channel = Channel.valueOf(e.channel)
-        val rules = HeuristicScanner.scan(ScanInput(channel, e.number, e.body, e.isContact))
+        val input = scanInput(channel, e.number, e.body, e.isContact)
+        val rules = HeuristicScanner.scan(input)
         val sender = e.displayName ?: e.number ?: "hidden number"
-        val prompt = Prompts.triage(channel, sender, e.isContact, e.body, e.lookupSummary, rules)
+        val prompt = Prompts.triage(
+            channel, sender, e.isContact, e.body, e.lookupSummary, rules,
+            senderFeatures = senderFeatureLine(input, e.number),
+            linkDomains = linkDomainLine(e.body),
+            ownedList = ownedListLine(),
+        )
 
         events.update(e.copy(aiStatus = AiStatus.RUNNING, aiError = null))
         val run = try {
@@ -317,15 +385,22 @@ class ScreeningEngine @Inject constructor(
             events.update(rejected)
             return@withContext rejected
         }
+        val cal = VerdictCalibrator.fuse(
+            rules, VerdictCalibrator.features(input),
+            modelConfidence = verdict.confidence, modelRisk = verdict.riskLevel,
+            modelCategory = verdict.category, modelMethod = verdict.method,
+            modelReasons = verdict.reasons, modelAdvice = verdict.advice,
+            channel = channel,
+        )
         events.update(base.copy(
-            aiStatus = AiStatus.DONE, risk = verdict.riskLevel.name, category = verdict.category.name, confidence = verdict.confidence,
-            reasons = verdict.reasons.joinToString("\n"), advice = verdict.advice,
+            aiStatus = AiStatus.DONE, risk = cal.risk.name, category = cal.category.name, confidence = cal.confidence,
+            reasons = cal.reasons.joinToString("\n"), advice = cal.advice,
         ))
         // Don't re-run a method the rules already executed for this event.
-        val alreadyRan = e.autoApplied && e.finalAction == verdict.method.alias
-        if (applyActions && !alreadyRan) decideAndDispatch(id, MethodProposal(verdict.method, verdict.riskLevel, verdict.confidence, verdict.reasons, run.source))
-        val final = events.get(id)!!
-        if (notify && !e.isTest && (verdict.riskLevel >= RiskLevel.MEDIUM || final.policyDispatch != Dispatch.DENY.name)) notifier.notifyEvent(final, aiPending = false)
+        val alreadyRan = e.autoApplied && e.finalAction == cal.method.alias
+        if (applyActions && !alreadyRan) decideAndDispatch(id, MethodProposal(cal.method, cal.risk, cal.confidence, cal.reasons, run.source))
+        val final = events.get(id) ?: return@withContext null
+        if (notify && !e.isTest && (cal.risk >= RiskLevel.MEDIUM || final.policyDispatch != Dispatch.DENY.name)) notifier.notifyEvent(final, aiPending = false)
         else if (notify && !e.isTest) notifier.cancel(id)
         final
     }

@@ -85,6 +85,7 @@ fun LabScreen(vm: AppViewModel, onEvent: (Long) -> Unit, watchlist: Boolean = fa
             View.SUBSCRIPTIONS -> Subscriptions(vm) { pending = it }
             View.SAMPLES -> Samples(vm, onEvent)
             View.TABS -> {
+                if (watchlist) OwnedAccountsSection(vm) { pending = it }
                 if (tabs.isEmpty()) { Box(Modifier.padding(16.dp)) { Hint(if (watchlist) "No linked apps are installed and on. Google Voice, WhatsApp and WhatsApp Business show up here; turn them on in Settings → Watchlist." else "Texts and Calls are off. Turn them on in Settings → Watchlist.") }; return@Column }
                 val sel = tab.coerceIn(0, (tabs.size - 1).coerceAtLeast(0))
                 ScrollableTabRow(selectedTabIndex = sel, edgePadding = 8.dp) {
@@ -212,6 +213,7 @@ private fun MyTexts(vm: AppViewModel, onEvent: (Long) -> Unit, open: (PendingUse
         item {
             val process by vm.processAll.collectAsState()
             ProcessAllButton(process, onStart = { vm.startProcessAll(includeLogs = true) }, onCancel = vm::cancelProcessAll)
+            OwnedCandidateList(vm, process, open)
         }
         item { Hint("Tap a text to check it. Process all runs analysis only — nothing is sent and no STOP is texted.") }
         when {
@@ -222,6 +224,9 @@ private fun MyTexts(vm: AppViewModel, onEvent: (Long) -> Unit, open: (PendingUse
                 com.example.callguardian.privacy.PrivateGate(hidden = hidden) {
                 SectionCard(Modifier.clickable { vm.reviewText(m, onEvent) }) {
                     Row { Text(m.address, style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f)); Text(time(m.date), style = MaterialTheme.typography.labelSmall) }
+                    if (com.example.callguardian.ui.components.LocalOwned.current.forSender(m.address) != null) {
+                        com.example.callguardian.ui.components.OwnedPill()
+                    }
                     Text(m.body, style = MaterialTheme.typography.bodySmall, maxLines = 2, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     if (SubscriptionDetector.isSubscription(m.address, m.body)) SubscriptionButton(vm, m.address, MessageSource.SMS, open)
                 }
@@ -435,10 +440,55 @@ private fun Processed(vm: AppViewModel, onEvent: (Long) -> Unit, onReceipt: (Lon
 fun actionLabel(alias: String): String = when (alias) {
     "block_number", "BLOCKED_BY_LIST" -> "Blocked"
     "allow_number" -> "Trusted"
+    "not_a_scam" -> "Not a scam"
+    "mark_owned" -> "Owned"
+    "unmark_owned" -> "Unmarked"
     "quarantine_sms" -> "Quarantined"
     "reject_call" -> "Silenced"
     "report_scam" -> "Reported"
     "save_contact" -> "Saved contact"
     "explain_cloud" -> "Explained (cloud)"
     else -> alias
+}
+
+
+@Composable
+private fun OwnedAccountsSection(vm: AppViewModel, open: (PendingUserMethod) -> Unit) {
+    val owned by vm.ownedAccounts.collectAsState()
+    SectionCard(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+        Text("Owned", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+        Text("Services you have an account with. Texts from these senders with official-domain links are treated as clear. Impersonation is flagged louder.",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (owned.isEmpty()) {
+            Text("None yet. Use “Not a scam” or “Mark as owned account” on a text, or confirm a suggestion after Process all.",
+                style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp))
+        } else owned.forEach { a ->
+            Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                Column(Modifier.weight(1f)) {
+                    Text(a.service, style = MaterialTheme.typography.titleSmall)
+                    Text(listOf(a.senders.joinToString(), a.domains.joinToString()).filter { it.isNotBlank() }.joinToString(" · "),
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                TextButton(onClick = { open(PendingUserMethod(UserMethod.UNMARK_OWNED, vm.unmarkOwnedInput(a), "Remove owned account")) }) { Text("Remove") }
+            }
+        }
+    }
+}
+
+@Composable
+fun OwnedCandidateList(vm: AppViewModel, process: com.example.callguardian.ui.ProcessAllState, open: (PendingUserMethod) -> Unit) {
+    if (process.candidates.isEmpty()) return
+    Spacer(Modifier.height(8.dp))
+    Text("Suggested owned accounts", style = MaterialTheme.typography.titleSmall)
+    Text("Repeat senders with consistent official domains. Nothing is marked unless you confirm.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    process.candidates.forEach { c ->
+        SectionCard(Modifier.padding(top = 8.dp)) {
+            Text(c.service, style = MaterialTheme.typography.titleSmall)
+            Text("${c.senders.joinToString()} · ${c.domains.joinToString()} · ${c.messageCount} texts", style = MaterialTheme.typography.bodySmall)
+            Row {
+                TextButton(onClick = { open(PendingUserMethod(UserMethod.MARK_OWNED, vm.markOwnedInput(c), "Mark as owned account")) }) { Text("Mark as owned") }
+            }
+        }
+    }
+    TextButton(onClick = vm::dismissOwnedCandidates) { Text("Dismiss suggestions") }
 }

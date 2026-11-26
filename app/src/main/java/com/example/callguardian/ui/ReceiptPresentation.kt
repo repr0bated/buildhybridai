@@ -75,6 +75,9 @@ object ReceiptPresentation {
             alias.contains("explain") -> "Explained"
             alias.contains("save") || alias.contains("contact") -> "Saved"
             alias.contains("report") -> "Reported"
+            alias.contains("mark_owned") -> "Owned"
+            alias.contains("unmark_owned") -> "Unmarked"
+            alias.contains("not_scam") || alias.contains("not_a_scam") -> "Trusted"
             alias.contains("integration") || alias.contains("set_integration") -> if (enabled == false) "Disabled" else if (enabled == true) "Enabled" else "Updated"
             else -> methodWord(alias)
         }
@@ -84,7 +87,7 @@ object ReceiptPresentation {
         val o = outcome(r, input, output)
         return when (o) {
             "Blocked", "Stopped", "Quarantined" -> ReceiptTone.BLOCK
-            "Allowed", "Kept", "Reviewed", "Saved", "Visible", "Enabled", "Checked", "Cleared" -> ReceiptTone.ALLOW
+            "Allowed", "Kept", "Reviewed", "Saved", "Visible", "Enabled", "Checked", "Cleared", "Owned", "Trusted" -> ReceiptTone.ALLOW
             "Failed", "Invalid" -> ReceiptTone.BAD
             else -> ReceiptTone.NEUTRAL
         }

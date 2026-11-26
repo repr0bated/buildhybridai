@@ -1,0 +1,20 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/repr0bated/callguardian-android/schemas/methods/guardian.feedback.not_scam.v1.input.json",
+  "title": "NotScamInput",
+  "description": "Tell Call Guardian this text is not a scam. The sender is added to your Trust list so future texts from them are not treated as fraud. Optionally also mark the service as an Owned account (E-ZPass, a bank, Cash App, and so on).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["eventId", "number", "label"],
+  "properties": {
+    "eventId": { "type": "integer", "minimum": 1, "title": "Text", "readOnly": true },
+    "number": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[^\\n\\r]{1,64}$", "title": "Sender", "readOnly": true },
+    "label": { "type": "string", "minLength": 1, "maxLength": 80, "title": "What this applies to", "readOnly": true },
+    "markOwned": { "type": "boolean", "title": "Mark as owned account", "default": false },
+    "service": { "type": "string", "minLength": 1, "maxLength": 80, "title": "Service name" },
+    "domains": {
+      "type": "array", "title": "Official domains", "maxItems": 20,
+      "items": { "type": "string", "minLength": 3, "maxLength": 120, "pattern": "^[A-Za-z0-9.-]+\\.[A-Za-z]{2,24}$" }
+    }
+  }
+}

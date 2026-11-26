@@ -76,6 +76,7 @@ fun EventDetailScreen(vm: AppViewModel, id: Long, onBack: () -> Unit, onReceipt:
                 }
             }
             PrivacyActions(vm, ev) { userSheet = it }
+            FeedbackActions(vm, ev) { userSheet = it }
             Actions(vm, ev) { m -> sheet = m to vm.defaultInput(ev, m) }
             CloudCard(vm, ev, receipts, onAsk = { sheet = GuardianMethod.EXPLAIN_CLOUD to vm.defaultInput(ev, GuardianMethod.EXPLAIN_CLOUD) },
                 onOffer = { m -> sheet = m to vm.defaultInput(ev, m) })
@@ -104,7 +105,10 @@ private fun Header(e: ScreeningEventEntity) {
         }
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
-            Text(e.displayName ?: e.number ?: "Hidden number", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(e.displayName ?: e.number ?: "Hidden number", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+                if (com.example.callguardian.ui.components.LocalOwned.current.forSender(e.number) != null) com.example.callguardian.ui.components.OwnedPill()
+            }
             Text(listOfNotNull(com.example.callguardian.model.MessageSource.fromWire(e.source).label, e.number?.takeIf { e.displayName != null }, if (e.isContact) "Contact" else "Not in contacts", fullTime(e.receivedAt)).joinToString(" · "),
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             e.lookupSummary?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
@@ -209,6 +213,25 @@ private fun Step(n: Int, title: String, color: Color, line: String, detail: Stri
 }
 
 @OptIn(ExperimentalLayoutApi::class)
+
+@Composable
+private fun FeedbackActions(vm: AppViewModel, e: ScreeningEventEntity, open: (PendingUserMethod) -> Unit) {
+    val owned = com.example.callguardian.ui.components.LocalOwned.current.forSender(e.number)
+    androidx.compose.foundation.layout.Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (e.number != null) {
+            FilledTonalButton(onClick = { open(PendingUserMethod(UserMethod.NOT_SCAM, vm.notScamInput(e), "Not a scam", e.id)) }, modifier = Modifier.fillMaxWidth()) {
+                Text("Not a scam")
+            }
+            if (owned == null) OutlinedButton(onClick = {
+                val hosts = com.example.callguardian.screening.OfficialDomains.hostsIn(e.body.orEmpty())
+                    .filter { com.example.callguardian.screening.OfficialDomains.isAnyOfficialHost(it) }
+                val service = e.displayName ?: com.example.callguardian.screening.OfficialDomains.mentionedBrands(e.body.orEmpty()).firstOrNull() ?: "Account"
+                open(PendingUserMethod(UserMethod.MARK_OWNED, vm.markOwnedInput(service, listOf(e.number!!), hosts, e.id), "Mark as owned account", e.id))
+            }, modifier = Modifier.fillMaxWidth()) { Text("Mark as owned account") }
+            else Text("Owned account: ${owned.service}", style = MaterialTheme.typography.bodySmall, color = Brand.Lime)
+        }
+    }
+}
 
 @Composable
 private fun PrivacyActions(vm: AppViewModel, e: ScreeningEventEntity, open: (PendingUserMethod) -> Unit) {

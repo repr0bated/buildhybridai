@@ -99,6 +99,7 @@ data class ProcessAllState(
     val done: Int = 0,
     val failed: Int = 0,
     val cancelled: Boolean = false,
+    val candidates: List<com.example.callguardian.accounts.OwnedCandidate> = emptyList(),
 ) {
     val fraction: Float get() = if (total <= 0) 0f else (current.coerceAtMost(total) / total.toFloat())
 }

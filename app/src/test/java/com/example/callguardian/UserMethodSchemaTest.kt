@@ -140,5 +140,20 @@ class UserMethodSchemaTest {
         val r = m(UserMethod.UNSUBSCRIBE_SMS).inputValidator.validate(UserMethodInputs.unsubscribe(g[0]).toString())
         assertTrue(r.errors.toString(), r.valid)
     }
-}
 
+    @Test fun markOwnedInputValidates() {
+        val r = m(UserMethod.MARK_OWNED).inputValidator.validate(
+            UserMethodInputs.markOwned("E-ZPass", listOf("51185"), listOf("e-zpassny.com"), eventId = 9).toString())
+        assertTrue(r.errors.toString(), r.valid)
+        val u = m(UserMethod.UNMARK_OWNED).inputValidator.validate(
+            UserMethodInputs.unmarkOwned(1, "E-ZPass").toString())
+        assertTrue(u.errors.toString(), u.valid)
+    }
+
+    @Test fun notScamInputValidatesAndOffersOwned() {
+        val inp = UserMethodInputs.notScam(4, "51185", "E-ZPass 51185", markOwned = true, service = "E-ZPass", domains = listOf("e-zpassny.com"))
+        val r = m(UserMethod.NOT_SCAM).inputValidator.validate(inp.toString())
+        assertTrue(r.errors.toString(), r.valid)
+        assertEquals(kotlinx.serialization.json.JsonPrimitive(true), inp["markOwned"])
+    }
+}

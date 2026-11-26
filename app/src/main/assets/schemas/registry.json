@@ -1,5 +1,5 @@
 {
-  "registryVersion": "2026.11.4",
+  "registryVersion": "2026.11.5",
   "methods": [
     {
       "id": "guardian.call.block@v1",
@@ -280,6 +280,58 @@
       "requiresConsent": true,
       "input": "methods/guardian.privacy.clear_private.v1.input.json",
       "output": "methods/guardian.privacy.clear_private.v1.output.json"
+    }
+,
+    {
+      "id": "guardian.accounts.mark_owned@v1",
+      "alias": "mark_owned",
+      "version": 1,
+      "title": "Mark as owned account",
+      "description": "Save a service you have an account with. Texts from its senders with links to its official domains are treated as Owned (clear). Look-alikes are flagged as impersonation.",
+      "capability": "accounts.local",
+      "execution": "device",
+      "channels": ["CALL", "SMS"],
+      "minRisk": "SAFE",
+      "autoApply": false,
+      "contactSafe": true,
+      "proposable": false,
+      "requiresConsent": true,
+      "input": "methods/guardian.accounts.mark_owned.v1.input.json",
+      "output": "methods/guardian.accounts.mark_owned.v1.output.json"
+    },
+    {
+      "id": "guardian.accounts.unmark_owned@v1",
+      "alias": "unmark_owned",
+      "version": 1,
+      "title": "Remove owned account",
+      "description": "Remove this service from your Owned accounts.",
+      "capability": "accounts.local",
+      "execution": "device",
+      "channels": ["CALL", "SMS"],
+      "minRisk": "SAFE",
+      "autoApply": false,
+      "contactSafe": true,
+      "proposable": false,
+      "requiresConsent": true,
+      "input": "methods/guardian.accounts.unmark_owned.v1.input.json",
+      "output": "methods/guardian.accounts.unmark_owned.v1.output.json"
+    },
+    {
+      "id": "guardian.feedback.not_scam@v1",
+      "alias": "not_a_scam",
+      "version": 1,
+      "title": "Not a scam",
+      "description": "This text is not a scam. Trust the sender, and optionally mark it as an owned account.",
+      "capability": "feedback.local",
+      "execution": "device",
+      "channels": ["CALL", "SMS"],
+      "minRisk": "SAFE",
+      "autoApply": false,
+      "contactSafe": true,
+      "proposable": false,
+      "requiresConsent": true,
+      "input": "methods/guardian.feedback.not_scam.v1.input.json",
+      "output": "methods/guardian.feedback.not_scam.v1.output.json"
     }
   ]
 }

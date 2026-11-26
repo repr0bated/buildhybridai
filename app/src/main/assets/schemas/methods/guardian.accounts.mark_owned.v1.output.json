@@ -1,0 +1,16 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/repr0bated/callguardian-android/schemas/methods/guardian.accounts.mark_owned.v1.output.json",
+  "title": "MarkOwnedOutput",
+  "description": "Result of guardian.accounts.mark_owned@v1.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["accountId", "service", "senders", "domains", "changedAt"],
+  "properties": {
+    "accountId": { "type": "integer", "minimum": 1, "title": "Account id", "readOnly": true },
+    "service": { "type": "string", "minLength": 1, "maxLength": 80, "title": "Service name", "readOnly": true },
+    "senders": { "type": "array", "items": { "type": "string" }, "title": "Senders", "readOnly": true },
+    "domains": { "type": "array", "items": { "type": "string" }, "title": "Official domains", "readOnly": true },
+    "changedAt": { "type": "integer", "minimum": 0, "format": "epoch-millis", "title": "Changed at" }
+  }
+}

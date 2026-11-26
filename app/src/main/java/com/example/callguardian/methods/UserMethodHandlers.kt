@@ -8,6 +8,17 @@ import android.net.Uri
 import android.telephony.SmsManager
 import androidx.core.content.ContextCompat
 import com.example.callguardian.data.db.AiStatus
+import com.example.callguardian.accounts.OwnedStore
+import com.example.callguardian.accounts.SenderIds
+import com.example.callguardian.data.db.PhoneProfileDao
+import com.example.callguardian.data.db.PhoneProfileEntity
+import com.example.callguardian.methods.gen.GuardianAccountsMark_ownedV1Input
+import com.example.callguardian.methods.gen.GuardianAccountsMark_ownedV1Output
+import com.example.callguardian.methods.gen.GuardianAccountsUnmark_ownedV1Input
+import com.example.callguardian.methods.gen.GuardianAccountsUnmark_ownedV1Output
+import com.example.callguardian.methods.gen.GuardianFeedbackNot_scamV1Input
+import com.example.callguardian.methods.gen.GuardianFeedbackNot_scamV1Output
+import com.example.callguardian.screening.OfficialDomains
 import com.example.callguardian.data.db.ScreeningEventDao
 import com.example.callguardian.data.db.ScreeningEventEntity
 import com.example.callguardian.integrations.IntegrationPrefs
@@ -54,6 +65,8 @@ class UserMethodHandlers @Inject constructor(
     private val subs: SubscriptionPrefs,
     private val integrations: IntegrationPrefs,
     private val privacy: PrivacyStore,
+    private val owned: OwnedStore,
+    private val profiles: PhoneProfileDao,
 ) {
     private val json = MethodRegistry.json
     private fun <I> decode(s: KSerializer<I>, input: JsonObject): I = json.decodeFromJsonElement(s, input)
@@ -92,6 +105,9 @@ class UserMethodHandlers @Inject constructor(
                 GuardianPrivacyClear_privateV1Output.Kind.valueOf(i.kind.name), key, false, System.currentTimeMillis())),
                 notes = listOf("This item is visible again."))
         }
+        UserMethod.MARK_OWNED -> markOwned(decode(GuardianAccountsMark_ownedV1Input.serializer(), input))
+        UserMethod.UNMARK_OWNED -> unmarkOwned(decode(GuardianAccountsUnmark_ownedV1Input.serializer(), input))
+        UserMethod.NOT_SCAM -> notScam(decode(GuardianFeedbackNot_scamV1Input.serializer(), input))
     }
 
     /** Call-log review: rules on the call's metadata now; Gemini Nano 4 runs next (ViewModel) if asked. No audio, nothing leaves the phone. */
@@ -153,5 +169,52 @@ class UserMethodHandlers @Inject constructor(
         val intent = Intent(Intent.ACTION_VIEW, uri).addCategory(Intent.CATEGORY_BROWSABLE).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         return HandlerOutcome(out(GuardianSmsManage_subscriptionV1Output.serializer(), GuardianSmsManage_subscriptionV1Output(i.url, i.domain, true, System.currentTimeMillis())),
             launch = intent, notes = listOf("Opened in the browser. You unsubscribe on the page yourself; nothing is automated.") + listOfNotNull(i.warning?.let { "Warning shown: $it" }))
+    }
+
+    private suspend fun markOwned(i: GuardianAccountsMark_ownedV1Input): HandlerOutcome {
+        val acct = owned.upsert(i.service, i.senders.toList(), i.domains?.toList().orEmpty())
+        return HandlerOutcome(out(GuardianAccountsMark_ownedV1Output.serializer(), GuardianAccountsMark_ownedV1Output(
+            acct.id.coerceAtLeast(1), acct.service, acct.senders, acct.domains, acct.updatedAt)),
+            notes = listOf("Saved ${acct.service} as an owned account on this phone."))
+    }
+
+    private suspend fun unmarkOwned(i: GuardianAccountsUnmark_ownedV1Input): HandlerOutcome {
+        owned.delete(i.accountId)
+        return HandlerOutcome(out(GuardianAccountsUnmark_ownedV1Output.serializer(), GuardianAccountsUnmark_ownedV1Output(
+            i.accountId, i.service, true, System.currentTimeMillis())),
+            notes = listOf("Removed ${i.service} from Owned accounts."))
+    }
+
+    private suspend fun notScam(i: GuardianFeedbackNot_scamV1Input): HandlerOutcome {
+        val now = System.currentTimeMillis()
+        val prev = profiles.get(i.number)
+        profiles.upsert((prev ?: PhoneProfileEntity(phoneNumber = i.number)).copy(trusted = true, blockMode = com.example.callguardian.model.BlockMode.NONE.name, updatedAt = now))
+        val ev = events.get(i.eventId)
+        ev?.let { events.update(it.copy(userAction = "not_a_scam", risk = "SAFE", category = "NONE", confidence = 20,
+            advice = "You marked this as not a scam. The sender is now trusted.",
+            reasons = (listOf("User feedback: not a scam.") + it.reasons.lines()).distinct().joinToString("\n"))) }
+        var ownedMarked = i.markOwned == true
+        var service = i.service
+        if (ownedMarked) {
+            val hosts = i.domains?.toList().orEmpty().ifEmpty {
+                OfficialDomains.hostsIn(ev?.body.orEmpty()).filter { OfficialDomains.isAnyOfficialHost(it) }
+            }
+            val name = service?.takeIf { it.isNotBlank() }
+                ?: OfficialDomains.mentionedBrands(ev?.body.orEmpty()).firstOrNull()?.let { prettyBrand(it) }
+                ?: ev?.displayName
+                ?: "Account"
+            service = name
+            owned.upsert(name, listOf(i.number), hosts)
+        }
+        return HandlerOutcome(out(GuardianFeedbackNot_scamV1Output.serializer(), GuardianFeedbackNot_scamV1Output(
+            i.eventId, true, true, ownedMarked, service, now)),
+            notes = listOf("Recorded as not a scam. ${i.number} is now trusted.") +
+                listOfNotNull(if (ownedMarked) "Also marked ${service ?: "the service"} as an owned account." else "You can also mark it as an owned account."))
+    }
+
+    private fun prettyBrand(key: String) = when (com.example.callguardian.screening.OfficialDomains.brandKey(key)) {
+        "ezpass", "e-zpass" -> "E-ZPass"
+        "cashapp", "cash-app" -> "Cash App"
+        else -> key.replaceFirstChar { it.uppercase() }
     }
 }

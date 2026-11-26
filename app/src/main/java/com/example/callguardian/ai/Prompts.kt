@@ -6,14 +6,22 @@ import com.example.callguardian.screening.RuleScan
 /** Prompts are short on purpose: on-device requests are capped at ~4000 tokens. */
 object Prompts {
 
-    fun triage(channel: Channel, senderLabel: String, isContact: Boolean, body: String?, lookup: String?, rules: RuleScan): String = buildString {
+    fun triage(
+        channel: Channel, senderLabel: String, isContact: Boolean, body: String?, lookup: String?, rules: RuleScan,
+        senderFeatures: String? = null, linkDomains: String? = null, ownedList: String? = null,
+    ): String = buildString {
         appendLine("You are Call Guardian, a scam detector running privately on the user's phone.")
         appendLine("Classify this incoming ${if (channel == Channel.SMS) "text message" else "phone call"} and pick ONE method to call.")
         appendLine("Methods: NONE (normal), " + (if (channel == Channel.SMS) "QUARANTINE_SMS (hide behind a warning), " else "REJECT_CALL (silence or reject), ") +
             "BLOCK_NUMBER (only for an obvious scam), ALLOW_NUMBER (clearly legitimate), REPORT_SCAM, EXPLAIN_CLOUD (unsure; ask for a deeper look).")
         appendLine("You only propose; a policy checks your choice. Be calm and specific. Reasons must quote or paraphrase the content.")
+        appendLine("Never treat a brand name alone as proof the message is legitimate. An official link domain lowers suspicion; a look-alike domain raises it.")
+        appendLine("Do not use 100 for confidence; leave room for uncertainty. Prefer a mid confidence when sender or domain evidence is mixed.")
         appendLine()
         appendLine("Sender: $senderLabel (${if (isContact) "saved contact" else "not in contacts"})")
+        if (!senderFeatures.isNullOrBlank()) appendLine("Sender features: $senderFeatures")
+        if (!linkDomains.isNullOrBlank()) appendLine("Link domains: $linkDomains")
+        if (!ownedList.isNullOrBlank()) appendLine("User's owned accounts: $ownedList")
         if (!lookup.isNullOrBlank()) appendLine("Caller facts: $lookup")
         if (rules.flags.isNotEmpty()) appendLine("Local rule hints (may be wrong): ${rules.reasons.joinToString("; ")}")
         if (channel == Channel.SMS) {

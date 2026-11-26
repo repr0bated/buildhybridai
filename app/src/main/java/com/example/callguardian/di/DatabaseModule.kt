@@ -20,7 +20,7 @@ object DatabaseModule {
     fun provideDatabase(@ApplicationContext context: Context): CallGuardianDatabase =
         Room.databaseBuilder(context, CallGuardianDatabase::class.java, "call_guardian.db")
             // v1/v2 schemas from the original app were never shipped to users.
-            .addMigrations(com.example.callguardian.data.db.MIGRATION_3_4, com.example.callguardian.data.db.MIGRATION_4_5)
+            .addMigrations(com.example.callguardian.data.db.MIGRATION_3_4, com.example.callguardian.data.db.MIGRATION_4_5, com.example.callguardian.data.db.MIGRATION_5_6)
             .fallbackToDestructiveMigration(dropAllTables = true)
             .build()
 
@@ -29,4 +29,5 @@ object DatabaseModule {
     @Provides fun receipts(db: CallGuardianDatabase): com.example.callguardian.data.db.ReceiptDao = db.receipts()
     @Provides fun quarantined(db: CallGuardianDatabase): com.example.callguardian.data.db.QuarantinedSmsDao = db.quarantined()
     @Provides fun privacyMarks(db: CallGuardianDatabase): com.example.callguardian.data.db.PrivacyMarkDao = db.privacyMarks()
+    @Provides fun ownedAccounts(db: CallGuardianDatabase): com.example.callguardian.data.db.OwnedAccountDao = db.ownedAccounts()
 }

@@ -30,6 +30,10 @@ data class ScanInput(
     val lookupLineType: String? = null,
     val lookupTags: List<String> = emptyList(),
     val recentCallsFromNumber: Int = 0,
+    val isTrusted: Boolean = false,
+    val shortCodeHistory: Boolean = false,
+    val owned: com.example.callguardian.accounts.OwnedAccount? = null,
+    val allOwned: List<com.example.callguardian.accounts.OwnedAccount> = emptyList(),
 )
 
 /**
@@ -81,19 +85,40 @@ object HeuristicScanner {
         val lower = body.lowercase()
 
         if (input.channel == Channel.SMS && body.isNotBlank()) {
-            val urls = urlRegex.findAll(body).map { it.value.lowercase() }.toList()
-            if (urls.isNotEmpty()) {
-                flags += RuleFlag("link", "Contains a link", 15, ScamCategory.PHISHING_LINK)
-                if (urls.any { u -> shorteners.any { u.contains(it) } }) flags += RuleFlag("shortener", "Link hidden behind a URL shortener", 15, ScamCategory.PHISHING_LINK)
+            val hosts = OfficialDomains.hostsIn(body)
+            val mentioned = OfficialDomains.mentionedBrands(body)
+            if (hosts.isNotEmpty()) {
+                val official = hosts.any { OfficialDomains.isAnyOfficialHost(it) }
+                flags += RuleFlag("link", "Contains a link", if (official && hosts.all { OfficialDomains.isAnyOfficialHost(it) }) 5 else 15, ScamCategory.PHISHING_LINK)
+                if (hosts.any { h -> shorteners.any { h.contains(it) } } || body.let { b -> shorteners.any { b.contains(it, true) } }) {
+                    flags += RuleFlag("shortener", "Link hidden behind a URL shortener", 15, ScamCategory.PHISHING_LINK)
+                }
                 if (ipUrlRegex.containsMatchIn(body)) flags += RuleFlag("iplink", "Link points to a bare IP address", 20, ScamCategory.PHISHING_LINK)
-                if (urls.any { u -> riskyTlds.any { tld -> hostOf(u).endsWith(tld) } }) flags += RuleFlag("tld", "Link uses a throwaway domain", 15, ScamCategory.PHISHING_LINK)
-                val lookalike = urls.firstOrNull { u -> val h = hostOf(u); brands.any { b -> val bb = b.replace(" ", ""); h.contains(bb) && !isOfficial(h, bb) } }
-                if (lookalike != null) flags += RuleFlag("lookalike", "Look-alike brand domain (${hostOf(lookalike)})", 25, ScamCategory.IMPERSONATION)
+                if (hosts.any { h -> riskyTlds.any { tld -> h.endsWith(tld) } && !OfficialDomains.isAnyOfficialHost(h) }) {
+                    flags += RuleFlag("tld", "Link uses a throwaway domain", 15, ScamCategory.PHISHING_LINK)
+                }
+                val lookalike = mentioned.firstNotNullOfOrNull { b -> OfficialDomains.lookalikeIn(hosts, b) }
+                    ?: hosts.firstOrNull { h -> brands.any { b -> OfficialDomains.isLookalike(h, b) } }
+                if (lookalike != null) flags += RuleFlag("lookalike", "Look-alike brand domain ($lookalike)", 25, ScamCategory.IMPERSONATION)
             }
             textPatterns.forEach { p -> if (p.regex.containsMatchIn(body)) flags += RuleFlag(p.id, p.label, p.weight, p.category) }
-            val brand = brands.firstOrNull { Regex("""\b${Regex.escape(it)}\b""").containsMatchIn(lower) }
-            if (brand != null && flags.any { it.weight >= 15 }) {
+            val brand = mentioned.firstOrNull()
+            val officialForBrand = brand != null && hosts.any { OfficialDomains.isOfficialHost(it, brand) }
+            if (brand != null && flags.any { it.weight >= 15 } && !officialForBrand) {
                 flags += RuleFlag("brand", "Uses the name \"${brand.uppercase()}\"", 10, ScamCategory.IMPERSONATION)
+            }
+            val ownedImpersonation = input.allOwned.firstOrNull { acct ->
+                body.contains(acct.service, ignoreCase = true) || OfficialDomains.mentionedBrands(body).any { m ->
+                    OfficialDomains.brandKey(acct.service) == OfficialDomains.brandKey(m)
+                }
+            }
+            if (ownedImpersonation != null) {
+                val senderOwned = input.owned?.id == ownedImpersonation.id
+                val lookalikeOwned = hosts.any { h -> !OfficialDomains.isOfficialHost(h, ownedImpersonation.domains.toSet()) &&
+                    OfficialDomains.tokensFor(OfficialDomains.brandKey(ownedImpersonation.service) ?: "").any { t -> h.contains(t) } }
+                if (!senderOwned || lookalikeOwned) {
+                    flags += RuleFlag("owned_impersonation", "Claims owned account \"${ownedImpersonation.service}\" from an unverified sender or look-alike domain", 30, ScamCategory.IMPERSONATION)
+                }
             }
             if (input.number?.contains('@') == true) flags += RuleFlag("email2sms", "Sent from an email address, not a phone", 15)
         }
@@ -134,19 +159,5 @@ object HeuristicScanner {
         return RuleScan(score, flags, risk, category, method, (System.nanoTime() - start) / 1000)
     }
 
-    internal fun hostOf(url: String): String =
-        url.removePrefix("https://").removePrefix("http://").removePrefix("www.")
-            .substringBefore('/').substringBefore('?').substringBefore(':').trimEnd('.', ',', ')')
-
-    private fun isOfficial(host: String, brand: String): Boolean {
-        val official = mapOf(
-            "usps" to "usps.com", "fedex" to "fedex.com", "ups" to "ups.com", "dhl" to "dhl.com",
-            "amazon" to "amazon.com", "apple" to "apple.com", "icloud" to "icloud.com", "paypal" to "paypal.com",
-            "netflix" to "netflix.com", "chase" to "chase.com", "wellsfargo" to "wellsfargo.com",
-            "bankofamerica" to "bankofamerica.com", "citi" to "citi.com", "irs" to "irs.gov",
-            "medicare" to "medicare.gov", "socialsecurity" to "ssa.gov", "ezpass" to "e-zpassny.com",
-            "coinbase" to "coinbase.com", "venmo" to "venmo.com", "zelle" to "zellepay.com", "microsoft" to "microsoft.com",
-        )[brand] ?: return false
-        return host == official || host.endsWith(".$official")
-    }
+    internal fun hostOf(url: String): String = OfficialDomains.hostOf(url)
 }

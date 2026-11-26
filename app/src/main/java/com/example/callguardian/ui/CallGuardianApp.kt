@@ -94,6 +94,7 @@ fun CallGuardianApp(vm: AppViewModel, actions: SetupActions, openEventId: Long?,
     val route = entry?.destination?.route
     val marks by vm.privacyKeys.collectAsState()
     val unlocked by vm.privacyUnlocked.collectAsState()
+    val owned by vm.ownedAccounts.collectAsState()
     val view = androidx.compose.ui.platform.LocalView.current
     androidx.compose.runtime.DisposableEffect(marks.isNotEmpty()) {
         val window = (view.context as? android.app.Activity)?.window
@@ -105,6 +106,7 @@ fun CallGuardianApp(vm: AppViewModel, actions: SetupActions, openEventId: Long?,
         com.example.callguardian.privacy.LocalPrivacy provides com.example.callguardian.privacy.PrivacyUiState(
             marks = marks, unlocked = unlocked, onUnlock = actions.unlockPrivate,
         ),
+        com.example.callguardian.ui.components.LocalOwned provides com.example.callguardian.ui.components.OwnedLookup(owned),
     ) {
     CallGuardianNav(vm, actions, openEventId, onEventOpened, nav, route)
     }

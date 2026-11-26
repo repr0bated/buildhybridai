@@ -22,8 +22,11 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -48,6 +51,8 @@ fun ActivityScreen(vm: AppViewModel, onEvent: (Long) -> Unit, onReceipt: (Long) 
         if (i >= 0) tab = i
     }
     val process by vm.processAll.collectAsState()
+    var pending by remember { mutableStateOf<PendingUserMethod?>(null) }
+    val context = LocalContext.current
     Column(Modifier.fillMaxSize()) {
         GuardianTopBar(title = { Text("activity") }, onSearch = onSearch)
         ScrollableTabRow(selectedTabIndex = tab, edgePadding = 8.dp, containerColor = Brand.Void, contentColor = Brand.Lime) {
@@ -59,12 +64,20 @@ fun ActivityScreen(vm: AppViewModel, onEvent: (Long) -> Unit, onReceipt: (Long) 
                 val open = recent.filter(HomeStats::isUnprocessed)
                 LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     item { ProcessAllButton(process, onStart = { vm.startProcessAll(includeLogs = false) }, onCancel = vm::cancelProcessAll) }
+                    if (process.candidates.isNotEmpty()) item { OwnedCandidateList(vm, process) { pending = it } }
                     if (open.isEmpty()) item { Text("Nothing waiting. Incoming calls and texts land here until analysis finishes.", style = MaterialTheme.typography.bodySmall, color = Brand.InkDim) }
                     items(open, key = { it.id }) { e -> EventRow(e) { onEvent(e.id) } }
                 }
             }
             "processed" -> Processed(vm, onEvent, onReceipt)
             else -> QuarantineList(vm, onEvent)
+        }
+    }
+    pending?.let { p ->
+        UserMethodSheet(vm, p, onDismiss = { pending = null }) { r ->
+            pending = null
+            android.widget.Toast.makeText(context, if (r.ok) "Done · receipt #${r.receiptId}" else "${r.status}: ${r.error ?: ""}".take(160), android.widget.Toast.LENGTH_LONG).show()
+            if (r.ok) vm.dismissOwnedCandidates()
         }
     }
 }

@@ -24,7 +24,7 @@ class RegistryTest {
             .jsonArray.map { it.jsonPrimitive.content }.toSet()
 
     @Test fun registryLoadsAndIsVersioned() {
-        assertEquals(15, reg.methods.size)
+        assertEquals(18, reg.methods.size)
         assertEquals(7, reg.proposableMethods.size)
         assertTrue(Regex("^[0-9]{4}\\.[0-9]{2}\\.[0-9]+$").matches(reg.version))
         reg.methods.forEach { assertTrue(it.id, Regex("^guardian\\.[a-z]+\\.[a-z_]+@v[0-9]+$").matches(it.id)) }

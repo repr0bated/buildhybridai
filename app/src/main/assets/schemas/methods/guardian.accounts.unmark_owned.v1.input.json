@@ -1,0 +1,14 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/repr0bated/callguardian-android/schemas/methods/guardian.accounts.unmark_owned.v1.input.json",
+  "title": "UnmarkOwnedInput",
+  "description": "Remove this service from your Owned accounts. Texts from its senders will be screened like any other unknown sender.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["accountId", "service"],
+  "properties": {
+    "accountId": { "type": "integer", "minimum": 1, "title": "Account", "readOnly": true },
+    "service": { "type": "string", "minLength": 1, "maxLength": 80, "title": "Service name", "readOnly": true },
+    "label": { "type": "string", "minLength": 1, "maxLength": 160, "title": "What this removes", "readOnly": true }
+  }
+}

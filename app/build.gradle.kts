@@ -183,4 +183,5 @@ dependencies {
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation("org.xerial:sqlite-jdbc:3.47.1.0")
 }

@@ -1,0 +1,15 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/repr0bated/callguardian-android/schemas/methods/guardian.accounts.unmark_owned.v1.output.json",
+  "title": "UnmarkOwnedOutput",
+  "description": "Result of guardian.accounts.unmark_owned@v1.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["accountId", "service", "removed", "changedAt"],
+  "properties": {
+    "accountId": { "type": "integer", "minimum": 1, "title": "Account id", "readOnly": true },
+    "service": { "type": "string", "minLength": 1, "maxLength": 80, "title": "Service name", "readOnly": true },
+    "removed": { "type": "boolean", "title": "Removed" },
+    "changedAt": { "type": "integer", "minimum": 0, "format": "epoch-millis", "title": "Changed at" }
+  }
+}

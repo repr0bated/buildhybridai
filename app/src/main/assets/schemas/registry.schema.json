@@ -75,7 +75,9 @@
             "sms.local",
             "browser.open",
             "settings.local",
-            "privacy.local"
+            "privacy.local",
+            "accounts.local",
+            "feedback.local"
           ]
         },
         "execution": {

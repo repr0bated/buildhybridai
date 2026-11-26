@@ -1,0 +1,21 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/repr0bated/callguardian-android/schemas/methods/guardian.accounts.mark_owned.v1.input.json",
+  "title": "MarkOwnedInput",
+  "description": "Save a service you have an account with or subscribe to (E-ZPass, a bank, Cash App, and so on). Future texts from these senders with links to these official domains are treated as Owned, not as a scam. Look-alike domains or unknown senders that mention this brand are flagged as impersonation. Stored only on this phone.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["service", "senders"],
+  "properties": {
+    "service": { "type": "string", "minLength": 1, "maxLength": 80, "title": "Service name" },
+    "senders": {
+      "type": "array", "title": "Sender numbers or short codes", "minItems": 1, "maxItems": 20,
+      "items": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[^\\n\\r]{1,64}$" }
+    },
+    "domains": {
+      "type": "array", "title": "Official domains", "maxItems": 20,
+      "items": { "type": "string", "minLength": 3, "maxLength": 120, "pattern": "^[A-Za-z0-9.-]+\\.[A-Za-z]{2,24}$" }
+    },
+    "eventId": { "type": "integer", "minimum": 1, "title": "From this text", "readOnly": true }
+  }
+}

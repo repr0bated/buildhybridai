@@ -24,7 +24,10 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -57,6 +60,8 @@ fun HomeScreen(vm: AppViewModel, actions: SetupActions, onEvent: (Long) -> Unit,
     val quarantined by vm.quarantined.collectAsState()
     val groups by vm.subscriptions.collectAsState()
     val process by vm.processAll.collectAsState()
+    var pending by remember { mutableStateOf<PendingUserMethod?>(null) }
+    val context = androidx.compose.ui.platform.LocalContext.current
     val counts = remember(recent, quarantined) { HomeStats.counts(recent, quarantined, System.currentTimeMillis()) }
     val attention = remember(recent) { HomeStats.needsAttention(recent, 5) }
     val timeline = remember(receipts) { HomeStats.recentReceipts(receipts, 6) }
@@ -90,6 +95,7 @@ fun HomeScreen(vm: AppViewModel, actions: SetupActions, onEvent: (Long) -> Unit,
                 }
             }
             item { ProcessAllButton(process, onStart = { vm.startProcessAll(includeLogs = true) }, onCancel = vm::cancelProcessAll) }
+            if (process.candidates.isNotEmpty()) item { OwnedCandidateList(vm, process) { pending = it } }
             item {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     SectionTitle("Needs attention", Modifier.weight(1f))
@@ -154,6 +160,13 @@ fun HomeScreen(vm: AppViewModel, actions: SetupActions, onEvent: (Long) -> Unit,
                 )
             }
             item { Spacer(Modifier.height(8.dp)) }
+        }
+    }
+    pending?.let { p ->
+        UserMethodSheet(vm, p, onDismiss = { pending = null }) { r ->
+            pending = null
+            android.widget.Toast.makeText(context, if (r.ok) "Done · receipt #${r.receiptId}" else "${r.status}: ${r.error ?: ""}".take(160), android.widget.Toast.LENGTH_LONG).show()
+            if (r.ok) vm.dismissOwnedCandidates()
         }
     }
 }

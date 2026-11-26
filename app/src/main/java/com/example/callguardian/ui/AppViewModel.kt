@@ -29,6 +29,10 @@ import com.example.callguardian.model.VerdictSource
 import com.example.callguardian.schemaui.MethodHeader
 import com.example.callguardian.schemaui.SchemaForm
 import com.example.callguardian.screening.ScreeningEngine
+import com.example.callguardian.accounts.OwnedStore
+import com.example.callguardian.accounts.OwnedAccount
+import com.example.callguardian.accounts.OwnedCandidates
+import com.example.callguardian.accounts.OwnedCandidate
 import kotlinx.serialization.json.JsonObject
 import com.google.firebase.ai.DownloadStatus
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -87,6 +91,7 @@ class AppViewModel @Inject constructor(
     private val privacySession: com.example.callguardian.privacy.PrivacySession,
     private val quarantineInbox: com.example.callguardian.sms.QuarantineInbox,
     private val smsRolePrefs: com.example.callguardian.sms.SmsRolePrefs,
+    private val ownedStore: OwnedStore,
 ) : AndroidViewModel(app) {
 
     val receipts: StateFlow<List<ReceiptEntity>> = receiptsDao.observeRecent(500).stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
@@ -121,6 +126,8 @@ class AppViewModel @Inject constructor(
     val settings: StateFlow<AppSettings> = prefs.settings.stateIn(viewModelScope, SharingStarted.Eagerly, AppSettings())
     val recent: StateFlow<List<ScreeningEventEntity>> = events.observeRecent(300).stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
     val listed = profilesDao.observeListed().stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+    val ownedAccounts: StateFlow<List<OwnedAccount>> = ownedStore.accounts.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+    fun ownedFor(number: String?) = ownedStore.matchSender(number)
 
     private val _processAll = MutableStateFlow(ProcessAllState())
     val processAll: StateFlow<ProcessAllState> = _processAll.asStateFlow()
@@ -191,8 +198,34 @@ class AppViewModel @Inject constructor(
                 _processAll.value = _processAll.value.copy(running = false, cancelled = true, done = done, failed = failed, label = null)
                 throw ce
             }
-            _processAll.value = _processAll.value.copy(running = false, cancelled = false, current = queue.size, done = done, failed = failed, label = null)
+            val candidates = OwnedCandidates.suggest(recent.value, ownedStore.snapshot)
+            _processAll.value = _processAll.value.copy(running = false, cancelled = false, current = queue.size, done = done, failed = failed, label = null, candidates = candidates)
         }
+    }
+
+    fun dismissOwnedCandidates() {
+        _processAll.value = _processAll.value.copy(candidates = emptyList())
+    }
+
+    fun markOwnedInput(c: OwnedCandidate, eventId: Long? = null) = com.example.callguardian.methods.UserMethodInputs.markOwned(c.service, c.senders, c.domains, eventId)
+    fun markOwnedInput(service: String, senders: List<String>, domains: List<String>, eventId: Long? = null) =
+        com.example.callguardian.methods.UserMethodInputs.markOwned(service, senders, domains, eventId)
+    fun unmarkOwnedInput(a: OwnedAccount) = com.example.callguardian.methods.UserMethodInputs.unmarkOwned(a.id, a.service)
+    fun notScamInput(e: com.example.callguardian.data.db.ScreeningEventEntity): kotlinx.serialization.json.JsonObject {
+        val number = e.number ?: return kotlinx.serialization.json.buildJsonObject { }
+        val hosts = com.example.callguardian.screening.OfficialDomains.hostsIn(e.body.orEmpty())
+            .filter { com.example.callguardian.screening.OfficialDomains.isAnyOfficialHost(it) }
+        val service = e.displayName
+            ?: com.example.callguardian.screening.OfficialDomains.mentionedBrands(e.body.orEmpty()).firstOrNull()?.let {
+                when (com.example.callguardian.screening.OfficialDomains.brandKey(it)) {
+                    "ezpass", "e-zpass" -> "E-ZPass"
+                    "cashapp", "cash-app" -> "Cash App"
+                    else -> it.replaceFirstChar { ch -> ch.uppercase() }
+                }
+            }
+        return com.example.callguardian.methods.UserMethodInputs.notScam(
+            e.id, number, (e.displayName ?: number).take(80), markOwned = false, service = service, domains = hosts,
+        )
     }
 
 
@@ -267,7 +300,7 @@ class AppViewModel @Inject constructor(
         engine.analyzeOnDevice(id, notify = false)
     }
 
-    fun analyze(id: Long) = viewModelScope.launch { engine.analyzeOnDevice(id) }
+    fun analyze(id: Long) = viewModelScope.launch { runCatching { engine.analyzeOnDevice(id) } }
     fun redactedPreview(e: ScreeningEventEntity) = engine.redactedPreview(e)
     fun delete(id: Long) = viewModelScope.launch { events.delete(id) }
     fun clearHistory() = viewModelScope.launch { events.clear() }
