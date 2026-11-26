@@ -1,0 +1,28 @@
+{
+  "name": "callguardian-jev",
+  "version": "0.1.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "author": "Jeremy Hobson <jeremy@3tched.com>",
+  "type": "module",
+  "scripts": {
+    "gen": "openapi-typescript typesafe.openapi.json -o src/typesafe.gen.ts",
+    "typecheck": "npm run gen && tsc --noEmit",
+    "test": "npm run gen && vitest run",
+    "deploy": "npm run gen && wrangler deploy",
+    "dev": "npm run gen && wrangler dev"
+  },
+  "dependencies": {
+    "jose": "^5.10.0"
+  },
+  "devDependencies": {
+    "openapi-typescript": "^7.4.2",
+    "typescript": "^5.6.3",
+    "vitest": "^5.1.2",
+    "wrangler": "^4.168.0"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true,
+    "workerd@1.20261123.1": true
+  }
+}

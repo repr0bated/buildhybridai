@@ -9,6 +9,8 @@ import { buildConfirmForm } from './schemaui';
 import { loadSettings, saveSettings, type Settings } from './settings';
 import { Store } from './store';
 import { SyncCore, type SyncStatus } from './sync';
+import { isJevEnabled, setJevEnabled, jevCheck, senderKind, type JevResult } from './jev';
+import { redact } from './redact';
 
 const store = new Store();
 const app = document.getElementById('app')!;
@@ -17,7 +19,7 @@ let deviceState: DeviceAvailability = 'unsupported';
 let settings: Settings;
 let deviceId = '';
 let tab: 'check' | 'receipts' | 'lists' | 'subs' | 'settings' = 'check';
-let current: { a: Analysis; verdictId: string; eventNumber: number; proposals: Proposal[] } | null = null;
+let current: { a: Analysis; verdictId: string; eventNumber: number; proposals: Proposal[]; jev?: JevResult | { error: string } } | null = null;
 let busy = '';
 let unlocked = false;
 let sync: SyncCore | null = null;
@@ -102,6 +104,21 @@ async function resultView(c: NonNullable<typeof current>): Promise<HTMLElement> 
   root.append(verdict);
   const steps = h(`<section class="card"><h2>how this was decided</h2><ol class="steps">${a.steps.map((s) => `<li class="${s.ok ? '' : s.kind === 'model' ? 'warn' : 'bad'}"><strong>${esc(s.title)}</strong><span>${esc(s.detail)}</span></li>`).join('')}</ol></section>`);
   root.append(steps);
+  if (c.jev) {
+    if ('error' in c.jev) {
+      root.append(h(`<section class="card"><h2>jev second opinion</h2><p class="err">${esc(c.jev.error)}</p></section>`));
+    } else {
+      const j = c.jev;
+      const sigs = Object.entries(j.signals).map(([k,v]) => `<li><span class="muted">${esc(k)}</span> ${Number(v).toFixed(2)}</li>`).join('');
+      root.append(h(`<section class="card"><h2>jev second opinion</h2>
+        <div class="flex">${riskBadge(j.table.verdict === 'SCAM' ? 'CRITICAL' : j.table.verdict === 'SUSPICIOUS' ? 'HIGH' : j.table.verdict === 'UNSETTLED' ? 'MEDIUM' : 'SAFE')}<strong>${esc(j.table.verdict)}</strong>
+        <span class="muted">${esc(j.table.rule)} · ${esc(j.model)} · questions ${esc(j.questionsVersion)}</span></div>
+        <p class="muted">TypeSafe Jev judged each scam signal; the truth table in this app decided the row. Only a redacted copy of the text left the browser.</p>
+        <ul>${sigs}</ul></section>`));
+    }
+  } else if (isJevEnabled() && a.input.body) {
+    root.append(h('<section class="card"><h2>jev second opinion</h2><p class="muted">Asking TypeSafe Jev…</p></section>'));
+  }
   const props = h('<section class="card"><h2>proposed typed methods</h2></section>');
   if (!c.proposals.length) props.append(h('<p class="muted">Nothing to do: no action proposed.</p>'));
   for (const p of c.proposals) {
@@ -157,7 +174,8 @@ async function settingsView(): Promise<HTMLElement> {
     <label class="toggle"><input type="checkbox" id="syncContent" ${settings.syncMessageContent ? 'checked' : ''}/><span><b>Sync message content</b><br/><span class="muted">Off by default. When off, message text, redacted text and model-written reasons never leave this browser. Turning it off deletes synced content from the cloud.</span></span></label></section>`));
   root.append(h(`<section class="card"><h2>analysis</h2>
     <label class="toggle"><input type="checkbox" id="onDeviceOnly" ${settings.onDeviceOnly ? 'checked' : ''}/><span><b>On-device only</b><br/><span class="muted">Never use cloud Gemini for the verdict. If Nano isn't ready the check fails instead of falling back.</span></span></label>
-    <label class="toggle"><input type="checkbox" id="autoBlock" ${settings.autoBlockEnabled ? 'checked' : ''}/><span><b>Offer auto-block for obvious scams</b><br/><span class="muted">Confidence threshold ${settings.autoBlockThreshold}%.</span></span></label></section>`));
+    <label class="toggle"><input type="checkbox" id="autoBlock" ${settings.autoBlockEnabled ? 'checked' : ''}/><span><b>Offer auto-block for obvious scams</b><br/><span class="muted">Confidence threshold ${settings.autoBlockThreshold}%.</span></span></label>
+    <label class="toggle"><input type="checkbox" id="jevOn" ${isJevEnabled() ? 'checked' : ''}/><span><b>Jev second opinion</b><br/><span class="muted">Off by default. The default judge is Firebase AI Logic (Gemini Nano in Chrome, then cloud Gemini). Turn this on to also send a redacted copy to TypeSafe Jev through the Cloudflare Worker (the TypeSafe key never sits in this app).</span></span></label></section>`));
   root.append(h('<section class="card"><h2>data</h2><div class="flex"><button class="btn" id="export">Export receipts (JSON)</button><button class="btn" id="wipe">Delete local data</button></div></section>'));
   return root;
 }
@@ -194,6 +212,7 @@ function wire() {
     settings = await saveSettings(store, { syncMessageContent: on }); void render();
   });
   $('onDeviceOnly')?.addEventListener('change', async (e) => { settings = await saveSettings(store, { onDeviceOnly: (e.target as HTMLInputElement).checked }); });
+  $('jevOn')?.addEventListener('change', (e) => { setJevEnabled((e.target as HTMLInputElement).checked); });
   $('autoBlock')?.addEventListener('change', async (e) => { settings = await saveSettings(store, { autoBlockEnabled: (e.target as HTMLInputElement).checked }); });
   $('export')?.addEventListener('click', async () => {
     const data = JSON.stringify({ receipts: await store.all('receipts') }, null, 2);
@@ -221,6 +240,13 @@ async function doAnalyze() {
     const { id } = await saveVerdict(ctx(), a, eventNumber);
     await saveSubscription(ctx(), a);
     current = { a, verdictId: id, eventNumber, proposals: proposalsFor(a, eventNumber, rule?.list === 'TRUST') };
+    if (isJevEnabled() && input.body) {
+      try {
+        current.jev = await jevCheck(redact(input.body), senderKind(input.number));
+      } catch (e) {
+        current.jev = { error: (e as Error).message };
+      }
+    }
     authError = '';
   } catch (e) {
     authError = `Analysis failed: ${(e as Error).message}`;

@@ -1,0 +1,14 @@
+{
+  "name": "callguardian-jev",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-26",
+  "account_id": "b049bc6141e3b098b50da901a5cca6b1",
+  "workers_dev": true,
+  // Free plan only: no paid bindings (no Rate Limiting API, no Workers Paid).
+  "vars": {
+    "FIREBASE_PROJECT_NUMBER": "662816906631",
+    "ALLOWED_APP_IDS": "1:662816906631:android:fc523a574d8ebc46c14722,1:662816906631:android:91ee4f553d3fe35cc14722,1:662816906631:web:74134fe89fcf6d82c14722",
+    "RATE_LIMIT_PER_MINUTE": "60",
+    "BATCH_MAX": "20"
+  }
+}
