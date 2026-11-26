@@ -180,7 +180,7 @@ class SystemMmsDownloader
 
         private companion object {
             const val TAG = "MmsDownload"
-            const val AUTHORITY = BuildConfig.APPLICATION_ID + ".fileprovider"
+            val AUTHORITY get() = app.clearsms.HostPackage.fileProviderAuthority
 
             fun Intent.withGrants(grants: List<PduGrant.Outcome>): Intent =
                 putExtra(MmsDownloadReceiver.EXTRA_GRANTS_ATTEMPTED, grants.size)

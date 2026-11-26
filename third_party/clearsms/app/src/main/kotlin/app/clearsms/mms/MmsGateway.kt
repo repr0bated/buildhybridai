@@ -173,6 +173,6 @@ class FrameworkMmsGateway
 
         private companion object {
             const val TAG = "MmsGateway"
-            const val AUTHORITY = BuildConfig.APPLICATION_ID + ".fileprovider"
+            val AUTHORITY get() = app.clearsms.HostPackage.fileProviderAuthority
         }
     }

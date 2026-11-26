@@ -15,3 +15,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "CallGuardian"
 include(":app")
+include(":clearsms-engine")

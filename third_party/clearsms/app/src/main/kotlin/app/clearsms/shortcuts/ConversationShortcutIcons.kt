@@ -147,6 +147,6 @@ class ConversationShortcutIcons
             internal const val RELATIVE_DIR = "shortcuts/icons"
 
             /** The app's single FileProvider authority. */
-            internal const val AUTHORITY = BuildConfig.APPLICATION_ID + ".fileprovider"
+            internal val AUTHORITY get() = app.clearsms.HostPackage.fileProviderAuthority
         }
     }

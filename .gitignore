@@ -23,3 +23,6 @@ app/build/
 
 # root build outputs
 build/
+
+# library module outputs
+clearsms-engine/build/

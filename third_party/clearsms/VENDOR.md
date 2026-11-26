@@ -16,3 +16,27 @@ The upstream `app/src/main/assets/sender_ids.db` (~43 MB) is omitted from this
 snapshot. It is a Clear SMS sender-id lookup database, not required for the
 Call Guardian verdict pipeline. Restore it from the pinned upstream commit if
 you need Clear SMS's own sender-id pack.
+
+## Call Guardian integration notes
+
+The sms/mms engine is compiled as the `:clearsms-engine` Android library
+(namespace `app.clearsms`). Four FileProvider authority constants were changed
+from `BuildConfig.APPLICATION_ID + ".fileprovider"` to
+`HostPackage.fileProviderAuthority` so the host app package is used. No other
+upstream behavior was intentionally changed.
+
+
+The library compiles a filtered copy of `app/src/main/kotlin` (Application,
+MainActivity, and most Compose screens are excluded). Type-only UI helpers
+needed by the engine (`AvatarStyle`, `BrandCatalog`, `SwipeActions`,
+`DirectCall`, and similar) plus small shims (`HostPackage`,
+`MessageSelectionAction`, `AvatarHelpers`) live in
+`clearsms-engine/src/main/kotlin`. Vendor XML themes, launcher mipmaps, and
+shortcuts are excluded so Call Guardian keeps its own icon, app name, and
+theme. `Theme.ClearSms` is stubbed to `android:Theme.Material.NoActionBar`.
+
+The host `Application` implements WorkManager `Configuration.Provider` with
+`HiltWorkerFactory` and calls `HostPackage.init`. ROLE_SMS exported receivers
+(`SMS_DELIVER`, `WAP_PUSH_DELIVER`, `RESPONSE_SMS`, `SENDTO`) stay in Call
+Guardian; the library only registers non-exported result/boot/notification
+receivers. Do not also register Clear SMS's `SMS_DELIVER` / `WAP_PUSH_DELIVER`.

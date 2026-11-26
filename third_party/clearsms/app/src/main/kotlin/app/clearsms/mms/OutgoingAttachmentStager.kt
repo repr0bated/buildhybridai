@@ -360,7 +360,7 @@ class OutgoingAttachmentStager
 
         private companion object {
             const val TAG = "MmsAttachment"
-            const val AUTHORITY = BuildConfig.APPLICATION_ID + ".fileprovider"
+            val AUTHORITY get() = app.clearsms.HostPackage.fileProviderAuthority
         }
     }
 

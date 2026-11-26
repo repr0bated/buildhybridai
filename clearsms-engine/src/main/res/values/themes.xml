@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Host-owned stub so engine layouts/manifests resolve without Material Components XML. -->
+    <style name="Theme.ClearSms" parent="android:Theme.Material.NoActionBar" />
+</resources>
