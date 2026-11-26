@@ -1,0 +1,91 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/repr0bated/callguardian-android/schemas/sync/sync_content.schema.json",
+  "title": "SyncContent",
+  "description": "Message text and model-written text for one item. Written ONLY while SyncSettings.syncMessageContent is true (enforced by Firestore rules).",
+  "x-firestore": "users/{uid}/content/{itemId}",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "itemId",
+    "kind",
+    "updatedAt",
+    "deviceId"
+  ],
+  "properties": {
+    "itemId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 96,
+      "pattern": "^[A-Za-z0-9_.-]+$"
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "call",
+        "sms",
+        "receipt",
+        "verdict"
+      ]
+    },
+    "body": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 4000
+    },
+    "redactedText": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 4000
+    },
+    "reasons": {
+      "type": "array",
+      "maxItems": 5,
+      "items": {
+        "type": "string",
+        "maxLength": 300
+      }
+    },
+    "advice": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 300
+    },
+    "summary": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 1200
+    },
+    "inputText": {
+      "type": "object",
+      "description": "Content-bearing method input fields removed from the receipt (reason, warning, onDeviceOpinion)."
+    },
+    "updatedAt": {
+      "type": "integer",
+      "minimum": 0,
+      "format": "epoch-millis",
+      "title": "Last changed",
+      "description": "Epoch millis of the last change. Last writer wins."
+    },
+    "deviceId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "title": "Device",
+      "description": "Stable random id of the device that wrote this document."
+    },
+    "deleted": {
+      "type": "boolean",
+      "title": "Deleted",
+      "description": "Tombstone: the item was removed. Documents are kept so every device learns about the delete."
+    }
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "firebase": {
+    "apiKey": "AIzaSyChlc41fkjVNLBci9UaVSQMjoAyLyYi_iM",
+    "authDomain": "callguardian-hybrid.firebaseapp.com",
+    "projectId": "callguardian-hybrid",
+    "storageBucket": "callguardian-hybrid.firebasestorage.app",
+    "messagingSenderId": "662816906631",
+    "appId": "1:662816906631:web:74134fe89fcf6d82c14722"
+  },
+  "appCheckSiteKey": "6LerlDMuAAAAAKNf06ePLwAbvH4XPWMG2b0To9pQ",
+  "cloudModel": "gemini-3.5-flash-lite"
+}

@@ -1,0 +1,31 @@
+{
+  "name": "callguardian-web",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Call Guardian for the web: hybrid on-device (Chrome Gemini Nano) + cloud Gemini scam and subscription checker, schema-first.",
+  "license": "Apache-2.0",
+  "author": "Jeremy Hobson <jeremy@3tched.com>",
+  "type": "module",
+  "scripts": {
+    "gen": "node scripts/gen-types.mjs",
+    "dev": "npm run gen && vite",
+    "build": "npm run gen && tsc --noEmit && vite build",
+    "test": "npm run gen && vitest run",
+    "gen:kotlin": "bash scripts/gen-kotlin.sh",
+    "typecheck": "npm run gen && tsc --noEmit"
+  },
+  "dependencies": {
+    "ajv": "^8.20.0",
+    "ajv-formats": "^3.0.1",
+    "firebase": "^13.4.0"
+  },
+  "devDependencies": {
+    "@fontsource/jetbrains-mono": "^5.3.0",
+    "fake-indexeddb": "^6.2.8",
+    "jsdom": "^31.0.1",
+    "json-schema-to-typescript": "^16.0.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.4.0",
+    "vitest": "^5.1.2"
+  }
+}

@@ -1,0 +1,193 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/repr0bated/callguardian-android/schemas/sync/sync_receipt.schema.json",
+  "title": "SyncReceipt",
+  "description": "One typed-method receipt. Contains no message text.",
+  "x-firestore": "users/{uid}/receipts/{id}",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "methodId",
+    "alias",
+    "status",
+    "channel",
+    "origin",
+    "riskLevel",
+    "category",
+    "confidence",
+    "decidedBy",
+    "createdAt",
+    "updatedAt",
+    "deviceId"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 96,
+      "pattern": "^[A-Za-z0-9_.-]+$",
+      "description": "<deviceId>-<localId>; also the Firestore document id."
+    },
+    "methodId": {
+      "type": "string",
+      "pattern": "^guardian\\.[a-z]+\\.[a-z_]+@v[0-9]+$"
+    },
+    "alias": {
+      "type": "string",
+      "pattern": "^[a-z_]+$"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "OK",
+        "DENIED",
+        "FAILED",
+        "OFFERED",
+        "DECLINED"
+      ]
+    },
+    "channel": {
+      "type": "string",
+      "enum": [
+        "CALL",
+        "SMS"
+      ]
+    },
+    "origin": {
+      "type": "string",
+      "enum": [
+        "android",
+        "web"
+      ],
+      "description": "Which app wrote it."
+    },
+    "source": {
+      "type": "string",
+      "enum": [
+        "sms",
+        "google_voice",
+        "whatsapp",
+        "call_screening",
+        "call_log",
+        "lab_sample",
+        "web_paste"
+      ]
+    },
+    "sender": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 64
+    },
+    "riskLevel": {
+      "type": "string",
+      "enum": [
+        "SAFE",
+        "LOW",
+        "MEDIUM",
+        "HIGH",
+        "CRITICAL"
+      ]
+    },
+    "category": {
+      "type": "string",
+      "enum": [
+        "NONE",
+        "PHISHING_LINK",
+        "IMPERSONATION",
+        "PACKAGE_DELIVERY",
+        "BANK_FRAUD",
+        "TOLL_OR_FINE",
+        "PRIZE_OR_LOTTERY",
+        "JOB_OFFER",
+        "ROMANCE_OR_WRONG_NUMBER",
+        "CRYPTO_INVESTMENT",
+        "TECH_SUPPORT",
+        "OTP_THEFT",
+        "ROBOCALL",
+        "SPOOFED_CALLER",
+        "OTHER"
+      ]
+    },
+    "confidence": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "decidedBy": {
+      "type": "string",
+      "enum": [
+        "RULES",
+        "ON_DEVICE",
+        "IN_CLOUD"
+      ]
+    },
+    "model": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 80
+    },
+    "ruleFlags": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {
+        "type": "string",
+        "maxLength": 120
+      },
+      "description": "Fixed rule-engine labels (never message text)."
+    },
+    "schemaValid": {
+      "type": "boolean"
+    },
+    "dispatch": {
+      "type": "string",
+      "enum": [
+        "AUTO",
+        "OFFER",
+        "DENY"
+      ]
+    },
+    "autoApplied": {
+      "type": "boolean"
+    },
+    "input": {
+      "type": "object",
+      "description": "The typed method input as executed, with content-bearing fields (reason, redactedText, onDeviceOpinion, warning) removed. Full values live in content/{id} when content sync is on."
+    },
+    "output": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "The typed method output."
+    },
+    "createdAt": {
+      "type": "integer",
+      "minimum": 0,
+      "format": "epoch-millis"
+    },
+    "updatedAt": {
+      "type": "integer",
+      "minimum": 0,
+      "format": "epoch-millis",
+      "title": "Last changed",
+      "description": "Epoch millis of the last change. Last writer wins."
+    },
+    "deviceId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "title": "Device",
+      "description": "Stable random id of the device that wrote this document."
+    },
+    "deleted": {
+      "type": "boolean",
+      "title": "Deleted",
+      "description": "Tombstone: the item was removed. Documents are kept so every device learns about the delete."
+    }
+  }
+}

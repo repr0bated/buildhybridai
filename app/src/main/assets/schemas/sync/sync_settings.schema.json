@@ -1,0 +1,56 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/repr0bated/callguardian-android/schemas/sync/sync_settings.schema.json",
+  "title": "SyncSettings",
+  "description": "Synced preferences. syncMessageContent is OFF by default; while it is off no message text leaves the device (Firestore rules enforce this for the content collection).",
+  "x-firestore": "users/{uid}/settings/main",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "syncMessageContent",
+    "updatedAt",
+    "deviceId"
+  ],
+  "properties": {
+    "syncMessageContent": {
+      "type": "boolean",
+      "default": false,
+      "title": "Sync message content",
+      "description": "Opt-in. When true, message bodies and model-written reasons are synced to the private content collection."
+    },
+    "autoBlockEnabled": {
+      "type": "boolean",
+      "title": "Auto-block"
+    },
+    "autoBlockThreshold": {
+      "type": "integer",
+      "minimum": 50,
+      "maximum": 100,
+      "title": "Auto-block confidence"
+    },
+    "onDeviceOnly": {
+      "type": "boolean",
+      "title": "On-device only",
+      "description": "Never use the cloud model."
+    },
+    "updatedAt": {
+      "type": "integer",
+      "minimum": 0,
+      "format": "epoch-millis",
+      "title": "Last changed",
+      "description": "Epoch millis of the last change. Last writer wins."
+    },
+    "deviceId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "title": "Device",
+      "description": "Stable random id of the device that wrote this document."
+    },
+    "deleted": {
+      "type": "boolean",
+      "title": "Deleted",
+      "description": "Tombstone: the item was removed. Documents are kept so every device learns about the delete."
+    }
+  }
+}

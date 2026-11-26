@@ -1,0 +1,62 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/repr0bated/callguardian-android/schemas/sync/sync_private_flag.schema.json",
+  "title": "SyncPrivateFlag",
+  "description": "Marks a call, text, receipt or verdict as private (blurred until unlocked on each device).",
+  "x-firestore": "users/{uid}/privateFlags/{key}",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "key",
+    "kind",
+    "itemId",
+    "isPrivate",
+    "updatedAt",
+    "deviceId"
+  ],
+  "properties": {
+    "key": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 120,
+      "pattern": "^[A-Za-z0-9_.-]+$",
+      "description": "Document id: <kind>_<itemId>."
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "call",
+        "sms",
+        "receipt",
+        "verdict"
+      ]
+    },
+    "itemId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 96
+    },
+    "isPrivate": {
+      "type": "boolean"
+    },
+    "updatedAt": {
+      "type": "integer",
+      "minimum": 0,
+      "format": "epoch-millis",
+      "title": "Last changed",
+      "description": "Epoch millis of the last change. Last writer wins."
+    },
+    "deviceId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "title": "Device",
+      "description": "Stable random id of the device that wrote this document."
+    },
+    "deleted": {
+      "type": "boolean",
+      "title": "Deleted",
+      "description": "Tombstone: the item was removed. Documents are kept so every device learns about the delete."
+    }
+  }
+}

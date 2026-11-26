@@ -1,0 +1,136 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/repr0bated/callguardian-android/schemas/sync/sync_subscription.schema.json",
+  "title": "SyncSubscription",
+  "description": "One subscription sender (grouped texts) and what was done about it. No message text.",
+  "x-firestore": "users/{uid}/subscriptions/{key}",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "key",
+    "sender",
+    "source",
+    "count",
+    "status",
+    "origin",
+    "updatedAt",
+    "deviceId"
+  ],
+  "properties": {
+    "key": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 96,
+      "pattern": "^[a-z0-9+._@-]+$",
+      "description": "Document id: <source>_<normalized sender>."
+    },
+    "sender": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "source": {
+      "type": "string",
+      "enum": [
+        "sms",
+        "google_voice",
+        "whatsapp",
+        "web_paste"
+      ]
+    },
+    "brand": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 40
+    },
+    "count": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "lastDate": {
+      "type": "integer",
+      "minimum": 0,
+      "format": "epoch-millis"
+    },
+    "keyword": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "STOP",
+        "STOPALL",
+        "UNSUBSCRIBE",
+        "CANCEL",
+        "END",
+        "QUIT",
+        null
+      ]
+    },
+    "linkUrl": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 300
+    },
+    "linkDomain": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 100
+    },
+    "linkKind": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "UNSUBSCRIBE",
+        "MANAGE_SUBSCRIPTION",
+        "OTHER",
+        null
+      ]
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "ACTIVE",
+        "STOP_SENT",
+        "MANAGE_OPENED",
+        "MUTED",
+        "DISMISSED"
+      ]
+    },
+    "origin": {
+      "type": "string",
+      "enum": [
+        "android",
+        "web"
+      ],
+      "description": "Which app wrote it."
+    },
+    "updatedAt": {
+      "type": "integer",
+      "minimum": 0,
+      "format": "epoch-millis",
+      "title": "Last changed",
+      "description": "Epoch millis of the last change. Last writer wins."
+    },
+    "deviceId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "title": "Device",
+      "description": "Stable random id of the device that wrote this document."
+    },
+    "deleted": {
+      "type": "boolean",
+      "title": "Deleted",
+      "description": "Tombstone: the item was removed. Documents are kept so every device learns about the delete."
+    }
+  }
+}

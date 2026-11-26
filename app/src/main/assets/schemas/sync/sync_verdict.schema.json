@@ -1,0 +1,176 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/repr0bated/callguardian-android/schemas/sync/sync_verdict.schema.json",
+  "title": "SyncVerdict",
+  "description": "One screened call or text and what each tier concluded. No message text.",
+  "x-firestore": "users/{uid}/verdicts/{id}",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "channel",
+    "origin",
+    "riskLevel",
+    "category",
+    "confidence",
+    "decidedBy",
+    "receivedAt",
+    "updatedAt",
+    "deviceId"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 96,
+      "pattern": "^[A-Za-z0-9_.-]+$",
+      "description": "<deviceId>-<localId>; also the Firestore document id."
+    },
+    "channel": {
+      "type": "string",
+      "enum": [
+        "CALL",
+        "SMS"
+      ]
+    },
+    "origin": {
+      "type": "string",
+      "enum": [
+        "android",
+        "web"
+      ],
+      "description": "Which app wrote it."
+    },
+    "source": {
+      "type": "string",
+      "enum": [
+        "sms",
+        "google_voice",
+        "whatsapp",
+        "call_screening",
+        "call_log",
+        "lab_sample",
+        "web_paste"
+      ]
+    },
+    "sender": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 64
+    },
+    "riskLevel": {
+      "type": "string",
+      "enum": [
+        "SAFE",
+        "LOW",
+        "MEDIUM",
+        "HIGH",
+        "CRITICAL"
+      ]
+    },
+    "category": {
+      "type": "string",
+      "enum": [
+        "NONE",
+        "PHISHING_LINK",
+        "IMPERSONATION",
+        "PACKAGE_DELIVERY",
+        "BANK_FRAUD",
+        "TOLL_OR_FINE",
+        "PRIZE_OR_LOTTERY",
+        "JOB_OFFER",
+        "ROMANCE_OR_WRONG_NUMBER",
+        "CRYPTO_INVESTMENT",
+        "TECH_SUPPORT",
+        "OTP_THEFT",
+        "ROBOCALL",
+        "SPOOFED_CALLER",
+        "OTHER"
+      ]
+    },
+    "confidence": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "rulesScore": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "ruleFlags": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {
+        "type": "string",
+        "maxLength": 120
+      },
+      "description": "Fixed rule-engine labels (never message text)."
+    },
+    "decidedBy": {
+      "type": "string",
+      "enum": [
+        "RULES",
+        "ON_DEVICE",
+        "IN_CLOUD"
+      ]
+    },
+    "model": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 80
+    },
+    "schemaValid": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "proposedMethod": {
+      "type": "string",
+      "pattern": "^[a-z_]+$"
+    },
+    "finalMethod": {
+      "type": "string",
+      "pattern": "^[a-z_]+$"
+    },
+    "quarantined": {
+      "type": "boolean"
+    },
+    "userAction": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 40
+    },
+    "receivedAt": {
+      "type": "integer",
+      "minimum": 0,
+      "format": "epoch-millis"
+    },
+    "updatedAt": {
+      "type": "integer",
+      "minimum": 0,
+      "format": "epoch-millis",
+      "title": "Last changed",
+      "description": "Epoch millis of the last change. Last writer wins."
+    },
+    "deviceId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "title": "Device",
+      "description": "Stable random id of the device that wrote this document."
+    },
+    "deleted": {
+      "type": "boolean",
+      "title": "Deleted",
+      "description": "Tombstone: the item was removed. Documents are kept so every device learns about the delete."
+    }
+  }
+}

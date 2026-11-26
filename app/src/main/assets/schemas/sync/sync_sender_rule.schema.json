@@ -1,0 +1,81 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/repr0bated/callguardian-android/schemas/sync/sync_sender_rule.schema.json",
+  "title": "SyncSenderRule",
+  "description": "A block, trust or mute entry for one sender.",
+  "x-firestore": "users/{uid}/senders/{key}",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "key",
+    "number",
+    "list",
+    "scope",
+    "origin",
+    "createdAt",
+    "updatedAt",
+    "deviceId"
+  ],
+  "properties": {
+    "key": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80,
+      "pattern": "^[a-z0-9+._@-]+$",
+      "description": "Document id: the normalized sender (lower-case digits with optional +, or an email-to-SMS address)."
+    },
+    "number": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 64
+    },
+    "list": {
+      "type": "string",
+      "enum": [
+        "BLOCK",
+        "TRUST",
+        "MUTE"
+      ]
+    },
+    "scope": {
+      "type": "string",
+      "enum": [
+        "CALLS",
+        "MESSAGES",
+        "ALL"
+      ]
+    },
+    "origin": {
+      "type": "string",
+      "enum": [
+        "android",
+        "web"
+      ],
+      "description": "Which app wrote it."
+    },
+    "createdAt": {
+      "type": "integer",
+      "minimum": 0,
+      "format": "epoch-millis"
+    },
+    "updatedAt": {
+      "type": "integer",
+      "minimum": 0,
+      "format": "epoch-millis",
+      "title": "Last changed",
+      "description": "Epoch millis of the last change. Last writer wins."
+    },
+    "deviceId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "title": "Device",
+      "description": "Stable random id of the device that wrote this document."
+    },
+    "deleted": {
+      "type": "boolean",
+      "title": "Deleted",
+      "description": "Tombstone: the item was removed. Documents are kept so every device learns about the delete."
+    }
+  }
+}
