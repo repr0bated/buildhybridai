@@ -19,7 +19,7 @@ Add the signing certificate fingerprints (Project settings → app → *Add fing
 | Build | SHA-1 | SHA-256 |
 |---|---|---|
 | Debug APK built on the box (`~/.android/debug.keystore`) | `73:92:E5:C6:AC:DE:74:36:FC:01:AA:82:46:29:E1:14:9B:8D:23:EA` | `89:DF:A3:86:82:99:31:85:E9:13:00:4B:46:3D:9E:BF:42:C0:4D:7A:65:95:A3:CB:2D:07:25:2A:F0:5D:0A:C4` |
-| Release APK (`callguardian-release.jks`, kept outside the repo) | `E0:87:CC:81:9B:4D:DB:52:25:9D:02:E0:2A:51:3C:7D:8D:C9:C0:1F` | `F3:36:BC:06:BE:C7:40:18:46:5B:8D:E1:29:0E:20:7A:70:34:98:54:07:4C:84:CD:E2:97:5A:84:99:67:A4:7F:7C` |
+| Release APK (`callguardian-release.jks`, kept outside the repo) | `E0:87:CC:81:9B:4D:DB:52:25:9D:02:E0:2A:51:3C:7D:8D:C9:C0:1F` | `F3:36:BC:06:BE:C7:40:18:46:5B:8E:12:90:E2:07:A7:03:49:85:40:74:C8:4C:DE:29:75:A8:49:96:7A:4F:7C` |
 
 If you build on another machine, its debug keystore differs. Get its fingerprints with `./gradlew signingReport`.
 
@@ -45,3 +45,10 @@ Download **google-services.json** (it covers both apps once both are registered)
 * Home shows **Online** and the model card reads **Ready**.
 * Open a Lab sample → **Explain with Gemini** → the confirm sheet shows the redacted text → **Send redacted text**. The deep analysis card fills in and Receipts shows `guardian.cloud.explain@v1 · OK · cloud`.
 * If you get "App Check rejected the request", the debug token isn't registered yet.
+
+## Project (provisioned)
+
+- Firebase project: `callguardian-hybrid` (number `662816906631`), no billing linked.
+- Android apps: `io.github.repr0bated.callguardian`, `io.github.repr0bated.callguardian.debug` (SHA-1 and SHA-256 registered for both).
+- Enabled: Firebase AI Logic (`firebasevertexai`), Generative Language, App Check, Play Integrity.
+- App Check: Play Integrity configured for the release app; not enforced. Register the debug token from the phone before enforcing.
