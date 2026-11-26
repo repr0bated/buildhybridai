@@ -15,12 +15,12 @@ import androidx.compose.runtime.setValue
 import com.example.callguardian.ui.screens.messages.ComposeMessageScreen
 import com.example.callguardian.ui.screens.messages.MessageThreadScreen
 import com.example.callguardian.ui.screens.messages.MessagesListScreen
-import com.example.callguardian.ui.screens.messages.sendSms
 import com.example.callguardian.ui.screens.messages.smsRoleRequest
 import com.example.callguardian.ui.theme.CallGuardianTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import android.widget.Toast
 
 /**
  * SENDTO entry point required for ROLE_SMS (sms/smsto/mms/mmsto).
@@ -79,8 +79,16 @@ class ComposeSmsActivity : ComponentActivity() {
                         onRequestSmsRole = { smsRoleRequest(this) },
                         onBack = { if (dest.isNullOrBlank()) mode = "list" else finish() },
                         onSend = {
-                            if (sendSms(this, composeTo.trim(), composeBody.trim())) {
-                                address = composeTo.trim(); mode = "thread"; composeBody = ""
+                            val dests = MessagePresentation.splitRecipients(composeTo)
+                            val text = composeBody.trim()
+                            if (dests.isEmpty() || text.isBlank()) return@ComposeMessageScreen
+                            scope.launch {
+                                val result = MessagingGateway.from(this@ComposeSmsActivity).send(dests, text)
+                                if (result.ok) {
+                                    address = MessagePresentation.joinRecipients(dests); mode = "thread"; composeBody = ""
+                                } else {
+                                    Toast.makeText(this@ComposeSmsActivity, result.error ?: "Couldn't send.", Toast.LENGTH_SHORT).show()
+                                }
                             }
                         },
                     )
@@ -98,8 +106,14 @@ class ComposeSmsActivity : ComponentActivity() {
                         onBack = { if (dest.isNullOrBlank()) mode = "list" else finish() },
                         onSend = {
                             val text = threadBody.trim()
-                            if (text.isNotBlank() && sendSms(this, address, text)) {
-                                threadBody = ""; prefs.saveDraft(MessagePresentation.threadKey(address), ""); reloadThread(address)
+                            if (text.isBlank()) return@MessageThreadScreen
+                            scope.launch {
+                                val result = MessagingGateway.from(this@ComposeSmsActivity).send(MessagePresentation.splitRecipients(address), text)
+                                if (result.ok) {
+                                    threadBody = ""; prefs.saveDraft(MessagePresentation.threadKey(address), ""); reloadThread(address)
+                                } else {
+                                    Toast.makeText(this@ComposeSmsActivity, result.error ?: "Couldn't send.", Toast.LENGTH_SHORT).show()
+                                }
                             }
                         },
                         onCopy = { text ->
