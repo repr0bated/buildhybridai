@@ -97,6 +97,7 @@ class AppViewModel @Inject constructor(
     private val ownedStore: OwnedStore,
     private val subscriptionStore: com.example.callguardian.subscriptions.SubscriptionStore,
     private val jevSecrets: com.example.callguardian.jev.JevSecrets,
+    private val geminiSecrets: com.example.callguardian.ai.GeminiSecrets,
     private val remoteConfig: com.example.callguardian.firebase.GuardianRemoteConfig,
     private val lookupManager: com.example.callguardian.lookup.ReverseLookupManager,
     private val lookupSecrets: com.example.callguardian.lookup.LookupSecrets,
@@ -137,6 +138,7 @@ class AppViewModel @Inject constructor(
     val listed = profilesDao.observeListed().stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
     val ownedAccounts: StateFlow<List<OwnedAccount>> = ownedStore.accounts.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
     val jevKeySaved: StateFlow<Boolean> = jevSecrets.hasKey
+    val geminiKeySaved: StateFlow<Boolean> = geminiSecrets.hasKey
     val twilioKeySaved: StateFlow<Boolean> = lookupSecrets.hasTwilio
     val telnyxKeySaved: StateFlow<Boolean> = lookupSecrets.hasTelnyx
     fun ownedFor(number: String?) = ownedStore.matchSender(number)
@@ -370,6 +372,8 @@ class AppViewModel @Inject constructor(
     }
     fun saveJevKey(key: String) = viewModelScope.launch { jevSecrets.setApiKey(key) }
     fun clearJevKey() = viewModelScope.launch { jevSecrets.clear() }
+    fun saveGeminiKey(key: String) = viewModelScope.launch { geminiSecrets.setApiKey(key) }
+    fun clearGeminiKey() = viewModelScope.launch { geminiSecrets.clear() }
 
     // ---------------------------------------------------------------- integrations (Settings)
 

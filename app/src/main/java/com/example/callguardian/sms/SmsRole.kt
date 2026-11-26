@@ -8,7 +8,14 @@ import android.os.Build
 import android.provider.Settings
 import android.provider.Telephony
 
-/** Helpers for the optional default-SMS role. The app never grants itself the role. */
+/**
+ * Helpers for the optional default-SMS role.
+ * The app never grants itself the role, never requests it on install, update, or
+ * startup, and only opens the system RoleManager dialog after an explicit user tap.
+ * Updating the APK (`adb install -r`) does not change the holder: Android keeps
+ * ROLE_SMS on the same package if it already held it.
+ */
+
 object SmsRole {
     const val ROLE = RoleManager.ROLE_SMS
 

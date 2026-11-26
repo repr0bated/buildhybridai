@@ -87,6 +87,7 @@ fun SettingsScreen(vm: AppViewModel, actions: SetupActions, onLists: () -> Unit)
                     }) { Text("Copy token") }
                 }
             }
+            DeepAnalysisCard(vm)
             LookupCard(vm)
             JevKeyCard(vm)
             SectionCard {
@@ -141,6 +142,35 @@ private fun KeyField(value: String, onValue: (String) -> Unit, label: String, ge
     }
 }
 
+
+@Composable
+private fun DeepAnalysisCard(vm: AppViewModel) {
+    val saved by vm.geminiKeySaved.collectAsState()
+    var value by remember { mutableStateOf("") }
+    val project = BuildConfig.FIREBASE_PROJECT_ID.trim().ifBlank { "this app's Firebase project" }
+    SectionCard {
+        SectionTitle("Deep Analysis")
+        Text(
+            "Deep Analysis (cloud Gemini) uses Firebase AI Logic in the Firebase project $project. " +
+                "It only runs when you ask for it, and the text it sees is redacted.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            "Own Gemini API key (optional, off by default, not used for the hackathon). " +
+                "If you save a key it is stored encrypted on this phone (Android Keystore) and is never logged or backed up. " +
+                "The key is used only as a fallback when Firebase AI Logic fails.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        if (saved) Text("A key is saved on this phone. It is not used for the hackathon.", style = MaterialTheme.typography.bodySmall, color = com.example.callguardian.ui.theme.Brand.Lime)
+        KeyField(value, { value = it }, "Own Gemini API key", com.example.callguardian.ai.GeminiSecrets.GET_KEY_URL)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = { vm.saveGeminiKey(value); value = "" }, enabled = value.isNotBlank()) { Text("Save") }
+            if (saved) TextButton(onClick = { vm.clearGeminiKey(); value = "" }) { Text("Remove key") }
+        }
+    }
+}
 
 @Composable
 private fun JevKeyCard(vm: AppViewModel) {
@@ -392,7 +422,7 @@ private fun DefaultSmsCard(vm: AppViewModel, actions: SetupActions) {
     val setup by vm.setup.collectAsState()
     SectionCard {
         SectionTitle("Default SMS app")
-        Text("Optional. When Call Guardian is the default, Quarantine can hide scam texts from the system inbox. You can switch back anytime.",
+        Text("Optional. The app never requests or takes this role on install, update, or startup. It only opens the system prompt when you tap the button below. When Call Guardian is the default, Quarantine can hide scam texts from the system inbox. You can switch back anytime.",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         if (setup.smsRole) {
             Text("Call Guardian is the default SMS app.", style = MaterialTheme.typography.bodyMedium)

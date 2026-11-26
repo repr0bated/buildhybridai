@@ -6,18 +6,23 @@ import com.example.callguardian.model.RiskLevel
 import com.example.callguardian.model.ScamCategory
 import com.google.firebase.ai.annotations.Generable
 import com.google.firebase.ai.annotations.Guide
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 /**
  * Structured output for the triage pass. Mirrors assets/schemas/scam_verdict.schema.json.
  * On-device Nano returns this as plain JSON (no responseSchema, to avoid ErrorCode -110);
  * cloud Gemini is constrained with a Schema.obj generated from that registry schema.
+ * reputable_official and held_account are required YES/NO/UNKNOWN; omitted values are
+ * filled from local signals before validation.
  */
 @Serializable
 data class ScamVerdict(
     val verdict: ModelVerdict,
     val confidence: Double,
     val reasons: List<String> = emptyList(),
+    @SerialName("reputable_official") val reputableOfficial: String = com.example.callguardian.screening.VerdictFields.UNKNOWN,
+    @SerialName("held_account") val heldAccount: String = com.example.callguardian.screening.VerdictFields.UNKNOWN,
 ) {
     val confidenceInt: Int get() = confidence.toInt().coerceIn(0, 100)
 }

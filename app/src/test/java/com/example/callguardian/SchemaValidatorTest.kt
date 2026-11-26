@@ -7,7 +7,7 @@ import org.junit.Test
 
 class SchemaValidatorTest {
     private val v = SchemaValidator(TestAssets.read("scam_verdict.schema.json"), "scam_verdict.schema.json")
-    private val good = """{"verdict":"SCAM","confidence":91,"reasons":["Look-alike USPS link"]}"""
+    private val good = """{"verdict":"SCAM","confidence":91,"reasons":["Look-alike USPS link"],"reputable_official":"NO","held_account":"NO"}"""
 
     @Test fun acceptsValidVerdict() = assertTrue(v.validate(good).errors.toString(), v.validate(good).valid)
     @Test fun stripsCodeFences() = assertTrue(v.validate("```json\n$good\n```").valid)

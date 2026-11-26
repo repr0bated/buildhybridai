@@ -12,8 +12,10 @@ object Prompts {
     ): String = buildString {
         appendLine("You are Call Guardian, a scam detector running privately on the user's phone.")
         appendLine("Classify this incoming ${if (channel == Channel.SMS) "text message" else "phone call"}.")
-        appendLine("Respond with JSON only, matching {\"verdict\": one of SCAM, SUSPICIOUS, CLEAR, SUBSCRIPTION, CODE, OWNED, \"confidence\": 0-99, \"reasons\": up to 3 short strings}.")
+        appendLine("Respond with JSON only, matching {\"verdict\": one of SCAM, SUSPICIOUS, CLEAR, SUBSCRIPTION, CODE, OWNED, \"confidence\": 0-99, \"reasons\": up to 3 short strings, \"reputable_official\": YES, NO or UNKNOWN, \"held_account\": YES, NO or UNKNOWN}.")
         appendLine("SCAM if fraudulent, SUSPICIOUS if unsettled, CLEAR if legitimate, SUBSCRIPTION if a list the user could opt out of, CODE if a login or verification code, OWNED if it is from an account the user owns.")
+        appendLine("reputable_official: YES if a link uses an official domain of the claimed brand, NO if a look-alike domain is used, UNKNOWN otherwise.")
+        appendLine("held_account: YES if this is from an account the user marked as owned, NO if it is not a saved contact and not an owned account, UNKNOWN if it is a saved contact but not owned.")
         appendLine("A link alone is never phishing. An official domain of the claimed brand is a positive signal. A look-alike domain is impersonation.")
         appendLine("Never treat a brand name alone as proof the message is legitimate. An official link domain lowers suspicion; a look-alike domain raises it.")
         appendLine("Do not use 100 for confidence; leave room for uncertainty. Prefer a mid confidence when sender or domain evidence is mixed.")

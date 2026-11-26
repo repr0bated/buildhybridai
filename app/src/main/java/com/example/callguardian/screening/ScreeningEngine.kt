@@ -406,7 +406,16 @@ class ScreeningEngine @Inject constructor(
             }
         }
 
-        val report = verdictValidator.validate(run.rawText)
+        val filled = VerdictFields.fillOmitted(
+            run.rawText,
+            VerdictFields.localReputableOfficial(e.body),
+            VerdictFields.localHeldAccount(
+                isContact = e.isContact,
+                ownedSender = ownedStore.matchSender(e.number) != null,
+                ownedDomain = VerdictFields.ownedDomainMatch(e.body, ownedStore.snapshot),
+            ),
+        )
+        val report = verdictValidator.validate(filled)
         val base = events.get(id)!!.copy(
             aiSource = run.source.name, aiModel = run.modelName, aiRaw = report.json.ifBlank { run.rawText }, aiLatencyMs = run.latencyMs,
             schemaValid = report.valid, schemaErrors = report.errors.joinToString("\n").ifBlank { null }, aiError = run.fallbackNote,

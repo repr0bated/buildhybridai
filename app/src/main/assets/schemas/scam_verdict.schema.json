@@ -8,7 +8,9 @@
   "required": [
     "verdict",
     "confidence",
-    "reasons"
+    "reasons",
+    "reputable_official",
+    "held_account"
   ],
   "properties": {
     "verdict": {
@@ -38,6 +40,16 @@
         "maxLength": 200
       },
       "description": "Up to 3 short, concrete reasons taken from the content."
+    },
+    "reputable_official": {
+      "type": "string",
+      "enum": ["YES", "NO", "UNKNOWN"],
+      "description": "YES if a link uses an official domain of the claimed brand, NO if a look-alike domain is used, UNKNOWN otherwise."
+    },
+    "held_account": {
+      "type": "string",
+      "enum": ["YES", "NO", "UNKNOWN"],
+      "description": "YES if this is from an account the user marked as owned, NO if it is not a saved contact and not owned, UNKNOWN if it is a saved contact but not an owned account."
     }
   }
 }

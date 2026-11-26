@@ -51,6 +51,8 @@ enum class DeviceModelState { UNKNOWN, UNAVAILABLE, DOWNLOADABLE, DOWNLOADING, A
 class HybridScamAnalyzer @Inject constructor(
     @ApplicationContext private val context: Context,
     private val remote: com.example.callguardian.firebase.GuardianRemoteConfig,
+    private val geminiSecrets: GeminiSecrets,
+    private val geminiByok: GeminiDeveloperClient,
 ) {
 
     private val cloudModelName = BuildConfig.CLOUD_MODEL
@@ -176,8 +178,15 @@ class HybridScamAnalyzer @Inject constructor(
 
     suspend fun deepAnalysis(prompt: String): ModelRun {
         val t0 = System.currentTimeMillis()
-        val result = deepModel.generateObject(DeepAnalysis.firebaseAISchema(), prompt)
-        return ModelRun(result.response.text, VerdictSource.IN_CLOUD, cloudModelName, System.currentTimeMillis() - t0)
+        return try {
+            val result = deepModel.generateObject(DeepAnalysis.firebaseAISchema(), prompt)
+            val text = result.response.text?.trim().orEmpty()
+            if (text.isEmpty()) error("Cloud model returned an empty response")
+            ModelRun(text, VerdictSource.IN_CLOUD, cloudModelName, System.currentTimeMillis() - t0)
+        } catch (t: Throwable) {
+            if (t is kotlinx.coroutines.CancellationException) throw t
+            runByokOrThrow(t, prompt, temperature = 0.2f, maxOutputTokens = 900, t0 = t0)
+        }
     }
 
     /**
@@ -217,10 +226,30 @@ class HybridScamAnalyzer @Inject constructor(
             }
             timber.log.Timber.w(templated.exceptionOrNull(), "Server prompt template unavailable (Spark/Developer API may not serve templates); falling back to Remote Config / in-app prompt")
         }
-        val result = cloudTriageModel().generateContent(finalPrompt)
-        val text = result.text?.trim().orEmpty()
-        if (text.isEmpty()) error("Cloud model returned an empty response")
-        return ModelRun(text, VerdictSource.IN_CLOUD, remote.cloudModel, System.currentTimeMillis() - t0)
+        return try {
+            val result = cloudTriageModel().generateContent(finalPrompt)
+            val text = result.text?.trim().orEmpty()
+            if (text.isEmpty()) error("Cloud model returned an empty response")
+            ModelRun(text, VerdictSource.IN_CLOUD, remote.cloudModel, System.currentTimeMillis() - t0)
+        } catch (t: Throwable) {
+            if (t is kotlinx.coroutines.CancellationException) throw t
+            runByokOrThrow(t, finalPrompt, temperature = 0.1f, maxOutputTokens = 400, t0 = t0)
+        }
+    }
+
+    /** Firebase AI Logic first; optional own Gemini API key only if that fails. */
+    private fun runByokOrThrow(cause: Throwable, prompt: String, temperature: Float, maxOutputTokens: Int, t0: Long): ModelRun {
+        val key = geminiSecrets.apiKey()
+        if (key.isBlank()) throw cause
+        Timber.w(cause, "Firebase AI Logic failed; trying the optional Gemini API key")
+        val text = geminiByok.generate(key, remote.cloudModel, prompt, temperature, maxOutputTokens)
+        return ModelRun(
+            text,
+            VerdictSource.IN_CLOUD,
+            "${remote.cloudModel} (own key)",
+            System.currentTimeMillis() - t0,
+            fallbackNote = "Used your Gemini API key after Firebase AI Logic failed.",
+        )
     }
 
     companion object {

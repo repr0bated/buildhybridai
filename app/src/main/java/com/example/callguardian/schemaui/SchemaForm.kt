@@ -149,7 +149,8 @@ data class SchemaForm(
 
         /** Human display of a value for a field kind (used by receipt detail and read-only rows). */
         fun display(f: SchemaField, v: JsonElement?): String = when {
-            v == null || v is JsonNull -> "—"
+            v == null || v is JsonNull ->
+                if (f.kind == FieldKind.BOOLEAN || com.example.callguardian.screening.VerdictFields.isTriStateField(f.name)) "Unknown" else "—"
             v is JsonArray -> v.joinToString("\n") { item ->
                 when (item) {
                     is JsonPrimitive -> "• " + (item.contentOrNull ?: item.toString())
@@ -164,8 +165,13 @@ data class SchemaForm(
             else -> {
                 val p = v as JsonPrimitive
                 when (f.kind) {
-                    FieldKind.BOOLEAN -> if (p.booleanOrNull == true) "Yes" else "No"
-                    FieldKind.ENUM -> humanizeEnum(p.content)
+                    FieldKind.BOOLEAN -> com.example.callguardian.screening.VerdictFields.display(p.content)
+                    FieldKind.ENUM ->
+                        if (com.example.callguardian.screening.VerdictFields.isTriStateField(f.name) ||
+                            p.content.equals("YES", true) || p.content.equals("NO", true) ||
+                            p.content.equals("UNKNOWN", true) || p.content.equals("no answer", true)
+                        ) com.example.callguardian.screening.VerdictFields.display(p.content)
+                        else humanizeEnum(p.content)
                     FieldKind.EPOCH_MILLIS -> p.longOrNull?.let { SimpleDateFormat("MMM d, yyyy HH:mm:ss", Locale.US).format(Date(it)) } ?: p.content
                     FieldKind.PHONE -> formatPhone(p.content)
                     else -> p.content
