@@ -1,152 +1,114 @@
 package com.example.callguardian.sms
 
+import android.Manifest
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.runtime.LaunchedEffect
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.viewModels
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import com.example.callguardian.ui.screens.messages.ComposeMessageScreen
-import com.example.callguardian.ui.screens.messages.MessageThreadScreen
-import com.example.callguardian.ui.screens.messages.MessagesListScreen
+import com.example.callguardian.ui.AppViewModel
+import com.example.callguardian.ui.SetupActions
+import com.example.callguardian.ui.screens.messages.ComposeMessageRoute
+import com.example.callguardian.ui.screens.messages.MessageThreadRoute
+import com.example.callguardian.ui.screens.messages.MessagesListRoute
 import com.example.callguardian.ui.screens.messages.smsRoleRequest
 import com.example.callguardian.ui.theme.CallGuardianTheme
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import android.widget.Toast
+import dagger.hilt.android.AndroidEntryPoint
 
 /**
  * SENDTO entry point required for ROLE_SMS (sms/smsto/mms/mmsto).
- * UI is the same Messages screens as the in-app tab (Clear SMS-inspired, terminal theme).
+ * Uses the same Messages routes as the in-app tab so contact picker,
+ * attachments, dual-SIM, scheduled send, smart replies, and Room drafts
+ * are available here too. The default SMS role is never taken automatically.
  */
+@AndroidEntryPoint
 class ComposeSmsActivity : ComponentActivity() {
+
+    private val vm: AppViewModel by viewModels()
+
+    private val permissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { vm.refresh() }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         val dest = destinationFrom(intent)
         val prefill = intent?.getStringExtra(Intent.EXTRA_TEXT) ?: intent?.data?.getQueryParameter("body")
+        val actions = SetupActions(
+            requestScreeningRole = {},
+            requestSms = { permissionLauncher.launch(arrayOf(Manifest.permission.RECEIVE_SMS, Manifest.permission.READ_SMS)) },
+            requestContacts = { permissionLauncher.launch(arrayOf(Manifest.permission.READ_CONTACTS)) },
+            requestNotifications = {
+                if (Build.VERSION.SDK_INT >= 33) permissionLauncher.launch(arrayOf(Manifest.permission.POST_NOTIFICATIONS))
+            },
+            openAppSettings = {
+                startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", packageName, null)))
+            },
+            requestSmsRole = { smsRoleRequest(this) },
+        )
         setContent {
             CallGuardianTheme {
-                val held = remember { mutableStateOf(SmsRole.held(this)) }
-                val prefs = remember { ConversationPrefs(this) }
-                var mode by remember { mutableStateOf(if (dest.isNullOrBlank()) "list" else "thread") }
+                var mode by remember {
+                    mutableStateOf(
+                        when {
+                            !prefill.isNullOrBlank() -> "compose"
+                            !dest.isNullOrBlank() -> "thread"
+                            else -> "list"
+                        },
+                    )
+                }
                 var address by remember { mutableStateOf(dest.orEmpty()) }
                 var composeTo by remember { mutableStateOf(dest.orEmpty()) }
                 var composeBody by remember { mutableStateOf(prefill.orEmpty()) }
-                var rows by remember { mutableStateOf<List<ConversationRow>>(emptyList()) }
-                var bubbles by remember { mutableStateOf<List<ThreadBubble>>(emptyList()) }
-                var query by remember { mutableStateOf("") }
-                var showArchived by remember { mutableStateOf(false) }
-                var threadBody by remember { mutableStateOf("") }
-                val scope = rememberCoroutineScope()
-                fun reloadList() {
-                    scope.launch {
-                        val raw = withContext(Dispatchers.IO) { MessagingQueries.conversations(this@ComposeSmsActivity) }
-                        rows = raw.map {
-                            val key = MessagePresentation.threadKey(it.address)
-                            it.copy(pinned = prefs.isPinned(key), archived = prefs.isArchived(key), muted = prefs.isMuted(key))
-                        }
-                    }
-                }
-                fun reloadThread(addr: String) {
-                    scope.launch { bubbles = withContext(Dispatchers.IO) { MessagingQueries.thread(this@ComposeSmsActivity, addr) } }
-                }
-                LaunchedEffect(mode, address) {
-                    if (mode == "list") reloadList()
-                    if (mode == "thread" && address.isNotBlank()) {
-                        threadBody = prefs.draft(MessagePresentation.threadKey(address))
-                        reloadThread(address)
-                    }
-                }
-                val filtered = rows
-                    .filter { showArchived == it.archived }
-                    .filter { MessagePresentation.matchesQuery(it.address, it.snippet, it.displayName, query) }
-                    .sortedWith(compareByDescending<ConversationRow> { it.pinned }.thenByDescending { it.date })
                 when (mode) {
-                    "compose" -> ComposeMessageScreen(
-                        to = composeTo, body = composeBody,
-                        onTo = { composeTo = it }, onBody = { composeBody = it },
-                        smsRoleHeld = held.value,
-                        previousSmsLabel = null,
-                        onRequestSmsRole = { smsRoleRequest(this) },
-                        onBack = { if (dest.isNullOrBlank()) mode = "list" else finish() },
-                        onSend = {
-                            val dests = MessagePresentation.splitRecipients(composeTo)
-                            val text = composeBody.trim()
-                            if (dests.isEmpty() || text.isBlank()) return@ComposeMessageScreen
-                            scope.launch {
-                                val result = MessagingGateway.from(this@ComposeSmsActivity).send(dests, text)
-                                if (result.ok) {
-                                    address = MessagePresentation.joinRecipients(dests); mode = "thread"; composeBody = ""
-                                } else {
-                                    Toast.makeText(this@ComposeSmsActivity, result.error ?: "Couldn't send.", Toast.LENGTH_SHORT).show()
-                                }
-                            }
+                    "compose" -> ComposeMessageRoute(
+                        initialTo = composeTo.ifBlank { null },
+                        initialBody = composeBody.ifBlank { null },
+                        vm = vm,
+                        actions = actions,
+                        onBack = { if (dest.isNullOrBlank() && prefill.isNullOrBlank()) mode = "list" else finish() },
+                        onSent = { dests ->
+                            address = dests
+                            mode = "thread"
+                            composeBody = ""
                         },
                     )
-                    "thread" -> MessageThreadScreen(
+                    "thread" -> MessageThreadRoute(
                         address = address,
-                        bubbles = bubbles,
-                        body = threadBody,
-                        onBody = {
-                            threadBody = it
-                            prefs.saveDraft(MessagePresentation.threadKey(address), it)
-                        },
-                        smsRoleHeld = held.value,
-                        previousSmsLabel = null,
-                        onRequestSmsRole = { smsRoleRequest(this) },
+                        vm = vm,
+                        actions = actions,
                         onBack = { if (dest.isNullOrBlank()) mode = "list" else finish() },
-                        onSend = {
-                            val text = threadBody.trim()
-                            if (text.isBlank()) return@MessageThreadScreen
-                            scope.launch {
-                                val result = MessagingGateway.from(this@ComposeSmsActivity).send(MessagePresentation.splitRecipients(address), text)
-                                if (result.ok) {
-                                    threadBody = ""; prefs.saveDraft(MessagePresentation.threadKey(address), ""); reloadThread(address)
-                                } else {
-                                    Toast.makeText(this@ComposeSmsActivity, result.error ?: "Couldn't send.", Toast.LENGTH_SHORT).show()
-                                }
-                            }
-                        },
-                        onCopy = { text ->
-                            getSystemService(android.content.ClipboardManager::class.java)
-                                ?.setPrimaryClip(android.content.ClipData.newPlainText("message", text))
-                        },
-                        onForward = { text -> composeTo = ""; composeBody = text; mode = "compose" },
-                        onDelete = { id ->
-                            scope.launch(Dispatchers.IO) { MessagingQueries.deleteMessage(this@ComposeSmsActivity, id) }
-                                .invokeOnCompletion { reloadThread(address) }
+                        onForward = { text ->
+                            composeTo = ""
+                            composeBody = text
+                            mode = "compose"
                         },
                         onSubscriptions = {
-                            startActivity(Intent(this, com.example.callguardian.MainActivity::class.java).apply {
-                                putExtra("open", "subscriptions")
-                                addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                            })
+                            startActivity(
+                                Intent(this, com.example.callguardian.MainActivity::class.java).apply {
+                                    putExtra("open", "subscriptions")
+                                    addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                                },
+                            )
                         },
-                        privateHidden = false,
-                        canStop = false,
                     )
-                    else -> MessagesListScreen(
-                        rows = filtered, query = query, onQuery = { query = it },
-                        showArchived = showArchived, onToggleArchiveView = { showArchived = !showArchived },
-                        smsRoleHeld = held.value, previousSmsLabel = null,
-                        onRequestSmsRole = { smsRoleRequest(this) },
+                    else -> MessagesListRoute(
+                        vm = vm,
+                        actions = actions,
                         onOpen = { address = it; mode = "thread" },
-                        onCompose = { composeTo = ""; composeBody = ""; mode = "compose" },
-                        onPin = { prefs.togglePinned(MessagePresentation.threadKey(it)); reloadList() },
-                        onArchive = { prefs.toggleArchived(MessagePresentation.threadKey(it)); reloadList() },
-                        onMute = { prefs.toggleMuted(MessagePresentation.threadKey(it)); reloadList() },
-                        onDelete = { addr ->
-                            scope.launch(Dispatchers.IO) { MessagingQueries.deleteThread(this@ComposeSmsActivity, addr) }
-                                .invokeOnCompletion { reloadList() }
+                        onCompose = { to ->
+                            composeTo = to.orEmpty()
+                            composeBody = ""
+                            mode = "compose"
                         },
                     )
                 }
