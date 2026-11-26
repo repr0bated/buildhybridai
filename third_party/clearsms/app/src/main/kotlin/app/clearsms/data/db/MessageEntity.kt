@@ -1,0 +1,215 @@
+package app.clearsms.data.db
+
+import androidx.room.ColumnInfo
+import androidx.room.Entity
+import androidx.room.Index
+import androidx.room.PrimaryKey
+import app.clearsms.domain.model.Category
+import app.clearsms.domain.model.SubCategory
+
+/** A single SMS message with its categorization and extracted metadata. */
+@Entity(
+    tableName = "messages",
+    indices = [
+        Index("threadId"),
+        Index("normalizedSender"),
+        Index("category"),
+        Index("timestamp"),
+        // Serves the paged conversation query (WHERE threadId ORDER BY
+        // timestamp DESC) without a separate sort step on large threads.
+        Index("threadId", "timestamp"),
+        // Idempotency key for the history import: re-processing the same
+        // system provider row can never create a duplicate. NULL (messages
+        // that arrived live through SMS_DELIVER) is exempt from uniqueness.
+        Index("systemSmsId", unique = true),
+        // The same idempotency guarantee for the MMS history import. A
+        // SEPARATE column because `content://sms` and `content://mms` number
+        // their rows independently: one `_id` space per provider, so a
+        // single column would collide an SMS with an unrelated MMS.
+        Index("systemMmsId", unique = true),
+        // Serves the soft-delete filters (deletedAt IS NULL on every read
+        // path) and the recycle-bin listing/purge queries.
+        Index("deletedAt"),
+        // Serves the thread-identity anchor lookup on every insert (see
+        // [app.clearsms.data.repository.ThreadIdentity]).
+        Index("providerThreadId"),
+    ],
+)
+data class MessageEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val threadId: Long,
+    val sender: String,
+    val normalizedSender: String,
+    val body: String,
+    val timestamp: Long,
+    @ColumnInfo(defaultValue = "0") val isRead: Boolean = false,
+    @ColumnInfo(defaultValue = "0") val isArchived: Boolean = false,
+    val category: Category,
+    val subCategory: SubCategory? = null,
+    val extractedOtp: String? = null,
+    val extractedDataJson: String? = null,
+    @ColumnInfo(defaultValue = "0") val isBlockedSender: Boolean = false,
+    /** `_id` of the originating row in the system SMS provider, when imported. */
+    val systemSmsId: Long? = null,
+    /**
+     * `_id` of the originating row in the system MMS provider
+     * (`content://mms`), when imported by the MMS history import. Null for
+     * an MMS that arrived live through `WAP_PUSH_DELIVER` (the app stores
+     * those itself and never writes them to the provider) and for every
+     * SMS. Kept apart from [systemSmsId] because the two providers number
+     * their rows independently - see the unique indices above.
+     */
+    val systemMmsId: Long? = null,
+    /**
+     * True for messages the user sent, false for received ones. A boolean
+     * (not an enum) because SMS has exactly two directions, and the SQL
+     * `DEFAULT 0` makes every pre-upgrade or unmatched row incoming - the
+     * safe reading - without a converter. Drives bubble alignment.
+     */
+    @ColumnInfo(defaultValue = "0") val isOutgoing: Boolean = false,
+    /** Send lifecycle for outgoing messages; always null on incoming rows. */
+    val deliveryStatus: DeliveryStatus? = null,
+    /**
+     * Number of SMS parts the outgoing body was divided into (1 for a short
+     * message, always 1 on incoming rows). Set at dispatch, it is the
+     * denominator for the multipart worst-part status aggregation: DELIVERED
+     * is only recorded once [deliveredParts] reaches this count.
+     */
+    @ColumnInfo(defaultValue = "1") val partCount: Int = 1,
+    /**
+     * How many parts of an outgoing multipart message have a carrier
+     * delivery report so far. Reset to 0 on (re)dispatch; the message is
+     * promoted to DELIVERED only when this reaches [partCount] - a partially
+     * delivered multipart message honestly stays at SENT.
+     */
+    @ColumnInfo(defaultValue = "0") val deliveredParts: Int = 0,
+    /**
+     * Soft-delete marker: null for live messages; the deletion timestamp for
+     * messages the user deleted. A non-null value hides the row from every
+     * read path (inbox, conversation, search, counts) - first for the
+     * transient undo window, and after commit as the recycle-bin resting
+     * state (when the bin is enabled). Also the 30-day purge clock.
+     */
+    val deletedAt: Long? = null,
+    /**
+     * True while a soft-deleted row's system-provider deletion has NOT been
+     * committed yet (the Gmail-style undo window). The provider deletion is
+     * deferred so undo never has to re-insert a provider row; a pending flag
+     * that survives process death is committed on next launch, so a deleted
+     * message can never resurrect in other SMS apps.
+     */
+    @ColumnInfo(defaultValue = "0") val providerDeletePending: Boolean = false,
+    /**
+     * Telephony subscription the message travelled over: the receiving SIM
+     * for incoming rows, the chosen sending SIM for outgoing ones. Null when
+     * unknown (pre-feature rows, single-SIM sends via the default manager,
+     * or a broadcast that carried no subscription extra). Drives the
+     * per-bubble "SIM n" tag and lets a resend keep its original SIM.
+     */
+    val subscriptionId: Int? = null,
+    /**
+     * When a [DeliveryStatus.SCHEDULED] outgoing message should be sent.
+     * Null on every other row. The row's [timestamp] mirrors this while
+     * scheduled (the bubble sits at its future position in the thread) and
+     * is rewritten to the actual send time when the schedule fires.
+     */
+    val scheduledAt: Long? = null,
+    /** Incoming-MMS lifecycle (see [MmsStatus]); null on SMS rows. */
+    val mmsStatus: MmsStatus? = null,
+    /**
+     * X-Mms-Transaction-ID from the carrier notification. Kept for
+     * diagnostics and to correlate the retrieve transaction; null on SMS.
+     */
+    val mmsTransactionId: String? = null,
+    /**
+     * The carrier MMSC content-location URL. Retained (also after failure)
+     * so a tapped FAILED row can retry the download without re-receiving
+     * the notification.
+     */
+    val mmsContentLocation: String? = null,
+    /**
+     * JSON array of the message's To/Cc addresses - the group-MMS
+     * recipients list, stored for a future group-conversation UI. The row
+     * itself is attributed to the SENDER (its thread); no group-thread UI
+     * exists yet.
+     */
+    val mmsRecipients: String? = null,
+    /**
+     * Comma-separated kinds of stored attachments: "IMAGE", "FILE" or
+     * "IMAGE,FILE"; null when the message has none. Denormalized onto the
+     * message so inbox snippets and notifications can label an image-only
+     * MMS ("📷 Photo") without joining the attachments table.
+     */
+    val attachmentKinds: String? = null,
+    /**
+     * Why the last outgoing send FAILED, as a [app.clearsms.mms.SendFailureReason]
+     * name - null while unsent/sent/unknown. Cleared on resend; shown in the
+     * failed-message dialog so 'Not sent' is never the whole story.
+     */
+    val sendFailureReason: String? = null,
+    /**
+     * When the SENDER's network says an incoming message was sent - the
+     * SMSC timestamp carried in the PDU (`Telephony.Sms.DATE_SENT`), as
+     * opposed to [timestamp], which is when THIS device received it. Null
+     * = unknown: the network reported nothing (the provider stores 0 for
+     * that, and 0 is never a real send time), the row is an MMS, or it is
+     * outgoing (an outgoing row's send time IS its [timestamp]). Never
+     * invented, never corrected for SMSC clock skew - shown as reported
+     * and labelled as the network's time. The optional sent-time sort
+     * falls back to [timestamp] wherever this is null.
+     */
+    val dateSent: Long? = null,
+    /**
+     * When THIS device processed the carrier delivery report that completed
+     * an outgoing SMS's delivery (the report for its last undelivered part)
+     * - stamped by [MessageDao.recordPartDelivered] at the moment the
+     * report broadcast was handled, so it survives process death with the
+     * status. A close proxy for the delivery time, NOT the carrier's own
+     * timestamp, and labelled as such wherever it is shown. Null when the
+     * row is not DELIVERED, when it was delivered before this column
+     * existed or was imported from the system provider (the report exists
+     * but its arrival was never recorded - shown as confirmed without a
+     * time, never with an invented one), and always on incoming and MMS
+     * rows (MMS delivery reports are not supported). Cleared on resend and
+     * when a later part failure demotes the row to FAILED.
+     */
+    val deliveredAt: Long? = null,
+    /**
+     * The system provider's conversation id for this row
+     * (`Telephony.Sms.THREAD_ID`) - the platform's own, canonical-address-
+     * matched notion of "same person", and the PRIMARY thread-identity
+     * anchor since issue #42 (see [app.clearsms.data.repository.ThreadIdentity]).
+     * Only ever recorded for a ONE-TO-ONE phone-number conversation: null
+     * for alphanumeric ids and short codes (the app's own route-variant
+     * merging is the right rule for those), for an MMS with several
+     * recipients (a group thread must never pull two people into one
+     * one-to-one thread - the app has no group threads), for rows the app
+     * could not write to the provider, for MMS (never mirrored to the
+     * provider) and for pre-#42 rows the v22 backfill found no provider row
+     * for. Device-local: deliberately NOT part of the backup format.
+     */
+    val providerThreadId: Long? = null,
+)
+
+/**
+ * The instant a message sorts and shows at under the sent-time ordering:
+ * the sender's timestamp when known, otherwise the received time - so the
+ * order stays total and a message with no network timestamp is never
+ * pushed to the epoch. Mirrors the SQL `COALESCE(dateSent, timestamp)`
+ * the sent-order DAO queries sort by.
+ */
+fun MessageEntity.sentOrReceivedTimestamp(): Long = dateSent ?: timestamp
+
+/**
+ * Identity check for a row found by provider id. Provider row ids are
+ * REUSABLE (the telephony store's `_id` is a plain INTEGER PRIMARY KEY, so a
+ * freed id goes to the next insert), which means "same systemSmsId" alone
+ * does not mean "same message" - it also matches a stale row whose provider
+ * copy was deleted. Body plus timestamp settles it: the pair is what the
+ * provider itself round-trips, and two genuinely distinct messages sharing
+ * both would be indistinguishable anyway.
+ */
+fun MessageEntity.isSameMessageAs(
+    body: String,
+    timestampMs: Long,
+): Boolean = this.body == body && this.timestamp == timestampMs

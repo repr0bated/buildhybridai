@@ -11,7 +11,7 @@ import type { components } from "./typesafe.gen";
 type NoulQuestion = components["schemas"]["NoulQuestion"];
 export type SystemOneRequest = components["schemas"]["SystemOneRequest"];
 
-export const QUESTIONS_VERSION = "2026.11.1";
+export const QUESTIONS_VERSION = "2026.11.2";
 export const MODEL = "jev-latest";
 
 export type SenderKind = "saved_contact" | "unknown_number" | "short_code" | "hidden";
@@ -77,6 +77,15 @@ export const SIGNALS = {
       false: "A message that refers to an existing order, appointment or account",
     },
   },
+  reputable_official: {
+    type: "noul",
+    instructions: "Is the sender a reputable, well-known organization (e.g. Google, Apple, a major bank, a government toll agency) AND does the message match how that organization normally communicates (official domain, short code, no unusual ask)?",
+    criteria: {
+      true: "A well-known organization, and the message looks like a normal notice from them",
+      false: "An unknown sender, a look-alike domain, or an unusual ask (share a code, log in, pay urgently)",
+    },
+  },
+
 } as const satisfies Record<string, NoulQuestion>;
 
 export type SignalId = keyof typeof SIGNALS;

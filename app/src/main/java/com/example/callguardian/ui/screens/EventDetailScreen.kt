@@ -106,7 +106,7 @@ private fun Header(e: ScreeningEventEntity) {
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(e.displayName ?: e.number ?: "Hidden number", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+                Text(e.displayName ?: e.number ?: "Hidden number", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
                 if (com.example.callguardian.ui.components.LocalOwned.current.forSender(e.number) != null) com.example.callguardian.ui.components.OwnedPill()
                 if (e.reasons.contains("CLEAR (Code)")) com.example.callguardian.ui.components.CodePill()
             }
@@ -160,7 +160,7 @@ private fun MessageCard(e: ScreeningEventEntity, body: String) {
                 Spacer(Modifier.width(8.dp))
                 Text("Quarantined by guardian.sms.quarantine@v1. Don't tap links. Tap to show.", color = MaterialTheme.colorScheme.onErrorContainer, style = MaterialTheme.typography.bodyMedium)
             }
-        } else Text(body, style = MaterialTheme.typography.bodyLarge)
+        } else Text(body, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface)
     }
 }
 
@@ -206,8 +206,8 @@ private fun Step(n: Int, title: String, color: Color, line: String, detail: Stri
         }
         Spacer(Modifier.width(10.dp))
         Column {
-            Text(title, style = MaterialTheme.typography.titleSmall)
-            Text(line, style = MaterialTheme.typography.bodySmall)
+            Text(title, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface)
+            Text(line, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             detail?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
         }
     }

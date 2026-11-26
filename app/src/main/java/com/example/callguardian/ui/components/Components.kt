@@ -191,7 +191,7 @@ fun EventRow(e: ScreeningEventEntity, onClick: () -> Unit) {
         Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(e.displayName ?: e.number ?: "Hidden number", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                    maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false), color = MaterialTheme.colorScheme.onSurface)
                 if (e.isTest) { Spacer(Modifier.width(6.dp)); Pill("Test", MaterialTheme.colorScheme.onSurfaceVariant) }
                 if (LocalOwned.current.forSender(e.number) != null) { Spacer(Modifier.width(6.dp)); OwnedPill() }
                 if (e.reasons.contains("CLEAR (Code)")) { Spacer(Modifier.width(6.dp)); CodePill() }

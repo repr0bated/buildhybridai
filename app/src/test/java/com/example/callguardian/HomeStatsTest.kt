@@ -73,4 +73,11 @@ class HomeStatsTest {
         assertEquals(1, c.unprocessed)
         assertEquals(1, c.quarantined)
     }
+
+    @Test fun progressLabelDropsSenderAndReadsAnalyzingOf() {
+        val s = com.example.callguardian.ui.ProcessAllState(running = true, current = 0, total = 505, label = "28581")
+        assertEquals("Analyzing 0 of 505", s.progressLabel)
+        assertTrue(!s.progressLabel.contains("28581"))
+        assertTrue(!s.progressLabel.contains("/"))
+    }
 }

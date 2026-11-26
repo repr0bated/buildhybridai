@@ -1,0 +1,616 @@
+package app.clearsms.data.db
+
+import androidx.room.AutoMigration
+import androidx.room.Database
+import androidx.room.RoomDatabase
+import androidx.room.TypeConverters
+import androidx.room.migration.AutoMigrationSpec
+import androidx.sqlite.db.SupportSQLiteDatabase
+import app.clearsms.data.repository.TransactionDeduplication
+import app.clearsms.domain.categorizer.MessageCategorizer
+import app.clearsms.domain.model.MerchantCategory
+import app.clearsms.domain.model.TransactionType
+import app.clearsms.domain.parser.DeliveryParser
+import app.clearsms.domain.parser.ReminderParser
+import app.clearsms.domain.parser.SenderNameResolver
+import java.time.Instant
+import java.time.ZoneId
+
+/** Room database holding messages, finance data and categorization rules. */
+@Database(
+    entities = [
+        MessageEntity::class,
+        MessageFtsEntity::class,
+        AccountEntity::class,
+        TransactionEntity::class,
+        RuleEntity::class,
+        ReminderEntity::class,
+        DraftEntity::class,
+        ThreadPinEntity::class,
+        AttachmentEntity::class,
+    ],
+    version = 24,
+    exportSchema = true,
+    autoMigrations = [
+        // v1 -> v2: adds the (threadId, timestamp) index for paged queries.
+        AutoMigration(from = 1, to = 2),
+        // v2 -> v3: adds rules.enabled (default 1) so disabling a rule flips
+        // a flag instead of deleting and re-inserting the row.
+        AutoMigration(from = 2, to = 3),
+        // v3 -> v4: adds reminders.label (delivery tracking reference) and
+        // clears reminder rows violating the new "must have a due date"
+        // invariant - see [ClearSmsDatabase.DeleteUndatedReminders].
+        AutoMigration(from = 3, to = 4, spec = ClearSmsDatabase.DeleteUndatedReminders::class),
+        // v4 -> v5: no schema change; re-derives every reminder (amounts,
+        // labels, corrected types, stronger settled-payment guard) and
+        // consolidates duplicate / nameless finance accounts - see
+        // [ClearSmsDatabase.RebuildDerivedData].
+        AutoMigration(from = 4, to = 5, spec = ClearSmsDatabase.RebuildDerivedData::class),
+        // v5 -> v6: adds the messages_fts search index (external-content
+        // FTS4 over sender+body) and back-fills it from the existing rows -
+        // see [ClearSmsDatabase.PopulateMessageFts].
+        AutoMigration(from = 5, to = 6, spec = ClearSmsDatabase.PopulateMessageFts::class),
+        // v6 -> v7: adds messages.isOutgoing (default 0 = incoming) and
+        // messages.deliveryStatus, then reconciles existing rows against the
+        // system provider's sent box - see [BackfillMessageDirections]
+        // (provided at build time because it reads the SMS provider).
+        AutoMigration(from = 6, to = 7, spec = BackfillMessageDirections::class),
+        // v7 -> v8: adds accounts.availableLimit (nullable) - the issuer-
+        // reported available credit limit, kept apart from lastKnownBalance
+        // because a card's headroom is not a balance. Existing rows keep
+        // their data and start with NULL until the next card SMS arrives.
+        AutoMigration(from = 7, to = 8),
+        // v8 -> v9: adds transactions.accountId (nullable) - an explicit
+        // link to the owning account row, resolved at ingestion by
+        // (canonical bank, last-4) instead of re-matching string fields at
+        // read time. The spec backfills it, leaving it NULL when no
+        // confident owner exists, and cleans up nameless (blank-bank)
+        // account rows - see [ClearSmsDatabase.LinkTransactionsToAccounts].
+        AutoMigration(from = 8, to = 9, spec = ClearSmsDatabase.LinkTransactionsToAccounts::class),
+        // v9 -> v10: adds the transactions.referenceNumber index (backs the
+        // ingestion-time duplicate lookup) and collapses transaction rows
+        // that record the SAME payment more than once - banks send a spend
+        // alert plus a later statement line for one transaction. Same
+        // two-tier identity the ingestion path now enforces - see
+        // [ClearSmsDatabase.CollapseDuplicateTransactions].
+        AutoMigration(from = 9, to = 10, spec = ClearSmsDatabase.CollapseDuplicateTransactions::class),
+        // v10 -> v11: adds messages.deletedAt (soft-delete marker backing the
+        // transient delete-undo window and the recycle bin) plus
+        // messages.providerDeletePending (deferred system-provider deletion
+        // committed after the undo window or on next launch), and an index
+        // on deletedAt for the read-path filters. Pure additions.
+        AutoMigration(from = 10, to = 11),
+        // v11 -> v12: adds messages.partCount (default 1) and
+        // messages.deliveredParts (default 0) - per-part bookkeeping for the
+        // multipart worst-part delivery aggregation. Pure additions; existing
+        // rows read as single-part with no delivery reports counted.
+        AutoMigration(from = 11, to = 12),
+        // v12 -> v13: adds messages.subscriptionId (nullable) - which SIM a
+        // message travelled over on dual-SIM devices. Pure addition; existing
+        // rows read as unknown (no SIM tag shown).
+        AutoMigration(from = 12, to = 13),
+        // v13 -> v14: adds messages.scheduledAt (nullable) - the fire time of
+        // a SCHEDULED outgoing message. Pure addition; existing rows have no
+        // schedule.
+        AutoMigration(from = 13, to = 14),
+        // v14 -> v15: adds the drafts table (unsent per-thread compose text).
+        // Pure addition; existing threads simply have no draft.
+        AutoMigration(from = 14, to = 15),
+        // v15 -> v16: adds the thread_pins table (pinned conversations,
+        // keyed by normalized sender). Pure addition; nothing is pinned.
+        AutoMigration(from = 15, to = 16),
+        // v16 -> v17: adds reminders.dismissedAt (nullable dismissal marker
+        // backing the Alerts "Older" section - dismissed cards rest there
+        // instead of being deleted) plus its index for the purge sweep.
+        // Pure addition; existing rows read as not dismissed.
+        AutoMigration(from = 16, to = 17),
+        // v17 -> v18: MMS receive - adds the attachments table plus the
+        // nullable messages.mmsStatus / mmsTransactionId / mmsContentLocation
+        // / mmsRecipients / attachmentKinds columns. Pure additions; every
+        // existing row reads as a plain SMS.
+        AutoMigration(from = 17, to = 18),
+        // v18 -> v19: adds messages.sendFailureReason (why an outgoing
+        // send failed, e.g. the carrier's MMS bearer never came up) so the
+        // failed-message dialog can say more than 'Not sent'. Pure addition.
+        AutoMigration(from = 18, to = 19),
+        // v19 -> v20: adds messages.dateSent (nullable) - the sender's
+        // network timestamp of an incoming SMS (provider DATE_SENT), kept
+        // apart from `timestamp` (when this device received it). Pure
+        // addition; existing rows read as unknown until the one-time
+        // [app.clearsms.work.SentTimeBackfill] fills them from the provider.
+        AutoMigration(from = 19, to = 20),
+        // v20 -> v21: adds messages.deliveredAt (nullable) - when this device
+        // processed the carrier delivery report that completed an outgoing
+        // SMS (the acknowledgement time, a proxy for the delivery time -
+        // not the carrier's own timestamp). Pure addition; existing
+        // DELIVERED rows read as confirmed-without-a-time, never backfilled
+        // with an invented instant.
+        AutoMigration(from = 20, to = 21),
+        // v21 -> v22: adds messages.providerThreadId (nullable, indexed) -
+        // the system provider's conversation id, the primary thread anchor
+        // - then backfills it from the provider and re-keys every thread
+        // under the region-aware sender key, merging the split "same
+        // person, two threads" conversations of issue #42 in place with
+        // pins, drafts and read/archived state intact - see [RekeyThreads].
+        AutoMigration(from = 21, to = 22, spec = RekeyThreads::class),
+        // v22 -> v23: adds transactions.currency and accounts.currency (ISO
+        // 4217, NOT NULL, default 'INR') - issue #65, the app no longer
+        // assumes rupees. Pure addition: every existing row is marked INR
+        // because every amount stored before this version WAS parsed under
+        // the rupee assumption, and no stored amount is rewritten - a
+        // migration that silently changed recorded figures would be worse
+        // than the bug. Rows are re-derived from their SMS text (with the
+        // currency-aware parser) only by the ordinary post-update re-sort.
+        AutoMigration(from = 22, to = 23),
+        // v23 -> v24: adds messages.systemMmsId (nullable, UNIQUE) - the
+        // idempotency key for the MMS history import (issue #94). Received
+        // MMS used to reach the app only through the live WAP-push path, so
+        // every MMS that arrived before Clear SMS became the default app was
+        // invisible; the import reads `content://mms` and needs its own
+        // de-duplication key, apart from systemSmsId because the SMS and MMS
+        // providers number rows independently. Pure addition: existing rows
+        // get NULL, which the unique index exempts.
+        AutoMigration(from = 23, to = 24),
+    ],
+)
+@TypeConverters(Converters::class)
+abstract class ClearSmsDatabase : RoomDatabase() {
+    abstract fun messageDao(): MessageDao
+
+    abstract fun accountDao(): AccountDao
+
+    abstract fun transactionDao(): TransactionDao
+
+    abstract fun ruleDao(): RuleDao
+
+    abstract fun reminderDao(): ReminderDao
+
+    abstract fun draftDao(): DraftDao
+
+    abstract fun threadPinDao(): ThreadPinDao
+
+    abstract fun attachmentDao(): AttachmentDao
+
+    /**
+     * The auto migration creates the empty `messages_fts` virtual table;
+     * this back-fills it from the existing `messages` rows so search finds
+     * pre-upgrade history. Room's generated sync triggers keep it current
+     * from then on.
+     */
+    class PopulateMessageFts : AutoMigrationSpec {
+        override fun onPostMigrate(db: SupportSQLiteDatabase) {
+            db.execSQL("INSERT INTO messages_fts(messages_fts) VALUES('rebuild')")
+        }
+    }
+
+    /**
+     * Reminders without a due date are not actionable (they were the junk in
+     * the Alerts "Others" filter) and can no longer be produced by the
+     * parser. This deletes the invalid rows already on the device; valid
+     * dated reminders are untouched, and a recategorization rebuilds any
+     * reminder the tightened parser still stands behind.
+     */
+    class DeleteUndatedReminders : AutoMigrationSpec {
+        override fun onPostMigrate(db: SupportSQLiteDatabase) {
+            db.execSQL("DELETE FROM reminders WHERE dueDate IS NULL")
+        }
+    }
+
+    /**
+     * One-time repair of derived data for rows created by older parsers:
+     *
+     * 1. Reminders are DROPPED and re-derived from the stored messages, so
+     *    existing rows gain the newly-extracted amounts and labels, the
+     *    RD-installment-as-EMI mis-typing is corrected, and reminders the
+     *    strengthened settled-payment guard now rejects (thank-you-for-
+     *    payment texts) disappear.
+     * 2. Account bank names are canonicalized ("SBI" / "State Bank of India"
+     *    become one), blank names are resolved from the account's own
+     *    transaction senders/bodies, and duplicate rows (same last-4 + same
+     *    canonical bank) are merged into the newest row.
+     * 3. Transaction bank names get the same treatment so every transaction
+     *    keeps pointing at its surviving account row.
+     */
+    class RebuildDerivedData : AutoMigrationSpec {
+        private val reminderParser = ReminderParser()
+        private val deliveryParser = DeliveryParser()
+
+        override fun onPostMigrate(db: SupportSQLiteDatabase) {
+            rebuildReminders(db)
+            // Accounts first: blank-bank rows are resolved from their still-
+            // blank transactions, which the transaction pass then rewrites.
+            consolidateAccounts(db)
+            canonicalizeTransactions(db)
+        }
+
+        private fun rebuildReminders(db: SupportSQLiteDatabase) {
+            db.execSQL("DELETE FROM reminders")
+            db.query("SELECT id, sender, body, timestamp, subCategory FROM messages").use { cursor ->
+                while (cursor.moveToNext()) {
+                    val messageId = cursor.getLong(0)
+                    val sender = cursor.getString(1)
+                    val body = cursor.getString(2).take(MessageCategorizer.MAX_EVAL_BODY_LENGTH)
+                    val timestamp = cursor.getLong(3)
+                    val subCategory = if (cursor.isNull(4)) null else cursor.getString(4)
+                    val messageDate =
+                        Instant
+                            .ofEpochMilli(timestamp)
+                            .atZone(ZoneId.systemDefault())
+                            .toLocalDate()
+                    if (subCategory == "DELIVERY") {
+                        val delivery = deliveryParser.parse(sender, body) ?: continue
+                        insertReminder(
+                            db,
+                            type = "DELIVERY",
+                            dueDate = delivery.expectedDate(messageDate)?.toEpochMs(),
+                            totalDue = null,
+                            minDue = null,
+                            accountLast4 = null,
+                            bankName = delivery.merchant,
+                            label = delivery.reference,
+                            rawSmsId = messageId,
+                            createdAt = timestamp,
+                        )
+                    } else {
+                        // Yearless dates anchor on the message's own date.
+                        val reminder = reminderParser.parse(sender, body, messageDate) ?: continue
+                        insertReminder(
+                            db,
+                            type = reminder.type.name,
+                            dueDate = reminder.dueDate?.toEpochMs(),
+                            totalDue = reminder.totalDue,
+                            minDue = reminder.minDue,
+                            accountLast4 = reminder.accountLast4,
+                            bankName = reminder.bankName,
+                            label = reminder.label,
+                            rawSmsId = messageId,
+                            createdAt = timestamp,
+                        )
+                    }
+                }
+            }
+        }
+
+        @Suppress("LongParameterList")
+        private fun insertReminder(
+            db: SupportSQLiteDatabase,
+            type: String,
+            dueDate: Long?,
+            totalDue: Double?,
+            minDue: Double?,
+            accountLast4: String?,
+            bankName: String?,
+            label: String?,
+            rawSmsId: Long,
+            createdAt: Long,
+        ) {
+            db.execSQL(
+                """
+                INSERT INTO reminders (type, dueDate, totalDue, minDue, accountLast4, bankName, label, rawSmsId, createdAt)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """.trimIndent(),
+                arrayOf<Any?>(type, dueDate, totalDue, minDue, accountLast4, bankName, label, rawSmsId, createdAt),
+            )
+        }
+
+        /** Canonical (or sender-resolved) bank name for every transaction row. */
+        private fun canonicalizeTransactions(db: SupportSQLiteDatabase) {
+            val updates = mutableListOf<Pair<Long, String>>()
+            db
+                .query(
+                    """
+                    SELECT t.id, t.bankName, m.sender, m.body
+                    FROM transactions t LEFT JOIN messages m ON m.id = t.rawSmsId
+                    """.trimIndent(),
+                ).use { cursor ->
+                    while (cursor.moveToNext()) {
+                        val id = cursor.getLong(0)
+                        val stored = cursor.getString(1)
+                        val sender = if (cursor.isNull(2)) null else cursor.getString(2)
+                        val body = if (cursor.isNull(3)) "" else cursor.getString(3)
+                        val resolved =
+                            if (stored.isBlank()) {
+                                sender?.let {
+                                    SenderNameResolver.bankNameFor(it, body.take(MessageCategorizer.MAX_EVAL_BODY_LENGTH))
+                                }
+                            } else {
+                                SenderNameResolver.canonicalize(stored)
+                            }
+                        if (resolved != null && resolved != stored) updates += id to resolved
+                    }
+                }
+            for ((id, bank) in updates) {
+                db.execSQL("UPDATE transactions SET bankName = ? WHERE id = ?", arrayOf<Any?>(bank, id))
+            }
+        }
+
+        private class AccountRow(
+            val id: Long,
+            val accountNumber: String,
+            val bankName: String,
+            val balance: Double?,
+            val creditLimit: Double?,
+            val lastUpdated: Long,
+        )
+
+        private fun consolidateAccounts(db: SupportSQLiteDatabase) {
+            val rows = mutableListOf<AccountRow>()
+            db
+                .query("SELECT id, accountNumber, bankName, lastKnownBalance, creditLimit, lastUpdated FROM accounts")
+                .use { cursor ->
+                    while (cursor.moveToNext()) {
+                        rows +=
+                            AccountRow(
+                                id = cursor.getLong(0),
+                                accountNumber = cursor.getString(1),
+                                bankName = cursor.getString(2),
+                                balance = if (cursor.isNull(3)) null else cursor.getDouble(3),
+                                creditLimit = if (cursor.isNull(4)) null else cursor.getDouble(4),
+                                lastUpdated = cursor.getLong(5),
+                            )
+                    }
+                }
+            // Blank names resolve from the account's own transactions (the
+            // rows written before bank resolution existed carry bankName='').
+            val resolvedName =
+                rows.associate { row ->
+                    val name =
+                        if (row.bankName.isBlank()) {
+                            resolveFromTransactions(db, row.accountNumber) ?: ""
+                        } else {
+                            SenderNameResolver.canonicalize(row.bankName).orEmpty()
+                        }
+                    row.id to name
+                }
+            val groups = rows.groupBy { it.accountNumber to resolvedName.getValue(it.id) }
+            val deletions = mutableListOf<Long>()
+            val survivors = mutableListOf<Triple<AccountRow, String, Pair<Double?, Double?>>>()
+            for ((key, group) in groups) {
+                val (_, bank) = key
+                val newestFirst = group.sortedByDescending { it.lastUpdated }
+                val survivor = newestFirst.first()
+                deletions += newestFirst.drop(1).map { it.id }
+                val balance = newestFirst.firstNotNullOfOrNull { it.balance }
+                val creditLimit = newestFirst.firstNotNullOfOrNull { it.creditLimit }
+                if (newestFirst.size > 1 || bank != survivor.bankName) {
+                    survivors += Triple(survivor, bank, balance to creditLimit)
+                }
+            }
+            // Losers first so a renamed survivor never trips the unique
+            // (accountNumber, bankName) index against a row it absorbs.
+            for (id in deletions) {
+                db.execSQL("DELETE FROM accounts WHERE id = ?", arrayOf(id))
+            }
+            for ((survivor, bank, merged) in survivors) {
+                val (balance, creditLimit) = merged
+                db.execSQL(
+                    "UPDATE accounts SET bankName = ?, lastKnownBalance = ?, creditLimit = ? WHERE id = ?",
+                    arrayOf<Any?>(bank, balance, creditLimit, survivor.id),
+                )
+            }
+        }
+
+        /**
+         * Majority institution over the senders/bodies of the account's
+         * unresolved (blank-bank) transactions; null when the account has
+         * none - such a row is left untouched rather than merged blindly.
+         */
+        private fun resolveFromTransactions(
+            db: SupportSQLiteDatabase,
+            accountNumber: String,
+        ): String? {
+            val votes = HashMap<String, Int>()
+            db
+                .query(
+                    """
+                    SELECT m.sender, m.body FROM transactions t
+                    INNER JOIN messages m ON m.id = t.rawSmsId
+                    WHERE t.accountNumber = ? AND t.bankName = ''
+                    """.trimIndent(),
+                    arrayOf(accountNumber),
+                ).use { cursor ->
+                    while (cursor.moveToNext()) {
+                        val sender = cursor.getString(0)
+                        val body = cursor.getString(1).take(MessageCategorizer.MAX_EVAL_BODY_LENGTH)
+                        val name = SenderNameResolver.bankNameFor(sender, body) ?: continue
+                        votes[name] = (votes[name] ?: 0) + 1
+                    }
+                }
+            return votes.maxByOrNull { it.value }?.key
+        }
+
+        private fun java.time.LocalDate.toEpochMs(): Long = atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
+    }
+
+    /**
+     * One-time repair for the "shared last-4" bugs (a tail like 8709 can
+     * legitimately exist at several banks):
+     *
+     * 1. Blank-bank account rows (created by an ingestion path that
+     *    blanked an implausible issuer but still inserted the account) are
+     *    merged into the named account with the same last-4 AND type when
+     *    exactly one exists, otherwise deleted. Their transactions are
+     *    re-pointed by the backfill below; user notes live on transaction
+     *    rows and are untouched.
+     * 2. Every transaction gains an [TransactionEntity.accountId] owner:
+     *    matched by (last-4, canonical bank); a transaction with a blank
+     *    bank attaches only when exactly ONE named bank holds that tail.
+     *    Anything ambiguous stays NULL - read paths then fall back to the
+     *    exact (accountNumber, bankName) pair, never the number alone.
+     */
+    class LinkTransactionsToAccounts : AutoMigrationSpec {
+        override fun onPostMigrate(db: SupportSQLiteDatabase) {
+            mergeOrDeleteBlankAccounts(db)
+            backfillAccountIds(db)
+        }
+
+        private class Row(
+            val id: Long,
+            val accountNumber: String,
+            val bankName: String,
+            val type: String,
+            val balance: Double?,
+            val availableLimit: Double?,
+            val creditLimit: Double?,
+            val lastUpdated: Long,
+        )
+
+        private fun loadAccounts(db: SupportSQLiteDatabase): List<Row> {
+            val rows = mutableListOf<Row>()
+            db
+                .query(
+                    "SELECT id, accountNumber, bankName, type, lastKnownBalance, availableLimit, creditLimit, lastUpdated FROM accounts",
+                ).use { cursor ->
+                    while (cursor.moveToNext()) {
+                        rows +=
+                            Row(
+                                id = cursor.getLong(0),
+                                accountNumber = cursor.getString(1),
+                                bankName = cursor.getString(2),
+                                type = cursor.getString(3),
+                                balance = if (cursor.isNull(4)) null else cursor.getDouble(4),
+                                availableLimit = if (cursor.isNull(5)) null else cursor.getDouble(5),
+                                creditLimit = if (cursor.isNull(6)) null else cursor.getDouble(6),
+                                lastUpdated = cursor.getLong(7),
+                            )
+                    }
+                }
+            return rows
+        }
+
+        private fun mergeOrDeleteBlankAccounts(db: SupportSQLiteDatabase) {
+            val accounts = loadAccounts(db)
+            val named = accounts.filter { it.bankName.isNotBlank() }
+            for (blank in accounts.filter { it.bankName.isBlank() }) {
+                val candidates =
+                    named.filter { it.accountNumber == blank.accountNumber && it.type == blank.type }
+                val survivor = candidates.singleOrNull()
+                if (survivor != null) {
+                    // Merge: the named row keeps its own figures; the blank
+                    // row only ever fills gaps, and only when it is newer.
+                    val blankNewer = blank.lastUpdated > survivor.lastUpdated
+                    db.execSQL(
+                        "UPDATE accounts SET lastKnownBalance = ?, availableLimit = ?, creditLimit = ?, lastUpdated = ? WHERE id = ?",
+                        arrayOf<Any?>(
+                            if (blankNewer) blank.balance ?: survivor.balance else survivor.balance,
+                            if (blankNewer) blank.availableLimit ?: survivor.availableLimit else survivor.availableLimit,
+                            if (blankNewer) blank.creditLimit ?: survivor.creditLimit else survivor.creditLimit,
+                            maxOf(blank.lastUpdated, survivor.lastUpdated),
+                            survivor.id,
+                        ),
+                    )
+                }
+                db.execSQL("DELETE FROM accounts WHERE id = ?", arrayOf(blank.id))
+            }
+        }
+
+        private fun backfillAccountIds(db: SupportSQLiteDatabase) {
+            val accounts = loadAccounts(db).filter { it.bankName.isNotBlank() }
+            // Exact (accountNumber, bankName) matches - set-based, covers
+            // the overwhelming majority of rows.
+            for (account in accounts) {
+                db.execSQL(
+                    "UPDATE transactions SET accountId = ? WHERE accountNumber = ? AND bankName = ?",
+                    arrayOf<Any?>(account.id, account.accountNumber, account.bankName),
+                )
+            }
+            // Remaining rows: canonicalization variants and blank-bank
+            // transactions, resolved per distinct (accountNumber, bankName)
+            // pair. Groups keyed by canonical bank so "SBI" finds the row
+            // stored as "State Bank of India".
+            val byKey = accounts.groupBy { it.accountNumber to SenderNameResolver.canonicalize(it.bankName) }
+            val byTail = accounts.groupBy { it.accountNumber }
+            val pairs = mutableListOf<Pair<String, String>>()
+            db
+                .query(
+                    "SELECT DISTINCT accountNumber, bankName FROM transactions WHERE accountId IS NULL AND accountNumber != ''",
+                ).use { cursor ->
+                    while (cursor.moveToNext()) {
+                        pairs += cursor.getString(0) to cursor.getString(1)
+                    }
+                }
+            for ((tail, bank) in pairs) {
+                val owner =
+                    if (bank.isNotBlank()) {
+                        byKey[tail to SenderNameResolver.canonicalize(bank)]?.singleOrNull()
+                    } else {
+                        // Bank unknown on the row: attach only when exactly
+                        // ONE named bank holds this tail.
+                        byTail[tail]
+                            ?.takeIf { rows -> rows.map { it.bankName }.distinct().size == 1 }
+                            ?.singleOrNull()
+                    }
+                if (owner != null) {
+                    db.execSQL(
+                        "UPDATE transactions SET accountId = ? WHERE accountId IS NULL AND accountNumber = ? AND bankName = ?",
+                        arrayOf<Any?>(owner.id, tail, bank),
+                    )
+                }
+            }
+        }
+    }
+
+    /**
+     * One-time collapse of transaction rows recording the SAME payment
+     * (spend alert + later statement / "payment received" line). Applies
+     * the exact identity in
+     * [app.clearsms.data.repository.TransactionDeduplication]: reference
+     * matches at any time distance, near-duplicate alerts only inside the
+     * small window and only when no balance / merchant / account-link
+     * evidence contradicts. Survivors keep the richest fields and every
+     * user note; absorbed rows are deleted. New duplicates are prevented at
+     * ingestion from now on.
+     */
+    class CollapseDuplicateTransactions : AutoMigrationSpec {
+        override fun onPostMigrate(db: SupportSQLiteDatabase) {
+            val rows = mutableListOf<TransactionEntity>()
+            db
+                .query(
+                    "SELECT id, amount, type, merchantName, accountNumber, bankName, accountId, " +
+                        "timestamp, balance, referenceNumber, category, rawSmsId, note FROM transactions",
+                ).use { cursor ->
+                    while (cursor.moveToNext()) {
+                        rows +=
+                            TransactionEntity(
+                                id = cursor.getLong(0),
+                                amount = cursor.getDouble(1),
+                                type = TransactionType.valueOf(cursor.getString(2)),
+                                merchantName = if (cursor.isNull(3)) null else cursor.getString(3),
+                                accountNumber = cursor.getString(4),
+                                bankName = cursor.getString(5),
+                                accountId = if (cursor.isNull(6)) null else cursor.getLong(6),
+                                timestamp = cursor.getLong(7),
+                                balance = if (cursor.isNull(8)) null else cursor.getDouble(8),
+                                referenceNumber = if (cursor.isNull(9)) null else cursor.getString(9),
+                                category = MerchantCategory.valueOf(cursor.getString(10)),
+                                rawSmsId = cursor.getLong(11),
+                                note = if (cursor.isNull(12)) null else cursor.getString(12),
+                            )
+                    }
+                }
+            val result = TransactionDeduplication.dedupe(rows)
+            for (survivor in result.updated) {
+                db.execSQL(
+                    "UPDATE transactions SET merchantName = ?, bankName = ?, accountId = ?, " +
+                        "balance = ?, referenceNumber = ?, note = ? WHERE id = ?",
+                    arrayOf<Any?>(
+                        survivor.merchantName,
+                        survivor.bankName,
+                        survivor.accountId,
+                        survivor.balance,
+                        survivor.referenceNumber,
+                        survivor.note,
+                        survivor.id,
+                    ),
+                )
+            }
+            result.droppedIds.chunked(500).forEach { chunk ->
+                db.execSQL("DELETE FROM transactions WHERE id IN (${chunk.joinToString(",")})")
+            }
+        }
+    }
+
+    companion object {
+        const val NAME = "clearsms.db"
+    }
+}

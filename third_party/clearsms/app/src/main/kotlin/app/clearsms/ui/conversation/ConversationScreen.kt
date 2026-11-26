@@ -1,0 +1,1825 @@
+package app.clearsms.ui.conversation
+
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.LocalOnBackPressedDispatcherOwner
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicText
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.input.TextFieldState
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.automirrored.outlined.Forward
+import androidx.compose.material.icons.automirrored.outlined.Label
+import androidx.compose.material.icons.outlined.AddCircleOutline
+import androidx.compose.material.icons.outlined.Call
+import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Done
+import androidx.compose.material.icons.outlined.DoneAll
+import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material.icons.outlined.NotificationsActive
+import androidx.compose.material.icons.outlined.NotificationsOff
+import androidx.compose.material.icons.outlined.Password
+import androidx.compose.material.icons.outlined.SaveAlt
+import androidx.compose.material.icons.outlined.SelectAll
+import androidx.compose.material.icons.outlined.Share
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.LocalContentColor
+import androidx.compose.material3.LocalTextStyle
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.paging.compose.collectAsLazyPagingItems
+import androidx.paging.compose.itemKey
+import app.clearsms.R
+import app.clearsms.ShareIntents
+import app.clearsms.data.db.AttachmentEntity
+import app.clearsms.data.db.DeliveryStatus
+import app.clearsms.data.db.MessageEntity
+import app.clearsms.data.db.MmsStatus
+import app.clearsms.domain.model.CurrencyCatalog
+import app.clearsms.mms.DataSimHint
+import app.clearsms.mms.SendFailureReason
+import app.clearsms.notification.OtpClipboard
+import app.clearsms.sms.SimInfo
+import app.clearsms.ui.common.DeleteConfirmationText
+import app.clearsms.ui.common.HighlightTiming
+import app.clearsms.ui.common.RelativeTime
+import app.clearsms.ui.common.UndoUiEvent
+import app.clearsms.ui.common.rememberDisplayLocale
+import app.clearsms.ui.common.rememberIs24Hour
+import app.clearsms.ui.common.rememberRelativeTimeStrings
+import app.clearsms.ui.components.AmountKind
+import app.clearsms.ui.components.AmountText
+import app.clearsms.ui.components.AttachmentPickerSheet
+import app.clearsms.ui.components.BodyLink
+import app.clearsms.ui.components.DialableNumber
+import app.clearsms.ui.components.LinkifiedBodyText
+import app.clearsms.ui.components.LocalMessageTextScale
+import app.clearsms.ui.components.MessageComposerBar
+import app.clearsms.ui.components.MessageTextDirection
+import app.clearsms.ui.components.MutedIndicator
+import app.clearsms.ui.components.MutedIndicatorIcon
+import app.clearsms.ui.components.ReplyNoticeBar
+import app.clearsms.ui.components.ScheduleTimePicker
+import app.clearsms.ui.components.SelectionState
+import app.clearsms.ui.components.SenderAvatar
+import app.clearsms.ui.components.SimOutlineGlyph
+import app.clearsms.ui.components.SwipeDismissSnackbarHost
+import app.clearsms.ui.components.TooltipIconButton
+import app.clearsms.ui.components.amountKindOf
+import app.clearsms.ui.components.displayName
+import app.clearsms.ui.components.extractKeyLabel
+import app.clearsms.ui.components.extractValueLabel
+import app.clearsms.ui.components.rememberAttachmentLaunchers
+import app.clearsms.ui.components.rememberComposerInsertions
+import app.clearsms.ui.components.rememberContactInsertLauncher
+import app.clearsms.ui.components.scaledBy
+import app.clearsms.ui.rules.SenderRuleDialog
+import app.clearsms.ui.rules.senderRuleSavedMessage
+import app.clearsms.ui.settings.DirectCall
+import app.clearsms.ui.settings.ExternalLinks
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
+
+/** Conversation thread: chat bubbles, date separators, parsed-detail cards and reply. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ConversationScreen(
+    onBack: () -> Unit,
+    onCreateRule: (sender: String, body: String) -> Unit,
+    onForward: (text: String) -> Unit,
+    viewModel: ConversationViewModel = hiltViewModel(),
+) {
+    val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val simState by viewModel.simState.collectAsStateWithLifecycle()
+    val mmsAvailable by viewModel.mmsAvailableState.collectAsStateWithLifecycle()
+    val items = viewModel.pagedItems.collectAsLazyPagingItems()
+    val selection by viewModel.selection.collectAsStateWithLifecycle()
+    val selectionMode by viewModel.selectionMode.collectAsStateWithLifecycle()
+    val clipboard = LocalClipboardManager.current
+    val context = LocalContext.current
+    // Draft lives in the ViewModel (persisted per thread): leaving and
+    // reopening the conversation restores unsent text.
+    val draft by viewModel.draft.collectAsStateWithLifecycle()
+    var confirmDelete by remember { mutableStateOf(false) }
+
+    // Failed outgoing message whose Retry/Delete dialog is open (from a
+    // bubble tap); survives rotation so the choice is never silently lost.
+    var failedMessageId by rememberSaveable { mutableStateOf<Long?>(null) }
+
+    // Incoming MMS whose download failed and whose Retry/Delete dialog is
+    // open (from a bubble tap).
+    var failedMmsId by rememberSaveable { mutableStateOf<Long?>(null) }
+
+    // The single selected message whose "More details" dialog is open. A
+    // snapshot of the entity (not just an id): the row keeps rendering even
+    // if the message is binned underneath the open dialog.
+    var detailsMessage by remember { mutableStateOf<MessageEntity?>(null) }
+    var detailsDataSimHint by remember { mutableStateOf<DataSimHint?>(null) }
+
+    // The thread's MMS attachments keyed by message id, and the image
+    // currently opened in the full-screen viewer.
+    val attachmentsByMessage by viewModel.attachments.collectAsStateWithLifecycle()
+    var viewedImage by remember { mutableStateOf<AttachmentEntity?>(null) }
+    // Non-null while a link inside a scam-flagged message awaits confirmation.
+    var pendingScamLink by remember { mutableStateOf<BodyLink?>(null) }
+
+    // Compose-bar attachments being staged for an MMS send, and the
+    // attach sheet's visibility. Attachment state deliberately does not
+    // persist in drafts this wave (text does): no rememberSaveable.
+    val stagedAttachments by viewModel.stagedAttachments.collectAsStateWithLifecycle()
+    val attachmentError by viewModel.attachmentError.collectAsStateWithLifecycle()
+    val attachmentBudgetBytes by viewModel.attachmentBudgetBytes.collectAsStateWithLifecycle()
+    var showAttachmentSheet by remember { mutableStateOf(false) }
+    val attachmentLaunchers =
+        rememberAttachmentLaunchers(
+            onPicked = viewModel::addAttachments,
+            cameraUriProvider = viewModel::cameraUri,
+            onCameraDone = viewModel::onCameraResult,
+        )
+    // "Contact" in the same sheet inserts name + number as TEXT, at the
+    // field's cursor (GitHub #150) - routed into the bar's own field state,
+    // never through the draft (see ComposerInsertions).
+    val composerInsertions = rememberComposerInsertions()
+    val pickContactForInsert = rememberContactInsertLauncher(onInsert = composerInsertions::insert)
+
+    // Scheduled bubble whose Send now / Edit time / Cancel dialog is open.
+    var scheduledMessageId by rememberSaveable { mutableStateOf<Long?>(null) }
+
+    // Date+time picker state: open flag plus the schedule being edited
+    // (null = scheduling the current draft from a Send long-press).
+    var showSchedulePicker by rememberSaveable { mutableStateOf(false) }
+    var scheduleEditTarget by rememberSaveable { mutableStateOf<Long?>(null) }
+    val listState = rememberLazyListState()
+    val snackbarHostState = remember { SnackbarHostState() }
+    // Save to a folder of the user's choice (issue #151) - shared by the
+    // viewer's Save and the selection bar's Save attachment.
+    val saveAttachments = rememberAttachmentSaver(snackbarHostState)
+    val noLinkHandler = stringResource(R.string.settings_link_no_handler)
+    val linkScope = rememberCoroutineScope()
+    // A device with no browser (or no app for the scheme) says so rather than
+    // throwing, which is why links do not use Compose's default URL handling.
+    val openLink: (String) -> Unit = { url ->
+        if (!ExternalLinks.open(context, url)) {
+            linkScope.launch { snackbarHostState.showSnackbar(noLinkHandler) }
+        }
+    }
+
+    // ONE in-app OTP-copy rule for the always-visible bubble button and the
+    // selection bar's Copy OTP: the notification path's clipboard code
+    // (sensitive flag + timed clear) plus its "OTP copied" wording - but as
+    // a snackbar, and only below Android 13, where the system already shows
+    // its own clipboard confirmation (a second one would be noise).
+    val otpCopied = stringResource(R.string.otp_copied)
+    val copyOtp: (String) -> Unit = { otp ->
+        viewModel.copyOtp(otp)
+        if (OtpClipboard.appShouldConfirm()) {
+            linkScope.launch { snackbarHostState.showSnackbar(otpCopied) }
+        }
+    }
+
+    // Send outcomes surface as snackbars; a failure offers a Retry action.
+    val sentMessage = stringResource(R.string.message_sent)
+    val notSentMessage = stringResource(R.string.message_not_sent)
+    val mmsInFlightMessage = stringResource(R.string.message_mms_in_flight)
+    val retryLabel = stringResource(R.string.action_retry)
+    val cancelSendLabel = stringResource(R.string.delayed_send_cancel)
+    // Like the undo block below: Resources for a runtime-formatted string
+    // (stringResource cannot be called inside collect).
+    val sendResources = LocalContext.current.resources
+
+    // One-step sender rule (issue #38): the conversation already knows the
+    // sender, so "Change category" here is a tap, a category, and Save.
+    // Mute confirmation: names what the mute covers (OTPs included, scam
+    // warnings kept) so the quiet that follows is never a mystery.
+    val mutedMessage = stringResource(R.string.mute_applied)
+    val unmutedMessage = stringResource(R.string.mute_removed)
+    LaunchedEffect(Unit) {
+        viewModel.muteEventFlow.collect { event ->
+            snackbarHostState.showSnackbar(if (event.muted) mutedMessage else unmutedMessage)
+        }
+    }
+
+    var changeCategoryOpen by remember { mutableStateOf(false) }
+    if (changeCategoryOpen && state.address.isNotBlank()) {
+        SenderRuleDialog(
+            sender = state.address,
+            displayName = state.title.takeIf { state.isKnownSender },
+            onDismiss = { changeCategoryOpen = false },
+            onSaved = { saved ->
+                changeCategoryOpen = false
+                linkScope.launch { snackbarHostState.showSnackbar(senderRuleSavedMessage(sendResources, saved)) }
+            },
+        )
+    }
+
+    LaunchedEffect(Unit) {
+        viewModel.events.collect { event ->
+            when (event) {
+                SendEvent.Sent -> {
+                    snackbarHostState.showSnackbar(sentMessage)
+                }
+
+                SendEvent.MmsInFlight -> {
+                    snackbarHostState.showSnackbar(mmsInFlightMessage)
+                }
+
+                is SendEvent.Failed -> {
+                    val result =
+                        snackbarHostState.showSnackbar(
+                            message = notSentMessage,
+                            actionLabel = retryLabel,
+                            duration = SnackbarDuration.Long,
+                        )
+                    if (result == SnackbarResult.ActionPerformed) viewModel.retry(event.messageId)
+                }
+
+                is SendEvent.Delayed -> {
+                    // The pending bar lives exactly as long as the delay:
+                    // Indefinite duration, torn down by the timeout when the
+                    // message fires. No live countdown - the host rebuilds
+                    // its snackbar content itself and re-showing every
+                    // second would reset its swipe state, so the bar states
+                    // the delay once instead of fighting the host. A swipe
+                    // is a plain dismissal (the send proceeds), matching
+                    // "swiping an UNDO bar keeps the deletion"; only the
+                    // Cancel ACTION cancels, and the ViewModel resolves the
+                    // cancel/fire race exactly-once either way.
+                    val result =
+                        withTimeoutOrNull(event.delaySeconds * 1000L) {
+                            snackbarHostState.showSnackbar(
+                                message =
+                                    sendResources.getString(
+                                        R.string.delayed_send_pending,
+                                        event.delaySeconds,
+                                    ),
+                                actionLabel = cancelSendLabel,
+                                duration = SnackbarDuration.Indefinite,
+                            )
+                        }
+                    if (result == SnackbarResult.ActionPerformed) {
+                        viewModel.cancelDelayedSend(event.messageId)
+                    }
+                }
+            }
+        }
+    }
+
+    // One-time discoverability nudge: the first send from any compose bar
+    // (per install) points at the invisible long-press-to-schedule.
+    val scheduleTip = stringResource(R.string.conversation_schedule_tip)
+    LaunchedEffect(Unit) {
+        viewModel.scheduleTipFlow.collect { snackbarHostState.showSnackbar(scheduleTip) }
+    }
+
+    // Deletes are undoable: the snackbar's UNDO reverts the staged action
+    // before its deferred provider commit (see UndoManager).
+    val undoLabel = stringResource(R.string.undo_action)
+    val resources = LocalContext.current.resources
+    LaunchedEffect(Unit) {
+        viewModel.undoEventFlow.collect { event ->
+            val message =
+                when (event) {
+                    is UndoUiEvent.Deleted -> {
+                        resources.getQuantityString(R.plurals.undo_deleted, event.count, event.count)
+                    }
+
+                    is UndoUiEvent.Archived -> {
+                        resources.getQuantityString(R.plurals.undo_archived, event.count, event.count)
+                    }
+                }
+            val result =
+                snackbarHostState.showSnackbar(
+                    message = message,
+                    actionLabel = undoLabel,
+                    duration = SnackbarDuration.Short,
+                )
+            if (result == SnackbarResult.ActionPerformed) viewModel.undo()
+        }
+    }
+
+    // A message id arriving via navigation (search result, Alerts/Finance
+    // card or notification tap) is scrolled to and briefly highlighted. The
+    // state machine keeps waiting across page loads until the target is in
+    // the loaded window - the target id is read straight from the ViewModel
+    // (NOT from the async uiState, which raced the first page load and
+    // silently dropped the highlight).
+    val highlight = remember { MessageHighlightState(viewModel.highlightTarget) }
+    var highlightedItemId by remember { mutableStateOf<Long?>(null) }
+    LaunchedEffect(items.itemCount) {
+        if (items.itemCount == 0) return@LaunchedEffect
+        val index = highlight.onItemsLoaded(items.itemSnapshotList.items.map { it.id })
+        if (index != null) {
+            listState.scrollToItem(index)
+            highlightedItemId = viewModel.highlightTarget
+        }
+    }
+    // Hold the highlight fully visible, then let the bubble fade it out.
+    LaunchedEffect(highlightedItemId) {
+        if (highlightedItemId != null) {
+            delay(HighlightTiming.HOLD_MS)
+            highlightedItemId = null
+            delay(HighlightTiming.FADE_MS.toLong())
+            highlight.onHighlightFinished()
+        }
+    }
+
+    // Sending a reply pins the list back to the bottom once the row lands.
+    LaunchedEffect(Unit) {
+        viewModel.scrollToBottom.collect { listState.animateScrollToItem(0) }
+    }
+
+    // Tap-to-reveal metadata: at most ONE message is expanded at a time
+    // (see MessageMetadata.onTap); survives rotation.
+    var expandedId by rememberSaveable { mutableStateOf<Long?>(null) }
+
+    // Back unwinds one level at a time: text selection -> message selection
+    // -> normal. The message selection survives the first step (issue #103).
+    BackHandler(enabled = selectionMode.textSelecting) { viewModel.exitTextSelection() }
+    BackHandler(enabled = selection.active && !selectionMode.textSelecting) { viewModel.exitSelection() }
+
+    // Issue #103: the SCREEN owns the text-mode field, not the bubble, so the
+    // selection bar's Copy can read the LIVE selection - whatever the handles
+    // enclose right now. Compose's own floating toolbar cannot be relied on:
+    // under programmatic focus it starts in its None state and a handle drag
+    // never promotes it, so on a fresh entry it simply does not appear. One
+    // state per entry (keyed on the message), created from the body that is
+    // on screen; it is null only while that bubble is not loaded.
+    val textSelectionId = selectionMode.textSelectionId
+    val textSelectionBody =
+        textSelectionId?.let { id ->
+            items.itemSnapshotList.items
+                .firstOrNull { it.id == id }
+                ?.body
+        }
+    val textSelectionField =
+        remember(textSelectionId, textSelectionBody) { textSelectionBody?.let(TextSelectionField::state) }
+
+    Scaffold(
+        topBar = {
+            if (selection.active) {
+                val shareTitle = stringResource(R.string.action_share_message)
+                val singleSelected =
+                    if (selection.count == 1) {
+                        items.itemSnapshotList.items.firstOrNull { it.id == selection.selected.first() }
+                    } else {
+                        null
+                    }
+                ConversationSelectionBar(
+                    selection = selection,
+                    textSelecting = selectionMode.textSelecting,
+                    textSelectionField = textSelectionField,
+                    singleItem = singleSelected,
+                    singleItemAttachments = singleSelected?.let { attachmentsByMessage[it.id] }.orEmpty(),
+                    order = state.selectionActionOrder,
+                    onClose = viewModel::exitSelection,
+                    onExitTextSelection = viewModel::exitTextSelection,
+                    onDelete = { confirmDelete = true },
+                    onCopy = {
+                        viewModel.selectedText { text -> clipboard.setText(AnnotatedString(text)) }
+                    },
+                    onCopySelectedText = { text ->
+                        // Text mode: exactly what the handles enclose, then
+                        // out of selection mode as a whole-message Copy does.
+                        clipboard.setText(AnnotatedString(text))
+                        viewModel.exitSelection()
+                    },
+                    onForward = { viewModel.selectedText(onForward) },
+                    onShare = {
+                        viewModel.selectedText { text ->
+                            context.startActivity(ShareIntents.chooser(text, shareTitle))
+                        }
+                    },
+                    onSelectAll = viewModel::selectAll,
+                    onCopyOtp = copyOtp,
+                    onShowDetails = {
+                        detailsMessage = singleSelected?.message
+                        detailsDataSimHint = singleSelected?.dataSimHint
+                    },
+                    onCreateRule = { body ->
+                        viewModel.exitSelection()
+                        onCreateRule(state.address, body)
+                    },
+                    onSaveAttachments = { attachments ->
+                        viewModel.exitSelection()
+                        saveAttachments(attachments)
+                    },
+                )
+            } else {
+                // Dialability of the SENDER, by the same rule message-body
+                // links use (DialableNumber): alphanumeric TRAI ids and
+                // short codes get NO call button, and their name tap
+                // explains itself instead of silently doing nothing.
+                val dialableSender = remember(state.address) { DialableNumber.of(state.address) }
+                val serviceSenderNote = stringResource(R.string.conversation_service_sender)
+                TopAppBar(
+                    title = {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier =
+                                Modifier.clickable(onClickLabel = stringResource(R.string.conversation_sender_details)) {
+                                    val action = SenderContactAction.onNameTap(state.address, state.contactLookupUri)
+                                    val intent = SenderContactAction.intent(action)
+                                    if (intent == null) {
+                                        linkScope.launch { snackbarHostState.showSnackbar(serviceSenderNote) }
+                                    } else {
+                                        // No contacts app is as real as no
+                                        // browser: say so, don't crash.
+                                        runCatching { context.startActivity(intent) }.onFailure {
+                                            linkScope.launch { snackbarHostState.showSnackbar(noLinkHandler) }
+                                        }
+                                    }
+                                },
+                        ) {
+                            SenderAvatar(
+                                name = state.title,
+                                richAvatars = state.richAvatars,
+                                photoUri = state.photoUri,
+                                isKnownSender = state.isKnownSender,
+                                glyph = state.glyph,
+                            )
+                            Spacer(Modifier.width(12.dp))
+                            // weight(fill = false): a long name ellipsises
+                            // INSIDE the title slot instead of pushing the
+                            // muted glyph off the bar; a short name keeps the
+                            // glyph snug beside it.
+                            //
+                            // BasicText, not Text: Material3 1.3's Text has
+                            // no autoSize yet. Style and colour are the ones
+                            // TopAppBar provides for its title slot - with
+                            // only the line height swapped for one that
+                            // follows the auto-sized font, since autoSize
+                            // shrinks the font and NOT the line height - so
+                            // a short name renders exactly as before. A long
+                            // name wraps to two lines, shrinking (in 1sp
+                            // steps) only as far as the sp floor, then
+                            // ellipsises; heightIn(max) caps the layout at
+                            // the bar's fixed height so, at large font
+                            // scales, ellipsis drops the line that would not
+                            // fit instead of the bar clipping or growing.
+                            // The sizer is ConversationTitleFit's own, not
+                            // TextAutoSize.StepBased: StepBased searches a
+                            // px grid that non-linear font scaling (1.03+)
+                            // keeps from ever reaching the 22sp ceiling, so
+                            // it shrank EVERY name at large font scales.
+                            // See ConversationTitleFit.
+                            val titleStyle = ConversationTitleFit.style(LocalTextStyle.current)
+                            val titleColor = LocalContentColor.current
+                            BasicText(
+                                text = state.title,
+                                style = titleStyle,
+                                color = { titleColor },
+                                maxLines = ConversationTitleFit.MaxLines,
+                                overflow = TextOverflow.Ellipsis,
+                                autoSize = ConversationTitleFit.autoSize(titleStyle.fontSize),
+                                modifier =
+                                    Modifier
+                                        .weight(1f, fill = false)
+                                        .heightIn(max = ConversationTitleFit.MaxHeight),
+                            )
+                            if (state.muted) {
+                                // The same glyph the inbox row draws (one
+                                // definition, one label), so the reader of a
+                                // silent thread sees why while inside it. It
+                                // tracks uiState.muted, which follows
+                                // settings.mutedSenders - the overflow's
+                                // Mute/Unmute flips it without leaving.
+                                Spacer(Modifier.width(6.dp))
+                                MutedIndicatorIcon(size = MutedIndicator.TitleBarSize)
+                            }
+                        }
+                    },
+                    navigationIcon = {
+                        TooltipIconButton(
+                            label = stringResource(R.string.action_back),
+                            onClick = onBack,
+                            icon = Icons.AutoMirrored.Outlined.ArrowBack,
+                        )
+                    },
+                    actions = {
+                        if (dialableSender != null) {
+                            // One Call behaviour everywhere: DirectCall is
+                            // the mapping the notification's Call action
+                            // uses too. Default (Direct call OFF): ACTION_DIAL
+                            // opens the dialer prefilled and never places
+                            // the call. Opted in and permitted: the call is
+                            // placed at once; permission revoked: the dialer.
+                            TooltipIconButton(
+                                label = stringResource(R.string.conversation_call),
+                                onClick = {
+                                    if (!DirectCall.place(context, dialableSender, state.directCall)) {
+                                        linkScope.launch { snackbarHostState.showSnackbar(noLinkHandler) }
+                                    }
+                                },
+                                icon = Icons.Outlined.Call,
+                            )
+                        }
+                        if (state.address.isNotBlank()) {
+                            // Overflow: the per-sender notification toggle
+                            // (label reflects the current state) followed by
+                            // Change category, mirroring the inbox selection
+                            // overflow where "Always sort as…" sits last. Both
+                            // share this one address gate, so the menu is
+                            // never rendered empty: when it exists it always
+                            // holds at least Mute/Unmute.
+                            var menuOpen by remember { mutableStateOf(false) }
+                            TooltipIconButton(
+                                label = stringResource(R.string.action_more_options),
+                                onClick = { menuOpen = true },
+                                icon = Icons.Outlined.MoreVert,
+                            )
+                            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            stringResource(
+                                                if (state.muted) R.string.action_unmute_sender else R.string.action_mute_sender,
+                                            ),
+                                        )
+                                    },
+                                    leadingIcon = {
+                                        Icon(
+                                            if (state.muted) Icons.Outlined.NotificationsActive else Icons.Outlined.NotificationsOff,
+                                            contentDescription = null,
+                                        )
+                                    },
+                                    onClick = {
+                                        menuOpen = false
+                                        viewModel.toggleMute()
+                                    },
+                                )
+                                // Same entry point as the old top-bar icon:
+                                // opens the ONE shared SenderRuleDialog above.
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.action_change_category)) },
+                                    leadingIcon = {
+                                        Icon(Icons.AutoMirrored.Outlined.Label, contentDescription = null)
+                                    },
+                                    onClick = {
+                                        menuOpen = false
+                                        changeCategoryOpen = true
+                                    },
+                                )
+                            }
+                        }
+                    },
+                )
+            }
+        },
+        snackbarHost = { SwipeDismissSnackbarHost(snackbarHostState) },
+        bottomBar = {
+            when {
+                !state.loaded -> {
+                    Unit
+                }
+
+                state.repliable -> {
+                    MessageComposerBar(
+                        draft = draft,
+                        onDraftChange = viewModel::setDraft,
+                        onSend = {
+                            // Optimistic: the ViewModel clears the field (and
+                            // the saved draft) immediately; the bubble tracks
+                            // the send state.
+                            viewModel.send(draft)
+                        },
+                        sim = simState,
+                        onCycleSim = {
+                            viewModel.cycleSim()
+                        },
+                        onScheduleSend = {
+                            scheduleEditTarget = null
+                            showSchedulePicker = true
+                        },
+                        // Shown while the box is EXPANDED (full screen covers
+                        // the top bar): the conversation's contact name or
+                        // number stays visible.
+                        recipientLabel = state.title,
+                        attachments = stagedAttachments,
+                        // Always offered: the sheet's Contact row is a TEXT
+                        // feature, so the "+" no longer disappears with MMS
+                        // (issue #94 now gates the sheet's attachment rows,
+                        // not the button).
+                        onAttachClick = { showAttachmentSheet = true },
+                        onRemoveAttachment = viewModel::removeAttachment,
+                        attachmentError = attachmentError,
+                        attachmentBudgetBytes = attachmentBudgetBytes,
+                        insertions = composerInsertions,
+                    )
+                }
+
+                else -> {
+                    ReplyNoticeBar(
+                        repliability = state.repliability,
+                        onReplyAnyway = viewModel::replyAnyway,
+                    )
+                }
+            }
+        },
+    ) { padding ->
+        LazyColumn(
+            state = listState,
+            reverseLayout = true,
+            modifier = Modifier.fillMaxSize().padding(padding),
+            contentPadding = PaddingValues(vertical = 8.dp),
+        ) {
+            items(
+                count = items.itemCount,
+                key = items.itemKey { it.id },
+            ) { index ->
+                val item = items[index] ?: return@items
+                // The next index holds the chronologically OLDER message; a
+                // date separator belongs above the first message of each day.
+                val older = if (index + 1 < items.itemCount) items.peek(index + 1) else null
+                val showSeparator =
+                    if (older != null) {
+                        !RelativeTime.sameDay(older.timestamp, item.timestamp)
+                    } else {
+                        items.loadState.append.endOfPaginationReached
+                    }
+                Column {
+                    if (showSeparator) DateSeparator(item.timestamp)
+                    val selectableText =
+                        ConversationSelectionMode.hasSelectableText(item.body, item.message?.mmsStatus)
+                    MessageBubble(
+                        item = item,
+                        highlighted = item.id == highlightedItemId,
+                        selected = selection.isSelected(item.id),
+                        textSelectionField = textSelectionField?.takeIf { selectionMode.isTextSelecting(item.id) },
+                        // The long-press label tells a screen reader what the
+                        // SECOND long-press does (issue #103): "Select text"
+                        // on a selected message with text, the usual
+                        // "Message actions" everywhere else.
+                        offersTextSelection =
+                            selectionMode.longPressAction(item.id, selectableText) ==
+                                ConversationSelectionMode.LongPress.SELECT_TEXT,
+                        showDetails = state.showTransactionDetails,
+                        expanded = expandedId == item.id,
+                        activeSims = state.activeSims,
+                        attachments = attachmentsByMessage[item.id].orEmpty(),
+                        onImageTap = { viewedImage = it },
+                        onLinkClick = { link ->
+                            // A link inside a message flagged as a likely scam
+                            // asks first: tapping through is how these messages
+                            // do their damage - and a payment or a phone call
+                            // deserves a warning that names that risk.
+                            if (ScamLinkGate.confirmBeforeOpening(item.message?.subCategory)) {
+                                pendingScamLink = link
+                            } else {
+                                openLink(link.url)
+                            }
+                        },
+                        onClick = {
+                            when (
+                                MessageMetadata.tapAction(
+                                    selectionActive = selection.active,
+                                    outgoing = item.outgoing,
+                                    deliveryStatus = item.deliveryStatus,
+                                    mmsDownloadFailed = item.message?.mmsStatus == MmsStatus.FAILED,
+                                )
+                            ) {
+                                MessageMetadata.TapAction.TOGGLE_SELECTION -> {
+                                    viewModel.toggleSelection(item.id)
+                                }
+
+                                MessageMetadata.TapAction.OFFER_RETRY -> {
+                                    failedMessageId = item.id
+                                }
+
+                                MessageMetadata.TapAction.OFFER_SCHEDULE_ACTIONS -> {
+                                    scheduledMessageId = item.id
+                                }
+
+                                MessageMetadata.TapAction.OFFER_MMS_RETRY -> {
+                                    failedMmsId = item.id
+                                }
+
+                                MessageMetadata.TapAction.TOGGLE_DETAILS -> {
+                                    expandedId = MessageMetadata.onTap(expandedId, item.id, selectionActive = false)
+                                }
+                            }
+                        },
+                        // First long-press: enter selection, as always. On an
+                        // ALREADY selected message with text: text selection
+                        // inside that bubble (issue #103). The ViewModel routes
+                        // it through ConversationSelectionMode.longPressAction.
+                        onLongClick = { viewModel.longPressMessage(item.id, selectableText) },
+                        onCopyOtp = copyOtp,
+                        selectionActive = selection.active,
+                    )
+                }
+            }
+        }
+    }
+
+    // "More details" for the single selected message. Rows come from the
+    // pure MessageDetails mapping; the name is the SAME contact →
+    // sender-directory → raw-address resolution the top bar already shows
+    // (state.title), so the dialog never invents a second identity, and the
+    // SIM row resolves against the ViewModel's current subscription list
+    // (state.activeSims) - the same list the compose bar's indicator uses.
+    detailsMessage?.let { message ->
+        MessageDetailsDialog(
+            message = message,
+            resolvedName = state.title,
+            activeSims = state.activeSims,
+            onDismiss = {
+                detailsMessage = null
+                detailsDataSimHint = null
+            },
+            dataSimHint = detailsDataSimHint,
+        )
+    }
+
+    // Retry/Delete choice for a tapped failed bubble. Retry re-dispatches
+    // the SAME row through the normal send path (the bubble flips back to
+    // Sending in place, no duplicate); Delete stages an undoable delete like
+    // every other delete in the app. Matches the screen's existing dialog
+    // pattern (see the selection-delete confirmation below).
+    failedMessageId?.let { messageId ->
+        // The stored SendFailureReason (if any) turns "Not sent" into an
+        // explanation - most importantly distinguishing "your carrier's MMS
+        // network never came up" from genuinely retryable trouble. When
+        // that MMS went out on a SIM other than the mobile-data SIM, the
+        // data-SIM guidance follows it: the one actionable next step.
+        val failedItem = items.itemSnapshotList.items.firstOrNull { it.id == messageId }
+        val failureDetail =
+            failedItem
+                ?.message
+                ?.sendFailureReason
+                ?.let { reason -> stringResource(SendFailureText.explanationRes(SendFailureReason.fromName(reason))) }
+        val dataSimHint =
+            failedItem?.dataSimHint?.let { hint ->
+                stringResource(SendFailureText.dataSimHintRes(), hint.sendingSlot, hint.dataSlot)
+            }
+        AlertDialog(
+            onDismissRequest = { failedMessageId = null },
+            title = { Text(stringResource(R.string.conversation_failed_dialog_title)) },
+            text = {
+                Text(
+                    listOfNotNull(
+                        failureDetail,
+                        dataSimHint,
+                        stringResource(R.string.conversation_failed_dialog_message),
+                    ).joinToString(separator = "\n\n"),
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        failedMessageId = null
+                        viewModel.retry(messageId)
+                    },
+                ) { Text(stringResource(R.string.action_retry)) }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        failedMessageId = null
+                        viewModel.delete(messageId)
+                    },
+                ) { Text(stringResource(R.string.ui_action_delete)) }
+            },
+        )
+    }
+
+    // Retry/Delete choice for a tapped "MMS could not be downloaded" row -
+    // the same dialog pattern as the failed-send choice above. Retry flips
+    // the SAME row back to Downloading in place; Delete stages an undoable
+    // delete like every other delete in the app.
+    failedMmsId?.let { messageId ->
+        AlertDialog(
+            onDismissRequest = { failedMmsId = null },
+            title = { Text(stringResource(R.string.conversation_mms_failed_dialog_title)) },
+            text = { Text(stringResource(R.string.conversation_mms_failed_dialog_message)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        failedMmsId = null
+                        viewModel.retryMmsDownload(messageId)
+                    },
+                ) { Text(stringResource(R.string.action_retry)) }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        failedMmsId = null
+                        viewModel.delete(messageId)
+                    },
+                ) { Text(stringResource(R.string.ui_action_delete)) }
+            },
+        )
+    }
+
+    // Full-screen viewer for a tapped MMS image.
+    pendingScamLink?.let { link ->
+        AlertDialog(
+            onDismissRequest = { pendingScamLink = null },
+            title = { Text(stringResource(ScamLinkGate.titleRes(link.kind))) },
+            text = { Text(stringResource(ScamLinkGate.bodyRes(link.kind), link.text)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        pendingScamLink = null
+                        openLink(link.url)
+                    },
+                ) { Text(stringResource(ScamLinkGate.confirmRes(link.kind))) }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingScamLink = null }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            },
+        )
+    }
+
+    viewedImage?.let { attachment ->
+        MmsImageViewerDialog(
+            attachment = attachment,
+            onSave = { saveAttachments(listOf(attachment)) },
+            onDismiss = { viewedImage = null },
+        )
+    }
+
+    // The compose-bar "+": Photo (photo picker) / Camera / Any file while
+    // MMS is available, and Contact (inserted as text) always.
+    if (showAttachmentSheet) {
+        AttachmentPickerSheet(
+            onDismiss = { showAttachmentSheet = false },
+            launchers = attachmentLaunchers,
+            mmsAvailable = mmsAvailable,
+            onInsertContact = pickContactForInsert,
+        )
+    }
+
+    // Send now / Edit time / Cancel for a tapped scheduled bubble - the
+    // same dialog pattern as the failed-retry choice above.
+    scheduledMessageId?.let { messageId ->
+        AlertDialog(
+            onDismissRequest = { scheduledMessageId = null },
+            title = { Text(stringResource(R.string.conversation_scheduled_dialog_title)) },
+            text = { Text(stringResource(R.string.conversation_scheduled_dialog_message)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        scheduledMessageId = null
+                        viewModel.sendScheduledNow(messageId)
+                    },
+                ) { Text(stringResource(R.string.conversation_schedule_send_now)) }
+            },
+            dismissButton = {
+                Row {
+                    TextButton(
+                        onClick = {
+                            scheduledMessageId = null
+                            scheduleEditTarget = messageId
+                            showSchedulePicker = true
+                        },
+                    ) { Text(stringResource(R.string.conversation_schedule_edit_time)) }
+                    TextButton(
+                        onClick = {
+                            scheduledMessageId = null
+                            viewModel.cancelSchedule(messageId)
+                        },
+                    ) { Text(stringResource(R.string.conversation_schedule_cancel)) }
+                }
+            },
+        )
+    }
+
+    if (showSchedulePicker) {
+        ScheduleTimePicker(
+            onDismiss = { showSchedulePicker = false },
+            onConfirm = { atMs ->
+                showSchedulePicker = false
+                val target = scheduleEditTarget
+                if (target == null) {
+                    // scheduleSend consumes the draft like a send does.
+                    viewModel.scheduleSend(draft, atMs)
+                } else {
+                    viewModel.editSchedule(target, atMs)
+                }
+            },
+        )
+    }
+
+    if (confirmDelete) {
+        val count = selection.count
+        AlertDialog(
+            onDismissRequest = { confirmDelete = false },
+            title = { Text(stringResource(R.string.selection_delete_messages_title)) },
+            text = {
+                Text(
+                    stringResource(
+                        DeleteConfirmationText.bodyRes(DeleteConfirmationText.Target.MESSAGES, state.recycleBinEnabled),
+                        count,
+                    ),
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        confirmDelete = false
+                        viewModel.deleteSelected()
+                    },
+                ) { Text(stringResource(R.string.ui_action_delete)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmDelete = false }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            },
+        )
+    }
+}
+
+/**
+ * One selection-bar action's presentation, shared by its inline icon button
+ * and its overflow menu entry so the SAME action renders in either place
+ * depending on where the user's order puts it (issue #61).
+ */
+private data class SelectionActionSpec(
+    val label: String,
+    val icon: ImageVector,
+    val onClick: () -> Unit,
+    /** False only for text mode's Copy with nothing highlighted (see [TextSelectionField.CopyAction.Nothing]). */
+    val enabled: Boolean = true,
+)
+
+/**
+ * Contextual top bar shown while message multi-select is active. Inline vs
+ * overflow placement is decided by [ConversationSelectionBarLayout] from
+ * the user's [order] and the current selection: the first
+ * [ConversationSelectionBarLayout.INLINE_SLOTS] applicable actions are icon
+ * buttons, the rest are menu entries under "More options". Every action is
+ * described ONCE ([SelectionActionSpec]) and rendered by whichever branch
+ * the layout puts it in, so nothing can be dropped by a stale `when` arm.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ConversationSelectionBar(
+    selection: SelectionState<Long>,
+    textSelecting: Boolean,
+    textSelectionField: TextFieldState?,
+    singleItem: ConversationItem?,
+    /** The MMS attachments of [singleItem]; empty for a plain SMS or a multi-selection. */
+    singleItemAttachments: List<AttachmentEntity>,
+    order: List<MessageSelectionAction>,
+    onClose: () -> Unit,
+    onExitTextSelection: () -> Unit,
+    onDelete: () -> Unit,
+    onCopy: () -> Unit,
+    onCopySelectedText: (String) -> Unit,
+    onForward: () -> Unit,
+    onShare: () -> Unit,
+    onSelectAll: () -> Unit,
+    onCopyOtp: (String) -> Unit,
+    onShowDetails: () -> Unit,
+    onCreateRule: (body: String) -> Unit,
+    onSaveAttachments: (List<AttachmentEntity>) -> Unit,
+) {
+    var menuOpen by remember { mutableStateOf(false) }
+    val actions =
+        ConversationSelectionBarLayout.resolve(
+            order = order,
+            singleMessage = singleItem != null,
+            hasOtp = singleItem?.message?.extractedOtp != null,
+            hasAttachment = singleItem != null && singleItemAttachments.isNotEmpty(),
+        )
+
+    @Composable
+    fun specFor(action: MessageSelectionAction): SelectionActionSpec =
+        when (action) {
+            MessageSelectionAction.COPY -> {
+                // In text mode (issue #103) Copy reads the field's LIVE
+                // selection - reading it here is what re-labels the button
+                // as the handles move: "Copy message" only while they still
+                // enclose the whole body, "Copy selected text" once a drag
+                // narrowed it, and DISABLED when a tap collapsed it (nothing
+                // highlighted must never quietly copy the whole message).
+                val textCopy =
+                    if (textSelecting && textSelectionField != null) {
+                        TextSelectionField.copyAction(textSelectionField.text, textSelectionField.selection)
+                    } else {
+                        null
+                    }
+                if (textCopy == null) {
+                    SelectionActionSpec(stringResource(R.string.action_copy_message), Icons.Outlined.ContentCopy, onCopy)
+                } else {
+                    SelectionActionSpec(
+                        label = stringResource(TextSelectionField.labelRes(textCopy)),
+                        icon = Icons.Outlined.ContentCopy,
+                        onClick = { textCopy.text?.let(onCopySelectedText) },
+                        enabled = textCopy.text != null,
+                    )
+                }
+            }
+
+            MessageSelectionAction.DELETE -> {
+                SelectionActionSpec(stringResource(R.string.ui_action_delete), Icons.Outlined.Delete, onDelete)
+            }
+
+            MessageSelectionAction.MORE_DETAILS -> {
+                SelectionActionSpec(stringResource(R.string.action_message_details), Icons.Outlined.Info, onShowDetails)
+            }
+
+            MessageSelectionAction.FORWARD -> {
+                SelectionActionSpec(stringResource(R.string.action_forward_message), Icons.AutoMirrored.Outlined.Forward, onForward)
+            }
+
+            MessageSelectionAction.SHARE -> {
+                SelectionActionSpec(stringResource(R.string.action_share_message), Icons.Outlined.Share, onShare)
+            }
+
+            MessageSelectionAction.SELECT_ALL -> {
+                SelectionActionSpec(stringResource(R.string.action_select_all), Icons.Outlined.SelectAll, onSelectAll)
+            }
+
+            MessageSelectionAction.COPY_OTP -> {
+                SelectionActionSpec(
+                    label = stringResource(R.string.action_copy_otp),
+                    icon = Icons.Outlined.Password,
+                    onClick = { singleItem?.message?.extractedOtp?.let(onCopyOtp) },
+                )
+            }
+
+            MessageSelectionAction.ADD_RULE -> {
+                SelectionActionSpec(
+                    label = stringResource(R.string.action_add_rule),
+                    icon = Icons.Outlined.AddCircleOutline,
+                    onClick = { singleItem?.let { onCreateRule(it.body) } },
+                )
+            }
+
+            MessageSelectionAction.SAVE_ATTACHMENT -> {
+                SelectionActionSpec(
+                    label = stringResource(R.string.action_save_attachment),
+                    icon = Icons.Outlined.SaveAlt,
+                    onClick = { onSaveAttachments(singleItemAttachments) },
+                )
+            }
+        }
+
+    TopAppBar(
+        title = {
+            // titleMedium + single line: at the default titleLarge a
+            // six-digit "999999 selected" wrapped out of view next to the
+            // four action slots (measured on a 411dp-wide display).
+            //
+            // While one message is in text-selection mode (issue #103) the
+            // title names that mode instead of the count: it is the only
+            // on-screen cue that the bubble's long-press has changed hands,
+            // and the Close beneath it now steps back to message selection.
+            Text(
+                text =
+                    if (textSelecting) {
+                        stringResource(R.string.action_select_text)
+                    } else {
+                        stringResource(R.string.selection_count, selection.count)
+                    },
+                style = MaterialTheme.typography.titleMedium,
+                maxLines = 1,
+            )
+        },
+        navigationIcon = {
+            // Text mode unwinds ONE level: back to the message selection the
+            // user built, whole-message Copy still a tap away. Plain
+            // selection mode closes as it always has.
+            TooltipIconButton(
+                label = stringResource(if (textSelecting) R.string.ui_action_close else R.string.action_exit_selection),
+                onClick = if (textSelecting) onExitTextSelection else onClose,
+                icon = Icons.Outlined.Close,
+            )
+        },
+        actions = {
+            actions.inline.forEach { action ->
+                val spec = specFor(action)
+                TooltipIconButton(
+                    label = spec.label,
+                    onClick = spec.onClick,
+                    icon = spec.icon,
+                    enabled = spec.enabled,
+                )
+            }
+            TooltipIconButton(
+                label = stringResource(R.string.action_more_options),
+                onClick = { menuOpen = true },
+                icon = Icons.Outlined.MoreVert,
+            )
+            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                actions.overflow.forEach { action ->
+                    val spec = specFor(action)
+                    DropdownMenuItem(
+                        text = { Text(spec.label) },
+                        leadingIcon = { Icon(spec.icon, contentDescription = null) },
+                        enabled = spec.enabled,
+                        onClick = {
+                            menuOpen = false
+                            spec.onClick()
+                        },
+                    )
+                }
+            }
+        },
+    )
+}
+
+@Composable
+private fun DateSeparator(timestamp: Long) {
+    Box(Modifier.fillMaxWidth().padding(vertical = 8.dp), contentAlignment = Alignment.Center) {
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant,
+        ) {
+            Text(
+                text = RelativeTime.dateLabel(timestamp, rememberRelativeTimeStrings()),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+            )
+        }
+    }
+}
+
+/**
+ * One chat bubble. Alignment and colors come from the PERSISTED direction
+ * ([ConversationItem.outgoing]): outgoing right / `primaryContainer`,
+ * incoming left / `surfaceVariant` - stable across app restarts.
+ *
+ * Tapping (outside selection mode) toggles ONE expansion region below the
+ * bubble holding the metadata line (exact timestamp; delivery status for
+ * outgoing, category for incoming) and, when the message has parsed
+ * extraction details, the detail card - a single expander, so metadata and
+ * the transaction/OTP card never fight over the tap.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun MessageBubble(
+    item: ConversationItem,
+    highlighted: Boolean,
+    selected: Boolean,
+    showDetails: Boolean,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+    textSelectionField: TextFieldState? = null,
+    offersTextSelection: Boolean = false,
+    onCopyOtp: (String) -> Unit = {},
+    expanded: Boolean = false,
+    selectionActive: Boolean = false,
+    activeSims: List<SimInfo> = emptyList(),
+    attachments: List<AttachmentEntity> = emptyList(),
+    onImageTap: (AttachmentEntity) -> Unit = {},
+    onLinkClick: (BodyLink) -> Unit = {},
+) {
+    // In text-selection mode (issue #103) the screen hands the bubble the
+    // field whose selection the bar's Copy reads; its presence IS the mode.
+    val textSelecting = textSelectionField != null
+    val alignment = if (item.outgoing) Alignment.CenterEnd else Alignment.CenterStart
+    val bubbleColor =
+        when {
+            selected -> MaterialTheme.colorScheme.secondaryContainer
+            item.outgoing -> MaterialTheme.colorScheme.primaryContainer
+            else -> MaterialTheme.colorScheme.surfaceVariant
+        }
+    val textColor =
+        when {
+            selected -> MaterialTheme.colorScheme.onSecondaryContainer
+            item.outgoing -> MaterialTheme.colorScheme.onPrimaryContainer
+            else -> MaterialTheme.colorScheme.onSurfaceVariant
+        }
+
+    // Background behind the opened message. The screen holds `highlighted`
+    // true for HighlightTiming.HOLD_MS, then this fades to transparent. The tint is
+    // a primary-color wash - the previous secondaryContainer was visually
+    // indistinguishable from the message bubbles, so the "highlight" was
+    // invisible in practice.
+    val highlightColor by animateColorAsState(
+        targetValue =
+            if (highlighted) {
+                MaterialTheme.colorScheme.primary.copy(alpha = HighlightTiming.WASH_ALPHA)
+            } else {
+                Color.Transparent
+            },
+        animationSpec = tween(durationMillis = HighlightTiming.FADE_MS),
+        label = "message_highlight",
+    )
+
+    // The whole row also reflects selection so it is visible at a glance.
+    val rowColor =
+        if (selected) {
+            MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.4f)
+        } else {
+            highlightColor
+        }
+
+    Box(
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .background(rowColor)
+                .padding(horizontal = 16.dp, vertical = 3.dp),
+        contentAlignment = alignment,
+    ) {
+        // ALWAYS-visible in-app twin of the OTP notification's Copy action
+        // (issue #4). ONLY for messages with an extracted OTP - same wording,
+        // same clipboard rule; hidden during selection mode (see
+        // OtpCopyAffordance). Rendered as a row ATTACHED to the bubble: same
+        // surface colour, squared seam with a hairline divider, outer corners
+        // keeping the bubble's radius - one continuous shape, so the button
+        // unambiguously belongs to THIS message, while staying outside the
+        // bubble's combinedClickable (tapping it neither expands nor selects).
+        val showOtpCopy = OtpCopyAffordance.visible(item.message?.extractedOtp, selectionActive)
+        // The bubble's asymmetric bottom corners (small radius on the "tail"
+        // side) migrate to the attached button row when it is present.
+        val bottomStartRadius = if (item.outgoing) 20.dp else 6.dp
+        val bottomEndRadius = if (item.outgoing) 6.dp else 20.dp
+        Column(
+            modifier = Modifier.widthIn(max = 320.dp),
+            horizontalAlignment = if (item.outgoing) Alignment.End else Alignment.Start,
+        ) {
+            Column(
+                // When the button row is attached, size the unit to the widest
+                // of bubble/button and stretch both to it, so their edges are
+                // flush and the pair reads as one object.
+                modifier = if (showOtpCopy) Modifier.width(IntrinsicSize.Max) else Modifier,
+                horizontalAlignment = if (item.outgoing) Alignment.End else Alignment.Start,
+            ) {
+                Surface(
+                    shape =
+                        RoundedCornerShape(
+                            topStart = 20.dp,
+                            topEnd = 20.dp,
+                            // Squared seam against the attached button row.
+                            bottomStart = if (showOtpCopy) 0.dp else bottomStartRadius,
+                            bottomEnd = if (showOtpCopy) 0.dp else bottomEndRadius,
+                        ),
+                    color = bubbleColor,
+                    modifier =
+                        Modifier
+                            .then(if (showOtpCopy) Modifier.fillMaxWidth() else Modifier)
+                            // Comfortable touch target for the tap-to-reveal gesture.
+                            .defaultMinSize(minHeight = 48.dp)
+                            // THE gesture separation for issue #103: a bubble
+                            // is either clickable OR text-selectable, never
+                            // both. In text-selection mode this bubble drops
+                            // its combinedClickable entirely, so the text
+                            // field's selection gestures (drag the handles,
+                            // tap to clear, long-press to re-select) are the
+                            // only pointer handlers on it - nothing competes
+                            // for the long-press. Every other bubble keeps
+                            // its tap / long-press exactly as before.
+                            .then(
+                                if (textSelecting) {
+                                    Modifier
+                                } else {
+                                    Modifier.combinedClickable(
+                                        onClick = onClick,
+                                        onClickLabel =
+                                            stringResource(
+                                                if (expanded) {
+                                                    R.string.conversation_hide_message_details
+                                                } else {
+                                                    R.string.conversation_show_message_details
+                                                },
+                                            ),
+                                        onLongClick = onLongClick,
+                                        // Screen readers get the long-press as a
+                                        // named custom action; on an already
+                                        // selected message with text it says
+                                        // what the second long-press now does.
+                                        onLongClickLabel =
+                                            stringResource(
+                                                if (offersTextSelection) R.string.action_select_text else R.string.inbox_row_actions,
+                                            ),
+                                    )
+                                },
+                            ),
+                ) {
+                    Column(Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
+                        // MMS content: image thumbnails and file chips above the
+                        // text. The body renders only when there is text; the
+                        // pending/failed download states replace it.
+                        if (attachments.isNotEmpty()) {
+                            MmsAttachmentContent(attachments = attachments, onImageTap = onImageTap)
+                        }
+                        when {
+                            item.message?.mmsStatus == MmsStatus.PENDING -> {
+                                Text(
+                                    text = stringResource(R.string.mms_downloading),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontStyle = FontStyle.Italic,
+                                    color = textColor.copy(alpha = 0.8f),
+                                )
+                            }
+
+                            item.message?.mmsStatus == MmsStatus.FAILED -> {
+                                Text(
+                                    text = stringResource(R.string.mms_download_failed),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.error,
+                                )
+                                Text(
+                                    text = stringResource(R.string.mms_failed_tap_retry),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.error.copy(alpha = 0.8f),
+                                )
+                            }
+
+                            item.body.isNotBlank() || attachments.isEmpty() -> {
+                                // Per-message direction (GitHub #139): the
+                                // body's paragraph direction and alignment
+                                // follow ITS text - Persian reads RTL and
+                                // right-aligned inside a bubble that stays
+                                // on its usual side. One merged style for
+                                // both branches, so entering text-selection
+                                // mode cannot re-flow a single glyph. The
+                                // user's text-size multiplier (#157) scales
+                                // this one style - sp stays sp, so Android's
+                                // own font-size setting still multiplies it.
+                                val bodyStyle =
+                                    MaterialTheme.typography.bodyLarge
+                                        .scaledBy(LocalMessageTextScale.current)
+                                        .merge(MessageTextDirection.style)
+                                if (textSelectionField != null) {
+                                    // Issue #103: partial text selection. The
+                                    // BODY only becomes selectable - time
+                                    // label, delivery state, OTP button and
+                                    // detail card stay outside, so a drag
+                                    // cannot sweep "12:04" into the clipboard
+                                    // and the bubble keeps its shape. Plain
+                                    // text, not the linkified body: in this
+                                    // mode the user is picking characters, and
+                                    // a live link under the finger would
+                                    // hijack the tap and long-press gestures.
+                                    TextSelectionBody(
+                                        body = item.body,
+                                        fieldState = textSelectionField,
+                                        style = bodyStyle,
+                                        color = textColor,
+                                    )
+                                } else {
+                                    LinkifiedBodyText(
+                                        body = item.body,
+                                        onLinkClick = onLinkClick,
+                                        style = bodyStyle,
+                                        color = textColor,
+                                    )
+                                }
+                            }
+
+                            // Image/file-only MMS: the attachments ARE the message.
+                            else -> {
+                                Unit
+                            }
+                        }
+                        // Time label with, for outgoing messages, the delivery
+                        // tick beside it (one tick = left the phone, two = a
+                        // real delivery report), and on a dual-SIM device the
+                        // SIM mark (GitHub #109) after that. Same row so
+                        // neither crowds the time; the full "SIM 1 - Airtel"
+                        // tag still lives in the revealed metadata line, so
+                        // nothing else competes for the corner. Failed /
+                        // sending / scheduled rows get NO tick - their
+                        // explicit line beneath says what is happening, and a
+                        // failed message must never read as a tick state.
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.align(Alignment.End).padding(top = 2.dp),
+                        ) {
+                            Text(
+                                text = item.timeLabel,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = textColor.copy(alpha = 0.7f),
+                            )
+                            BubbleSimIcon(
+                                sim = BubbleSimIndicators.forItem(item, activeSims),
+                                tint = textColor.copy(alpha = 0.7f),
+                            )
+                            DeliveryTickIcon(
+                                tick = DeliveryTicks.tickFor(item),
+                                tint = textColor.copy(alpha = 0.7f),
+                            )
+                        }
+                        // In-flight, failed and scheduled sends stay visible on
+                        // the bubble itself; resolved statuses live in the
+                        // metadata line.
+                        when (item.deliveryStatus) {
+                            DeliveryStatus.SCHEDULED -> {
+                                val is24Hour = rememberIs24Hour()
+                                val locale = rememberDisplayLocale()
+                                val at = item.message?.scheduledAt ?: item.timestamp
+                                Text(
+                                    text =
+                                        stringResource(
+                                            R.string.conversation_scheduled_for,
+                                            MessageMetadata.timestampLabel(at, is24Hour, locale = locale),
+                                        ),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.tertiary,
+                                    modifier = Modifier.align(Alignment.End),
+                                )
+                            }
+
+                            DeliveryStatus.SENDING, DeliveryStatus.FAILED -> {
+                                Text(
+                                    text =
+                                        if (item.deliveryStatus == DeliveryStatus.FAILED) {
+                                            // "Not sent" plus the recorded reason in a
+                                            // few words - the same reason the Retry
+                                            // dialog and details row explain in full.
+                                            stringResource(
+                                                SendFailureText.bubbleLabelRes(
+                                                    SendFailureReason.fromName(item.message?.sendFailureReason),
+                                                ),
+                                            )
+                                        } else {
+                                            stringResource(R.string.conversation_sending)
+                                        },
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color =
+                                        if (item.deliveryStatus == DeliveryStatus.FAILED) {
+                                            MaterialTheme.colorScheme.error
+                                        } else {
+                                            textColor.copy(alpha = 0.7f)
+                                        },
+                                    modifier = Modifier.align(Alignment.End),
+                                )
+                            }
+
+                            else -> {
+                                Unit
+                            }
+                        }
+                    }
+                }
+                if (showOtpCopy) {
+                    val rowShape =
+                        RoundedCornerShape(
+                            bottomStart = bottomStartRadius,
+                            bottomEnd = bottomEndRadius,
+                        )
+                    Surface(
+                        shape = rowShape,
+                        color = bubbleColor,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Column {
+                            // Hairline scrim between text and action, so the
+                            // button still reads as tappable within the shared
+                            // surface. Tints with selection like the rest.
+                            HorizontalDivider(
+                                thickness = 1.dp,
+                                color = textColor.copy(alpha = 0.25f),
+                            )
+                            TextButton(
+                                onClick = { item.message?.extractedOtp?.let(onCopyOtp) },
+                                shape = rowShape,
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Icon(
+                                    Icons.Outlined.ContentCopy,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp),
+                                )
+                                Spacer(Modifier.width(6.dp))
+                                Text(stringResource(R.string.action_copy_otp))
+                            }
+                        }
+                    }
+                }
+            }
+            AnimatedVisibility(visible = expanded) {
+                Column(horizontalAlignment = if (item.outgoing) Alignment.End else Alignment.Start) {
+                    MessageMetadataLine(item)
+                    if (DetailCardVisibility.shouldShow(item.details, showDetails)) {
+                        ParsedDetailCard(details = item.details)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * The message body while its bubble is in text-selection mode (issue #103):
+ * a READ-ONLY text field with the whole message pre-selected, so both
+ * selection handles are on screen the moment the mode starts and the user
+ * drags one inward to narrow the range - no further long-press needed (see
+ * [TextSelectionField] for why a field, and why the whole message). The
+ * [fieldState] is owned by the screen, which is how the selection bar's Copy
+ * reads the live selection instead of the whole body.
+ *
+ * Visual parity with the [Text] it replaces is guaranteed structurally, not
+ * by matching numbers: the ORIGINAL body [Text] is still laid out here, with
+ * the same [style] and [color], and only its drawing is suppressed; the
+ * field is stretched to exactly that box ([matchParentSize]). A text field
+ * otherwise imposes a ten-character minimum width (a short "OK" would widen
+ * its bubble) - exact constraints neutralise it - and at the same width and
+ * style the field's text breaks on the same lines, so no glyph moves.
+ *
+ * - No keyboard, no caret: `readOnly` means the field never starts an input
+ *   session on focus and never draws a cursor; focus is requested only so
+ *   the handles render.
+ * - Accessibility: a text field announces itself as an editable field. The
+ *   field's semantics are cleared, so a screen reader finds exactly what it
+ *   found before - the (undrawn) [Text], read as message text.
+ * - Exit path: a focused field with a selection would consume the Back key
+ *   to collapse its selection, costing the user an extra press. Back is
+ *   routed to the OnBackPressedDispatcher instead, so the screen's
+ *   `BackHandler` unwinds text mode as it always has.
+ */
+@Composable
+private fun TextSelectionBody(
+    body: String,
+    fieldState: TextFieldState,
+    style: TextStyle,
+    color: Color,
+) {
+    val focusRequester = remember { FocusRequester() }
+    val backDispatcher = LocalOnBackPressedDispatcherOwner.current?.onBackPressedDispatcher
+    LaunchedEffect(fieldState) { focusRequester.requestFocus() }
+    Box {
+        Text(
+            text = body,
+            style = style,
+            color = color,
+            modifier = Modifier.drawWithContent { },
+        )
+        BasicTextField(
+            state = fieldState,
+            readOnly = true,
+            textStyle = style.copy(color = color),
+            modifier =
+                Modifier
+                    .matchParentSize()
+                    .focusRequester(focusRequester)
+                    .onPreviewKeyEvent { event ->
+                        if (event.key != Key.Back) return@onPreviewKeyEvent false
+                        if (event.type == KeyEventType.KeyUp) backDispatcher?.onBackPressed()
+                        true
+                    }.clearAndSetSemantics { },
+        )
+    }
+}
+
+/**
+ * The unobtrusive metadata line revealed under a tapped bubble: exact
+ * timestamp (in the user's resolved 12/24-hour format, #158), plus the
+ * persisted delivery status for outgoing messages or the category for
+ * incoming ones.
+ */
+@Composable
+private fun MessageMetadataLine(item: ConversationItem) {
+    val is24Hour = rememberIs24Hour()
+    val locale = rememberDisplayLocale()
+    val timestamp =
+        remember(item.id, locale, is24Hour) { MessageMetadata.timestampLabel(item.timestamp, is24Hour, locale = locale) }
+    val detail =
+        if (item.outgoing) {
+            stringResource(deliveryStatusLabelRes(item.deliveryStatus))
+        } else {
+            item.message?.let { message ->
+                message.subCategory?.displayName() ?: message.category.displayName()
+            }
+        }
+    Text(
+        text = listOfNotNull(timestamp, detail, item.simLabel).joinToString(" · "),
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(top = 4.dp, start = 4.dp, end = 4.dp),
+    )
+}
+
+/**
+ * The bubble status line for an outgoing message, from its PERSISTED status -
+ * never derived from the tap or the passage of time. No failure recorded and
+ * no delivery report (reports off, or the carrier sent none) reads honestly
+ * as "Sent", never "Delivered".
+ */
+internal fun deliveryStatusLabelRes(status: DeliveryStatus?): Int =
+    when (status) {
+        DeliveryStatus.SCHEDULED -> R.string.conversation_scheduled
+        DeliveryStatus.SENDING -> R.string.conversation_sending
+        DeliveryStatus.DELIVERED -> R.string.conversation_delivered
+        DeliveryStatus.FAILED -> R.string.conversation_not_sent
+        DeliveryStatus.SENT, null -> R.string.conversation_sent
+    }
+
+/**
+ * The tick beside an outgoing bubble's time label (GitHub #44): a single
+ * check for SENT, a double check for DELIVERED, nothing otherwise - see
+ * [DeliveryTicks] for the full mapping. Sized from the time label's font
+ * size in sp, so it grows with the user's font scale instead of shrinking
+ * beside enlarged text; tinted with the same on-bubble colour as the time
+ * label, so it stays legible on both themes' bubble colours. The content
+ * description says "Sent" / "Delivered" - merged into the bubble's
+ * announcement, so a screen reader hears the state, not silence.
+ */
+@Composable
+internal fun DeliveryTickIcon(
+    tick: DeliveryTick,
+    tint: Color,
+) {
+    if (tick == DeliveryTick.NONE) return
+    val labelSize = MaterialTheme.typography.labelSmall.fontSize
+    val iconSize = with(LocalDensity.current) { (labelSize * 1.3f).toDp() }
+    Spacer(Modifier.width(4.dp))
+    Icon(
+        imageVector = if (tick == DeliveryTick.DOUBLE) Icons.Outlined.DoneAll else Icons.Outlined.Done,
+        contentDescription =
+            stringResource(
+                if (tick == DeliveryTick.DOUBLE) R.string.conversation_delivered else R.string.conversation_sent,
+            ),
+        tint = tint,
+        modifier = Modifier.size(iconSize),
+    )
+}
+
+/**
+ * The SIM mark beside a bubble's time label (GitHub #109): the compose bar's
+ * own SIM-card outline ([SimOutlineGlyph]) with the slot digit inside it,
+ * the one glyph the user already knows from the bar. Drawn only when
+ * [BubbleSimIndicators] resolved a SIM - a single-SIM device, a message
+ * with no recorded subscription and a removed SIM all return before the
+ * spacer, so the bubble is byte-for-byte what it was. Sized from the time
+ * label's font in sp (its line height, so the row does not grow and the
+ * body text above never shifts) and tinted with the same on-bubble colour
+ * as the time label and tick: legible on both themes' bubble colours and
+ * under Material You by construction, where a system SIM colour would pass
+ * the contrast bar on one bubble and fall back on the next. It sits
+ * between the time label and the delivery tick, so the tick stays the
+ * last thing on the row. The content
+ * description is the row's own label ("SIM 1 - Airtel"), identical to the
+ * details dialog's, merged into the bubble's announcement - never a bare
+ * glyph.
+ */
+@Composable
+internal fun BubbleSimIcon(
+    sim: MessageDetails.Row.Sim?,
+    tint: Color,
+) {
+    if (sim == null) return
+    val labelSize = MaterialTheme.typography.labelSmall.fontSize
+    val density = LocalDensity.current
+    // ~16dp at the default 11sp label: the label's own line height.
+    val iconSize = with(density) { (labelSize * 1.45f).toDp() }
+    // The outline's interior is ~45% of its width; the digit must fit it.
+    val digitSize = labelSize * 0.75f
+    Spacer(Modifier.width(4.dp))
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = Modifier.size(iconSize),
+    ) {
+        Icon(
+            imageVector = SimOutlineGlyph,
+            contentDescription = sim.label,
+            tint = tint,
+            modifier = Modifier.size(iconSize),
+        )
+        Text(
+            text = sim.slot.toString(),
+            fontSize = digitSize,
+            lineHeight = digitSize,
+            fontWeight = FontWeight.Bold,
+            color = tint,
+            // Decorative: the Icon's description already names the SIM.
+            modifier = Modifier.clearAndSetSemantics {},
+        )
+    }
+}
+
+/** Expandable card showing parsed transaction / OTP fields under a bubble. */
+@Composable
+private fun ParsedDetailCard(details: Map<String, String>) {
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.secondaryContainer,
+        modifier = Modifier.padding(top = 4.dp),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(
+                text = stringResource(R.string.conversation_details_title),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSecondaryContainer,
+            )
+            details.forEach { (key, value) ->
+                Row {
+                    // The key is the STORED name ("amount", "due_date",
+                    // "pnr" …); every key the pipeline or a bundled rule
+                    // writes has a resource, and a user's own rule's key is
+                    // shown as its author typed it (ExtractKeyLabels.kt).
+                    Text(
+                        text = extractKeyLabel(key) + ": ",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                    )
+                    val kind =
+                        when (key) {
+                            "amount" -> amountKindOf(details)
+
+                            "balance" -> AmountKind.BALANCE
+
+                            // A collect/payment request's figure: asked for,
+                            // never moved - informational blue, no sign.
+                            "requested_amount" -> AmountKind.BALANCE
+
+                            else -> null
+                        }
+                    val amount = value.toDoubleOrNull()
+                    if (kind != null && amount != null) {
+                        AmountText(
+                            amount = amount,
+                            // Balances and requested figures come from
+                            // rupee-anchored phrases; the transaction amount
+                            // carries its own currency (absent = rupees).
+                            currency = if (key == "amount") details["currency"] ?: CurrencyCatalog.INR_CODE else CurrencyCatalog.INR_CODE,
+                            kind = kind,
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    } else {
+                        // Only an enum-ish value ("debit" / "credit") is
+                        // translated; a bank, merchant, reference or OTP is
+                        // text lifted from the message and stays as written.
+                        Text(
+                            text = extractValueLabel(key, value),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}

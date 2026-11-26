@@ -1,0 +1,141 @@
+package app.clearsms.notification
+
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.content.Context
+import android.os.Build
+import app.clearsms.R
+
+/** Notification channel ids and one-shot channel registration. */
+object Channels {
+    const val OTP = "otp"
+    const val MESSAGES = "messages"
+
+    /**
+     * Promotions category id.
+     *
+     * Versioned on purpose: v0.5.2 shipped this channel as `promotions` with
+     * IMPORTANCE_LOW, which Android surfaces as ON. A channel's importance is
+     * user-owned once created - re-creating the same id with a lower importance
+     * is ignored - so the only way to actually ship "off by default" to devices
+     * that already have it is a NEW id. [LEGACY_PROMOTIONS] is deleted below so
+     * users aren't left with two Promotions entries in system settings.
+     */
+    const val PROMOTIONS = "promotions_v2"
+
+    private const val LEGACY_PROMOTIONS = "promotions"
+
+    /**
+     * Messages the categorizer could not place (Category.UNKNOWN). Created
+     * ENABLED, unlike [PROMOTIONS]: an unknown sender is often a real person
+     * texting from a number that is not in contacts, and shipping this
+     * blocked would reproduce the silence this channel exists to fix.
+     */
+    const val UNKNOWN = "unknown_senders"
+
+    /**
+     * Messages sorted as junk (Category.SPAM). Created BLOCKED
+     * (IMPORTANCE_NONE), the [PROMOTIONS] pattern, and for the same reason:
+     * a spam notification is noise by definition - the whole point of the
+     * category is that the user did not ask for these messages. This is the
+     * opposite trade-off from [UNKNOWN], where blocked-by-default was the
+     * bug: an unknown sender may be a person, a spam sender was RECOGNISED
+     * as junk by a rule or the scam heuristics. Posting on a blocked channel
+     * still matters - it is what makes the channel switchable on in system
+     * settings for users who want to see spam arrive. Scam-FLAGGED messages
+     * do not come here at all: the flag routes to [SECURITY] first.
+     */
+    const val SPAM = "spam"
+    const val TRANSACTIONS = "transactions"
+    const val SECURITY = "security"
+    const val SUMMARY = "summary"
+    const val SYNC = "sync"
+
+    /** Creates all channels; safe to call repeatedly. No-op before Android O. */
+    fun ensureCreated(context: Context) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        val manager = context.getSystemService(NotificationManager::class.java) ?: return
+        // Drop the v0.5.2 "promotions" channel, which was created enabled
+        // (IMPORTANCE_LOW). Its replacement below uses a new id so it can
+        // genuinely start blocked; deleting the old one avoids a duplicate,
+        // still-enabled Promotions entry in system settings.
+        manager.deleteNotificationChannel(LEGACY_PROMOTIONS)
+        manager.createNotificationChannels(
+            listOf(
+                // HIGH importance so OTPs show as heads-up notifications.
+                // PRIVATE lockscreen visibility keeps the code itself off the
+                // lockscreen (the notification also carries a digit-free
+                // public version).
+                NotificationChannel(
+                    OTP,
+                    context.getString(R.string.channel_otp),
+                    NotificationManager.IMPORTANCE_HIGH,
+                ).apply {
+                    description = context.getString(R.string.channel_otp_desc)
+                    lockscreenVisibility = Notification.VISIBILITY_PRIVATE
+                },
+                NotificationChannel(
+                    MESSAGES,
+                    context.getString(R.string.channel_messages),
+                    NotificationManager.IMPORTANCE_DEFAULT,
+                ).apply { description = context.getString(R.string.channel_messages_desc) },
+                // Promotions are OFF by default and controlled solely from
+                // Android's notification settings for the app - there is no
+                // in-app toggle. IMPORTANCE_NONE creates the category in a
+                // blocked state, so it is visible (and switchable on) in system
+                // settings while showing nothing until the user asks for it.
+                // Importance is user-owned once created: this initial value
+                // only applies to installs that don't have the channel yet, and
+                // a user who enables it keeps it enabled across updates.
+                NotificationChannel(
+                    PROMOTIONS,
+                    context.getString(R.string.channel_promotions),
+                    NotificationManager.IMPORTANCE_NONE,
+                ).apply { description = context.getString(R.string.channel_promotions_desc) },
+                // DEFAULT (audible), not LOW: what lands in UNKNOWN is
+                // whatever the rules could NOT identify - spam the rules do
+                // recognize already routes to Promotions (blocked) or
+                // Security - so an unknown message is disproportionately
+                // likely to be a real person outside the user's contacts.
+                // Missing a human's text costs more than an occasional spam
+                // ping, and because this is its own channel, one tap in
+                // system settings demotes it to silent (LOW) for users who
+                // disagree. Created UNBLOCKED on purpose - see [UNKNOWN].
+                NotificationChannel(
+                    UNKNOWN,
+                    context.getString(R.string.channel_unknown),
+                    NotificationManager.IMPORTANCE_DEFAULT,
+                ).apply { description = context.getString(R.string.channel_unknown_desc) },
+                // Blocked at creation, like Promotions - see [SPAM].
+                NotificationChannel(
+                    SPAM,
+                    context.getString(R.string.channel_spam),
+                    NotificationManager.IMPORTANCE_NONE,
+                ).apply { description = context.getString(R.string.channel_spam_desc) },
+                // DEFAULT (not HIGH) on purpose: parsed transaction alerts
+                // are informative, not urgent, and must not heads-up.
+                NotificationChannel(
+                    TRANSACTIONS,
+                    context.getString(R.string.channel_transactions),
+                    NotificationManager.IMPORTANCE_DEFAULT,
+                ).apply { description = context.getString(R.string.channel_transactions_desc) },
+                NotificationChannel(
+                    SECURITY,
+                    context.getString(R.string.channel_security),
+                    NotificationManager.IMPORTANCE_HIGH,
+                ).apply { description = context.getString(R.string.channel_security_desc) },
+                NotificationChannel(
+                    SUMMARY,
+                    context.getString(R.string.channel_summary),
+                    NotificationManager.IMPORTANCE_LOW,
+                ).apply { description = context.getString(R.string.channel_summary_desc) },
+                NotificationChannel(
+                    SYNC,
+                    context.getString(R.string.channel_sync),
+                    NotificationManager.IMPORTANCE_LOW,
+                ).apply { description = context.getString(R.string.channel_sync_desc) },
+            ),
+        )
+    }
+}

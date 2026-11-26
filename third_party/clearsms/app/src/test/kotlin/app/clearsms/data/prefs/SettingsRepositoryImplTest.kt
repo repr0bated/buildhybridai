@@ -1,0 +1,308 @@
+package app.clearsms.data.prefs
+
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.PreferenceDataStoreFactory
+import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.booleanPreferencesKey
+import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.core.stringSetPreferencesKey
+import app.clearsms.domain.model.Category
+import app.clearsms.domain.model.EnabledSections
+import app.clearsms.domain.model.FinanceTab
+import app.clearsms.domain.model.LogoBackground
+import app.clearsms.domain.model.NotificationAction
+import app.clearsms.domain.model.OtpDisplaySize
+import app.clearsms.domain.model.StartDestination
+import app.clearsms.domain.model.SwipeAction
+import app.clearsms.domain.model.SwipeDeadZone
+import com.google.common.truth.Truth.assertThat
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
+import org.junit.After
+import org.junit.Rule
+import org.junit.Test
+import org.junit.rules.TemporaryFolder
+
+class SettingsRepositoryImplTest {
+    @get:Rule
+    val tmp = TemporaryFolder()
+
+    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private lateinit var dataStore: DataStore<Preferences>
+
+    private fun repository(): SettingsRepositoryImpl {
+        dataStore =
+            PreferenceDataStoreFactory.create(scope = scope) {
+                tmp.newFile("settings.preferences_pb")
+            }
+        return SettingsRepositoryImpl(dataStore)
+    }
+
+    @After
+    fun tearDown() {
+        scope.cancel()
+    }
+
+    @Test
+    fun `defaults when nothing is stored`() =
+        runBlocking {
+            val repo = repository()
+            assertThat(repo.showRichAvatars.first()).isTrue()
+            // Extracted-details card is OFF until the user turns it on.
+            assertThat(repo.showTransactionDetails.first()).isFalse()
+            assertThat(repo.notificationActions.first())
+                .isEqualTo(setOf(NotificationAction.MARK_READ, NotificationAction.REPLY, NotificationAction.DELETE))
+            assertThat(repo.showBalance.first()).isFalse()
+            assertThat(repo.logoBackground.first()).isEqualTo(LogoBackground.NONE)
+            assertThat(repo.swipeActionStart.first()).isEqualTo(SwipeAction.ARCHIVE)
+            assertThat(repo.swipeActionEnd.first()).isEqualTo(SwipeAction.DELETE)
+            assertThat(repo.defaultDestination.first()).isEqualTo(StartDestination.INBOX)
+            // No filter by default: a fresh install must show all messages.
+            assertThat(repo.defaultInboxFilter.first()).isNull()
+            assertThat(repo.defaultFinanceFilter.first()).isEqualTo(FinanceTab.ACCOUNTS)
+            assertThat(repo.transactionNotifications.first()).isTrue()
+        }
+
+    @Test
+    fun `showRichAvatars round trips`() =
+        runBlocking {
+            val repo = repository()
+            repo.setShowRichAvatars(false)
+            assertThat(repo.showRichAvatars.first()).isFalse()
+            repo.setShowRichAvatars(true)
+            assertThat(repo.showRichAvatars.first()).isTrue()
+        }
+
+    @Test
+    fun `showTransactionDetails defaults off, is only persisted by an explicit choice, and keeps either stored value`() =
+        runBlocking {
+            val repo = repository()
+            val key = booleanPreferencesKey("show_transaction_details")
+            // Fresh install (or an existing install that never touched the
+            // toggle): the old ON default was synthesised at read time and
+            // never written, so the key is absent and the card is now off.
+            assertThat(dataStore.data.first()[key]).isNull()
+            assertThat(repo.showTransactionDetails.first()).isFalse()
+            // Reading did not persist the default.
+            assertThat(dataStore.data.first()[key]).isNull()
+
+            // A user who deliberately turned it on before the default flipped
+            // has true on disk and keeps the card.
+            dataStore.edit { it[key] = true }
+            assertThat(repo.showTransactionDetails.first()).isTrue()
+
+            // An explicit OFF is stored as a real false, not an absent key.
+            repo.setShowTransactionDetails(false)
+            assertThat(dataStore.data.first()[key]).isFalse()
+            assertThat(repo.showTransactionDetails.first()).isFalse()
+
+            repo.setShowTransactionDetails(true)
+            assertThat(dataStore.data.first()[key]).isTrue()
+            assertThat(repo.showTransactionDetails.first()).isTrue()
+        }
+
+    @Test
+    fun `legacy stored otp display sizes migrate without an unset state`() =
+        runBlocking {
+            val repo = repository()
+            val key = stringPreferencesKey("otp_display_size")
+            // Fresh install: nothing stored → Option 2.
+            assertThat(repo.otpDisplaySize.first()).isEqualTo(OtpDisplaySize.OPTION_2)
+            // A user who had the old "Default" entry lands on Option 2.
+            dataStore.edit { it[key] = "DEFAULT" }
+            assertThat(repo.otpDisplaySize.first()).isEqualTo(OtpDisplaySize.OPTION_2)
+            // Old lettered values land on the equivalent numbered option.
+            dataStore.edit { it[key] = "OPTION_A" }
+            assertThat(repo.otpDisplaySize.first()).isEqualTo(OtpDisplaySize.OPTION_1)
+            dataStore.edit { it[key] = "OPTION_D" }
+            assertThat(repo.otpDisplaySize.first()).isEqualTo(OtpDisplaySize.OPTION_5)
+            // New values round-trip through the setter.
+            repo.setOtpDisplaySize(OtpDisplaySize.OPTION_4)
+            assertThat(repo.otpDisplaySize.first()).isEqualTo(OtpDisplaySize.OPTION_4)
+        }
+
+    @Test
+    fun `finance currency override defaults to automatic and only honours known codes`() =
+        runBlocking {
+            val repo = repository()
+            val key = stringPreferencesKey("finance_currency")
+            // Fresh install: automatic detection (null).
+            assertThat(repo.financeCurrency.first()).isNull()
+            repo.setFinanceCurrency("clp")
+            assertThat(dataStore.data.first()[key]).isEqualTo("CLP")
+            assertThat(repo.financeCurrency.first()).isEqualTo("CLP")
+            // Back to automatic is an explicit stored marker, not a deletion.
+            repo.setFinanceCurrency(null)
+            assertThat(dataStore.data.first()[key]).isEqualTo("AUTO")
+            assertThat(repo.financeCurrency.first()).isNull()
+            // A code the catalog cannot describe (hand-edited backup) heals to automatic.
+            dataStore.edit { it[key] = "XYZ" }
+            assertThat(repo.financeCurrency.first()).isNull()
+        }
+
+    @Test
+    fun `notificationActions round trips including empty set`() =
+        runBlocking {
+            val repo = repository()
+            val chosen = setOf(NotificationAction.COPY_OTP, NotificationAction.SHARE_OTP, NotificationAction.DELETE)
+            repo.setNotificationActions(chosen)
+            assertThat(repo.notificationActions.first()).isEqualTo(chosen)
+            repo.setNotificationActions(emptySet())
+            assertThat(repo.notificationActions.first()).isEmpty()
+        }
+
+    @Test
+    fun `swipe actions round trip`() =
+        runBlocking {
+            val repo = repository()
+            repo.setSwipeActionStart(SwipeAction.TOGGLE_READ)
+            repo.setSwipeActionEnd(SwipeAction.NONE)
+            assertThat(repo.swipeActionStart.first()).isEqualTo(SwipeAction.TOGGLE_READ)
+            assertThat(repo.swipeActionEnd.first()).isEqualTo(SwipeAction.NONE)
+        }
+
+    @Test
+    fun `swipe dead zone round trips, defaults off, and clamps out-of-range values`() =
+        runBlocking {
+            val repo = repository()
+            assertThat(repo.swipeDeadZone.first()).isEqualTo(SwipeDeadZone.DEFAULT)
+            val zone = SwipeDeadZone(enabled = true, centerXPercent = 30, widthPercent = 60, heightPercent = 50)
+            repo.setSwipeDeadZone(zone)
+            assertThat(repo.swipeDeadZone.first()).isEqualTo(zone)
+            // Out-of-range values are sanitized on write, so no reader can
+            // ever observe a zone that would cover the whole row.
+            repo.setSwipeDeadZone(SwipeDeadZone(enabled = true, centerXPercent = 500, widthPercent = 100, heightPercent = 0))
+            val clamped = repo.swipeDeadZone.first()
+            assertThat(clamped.widthPercent).isEqualTo(SwipeDeadZone.MAX_WIDTH)
+            assertThat(clamped.centerXPercent).isEqualTo(SwipeDeadZone.MAX_CENTER)
+            assertThat(clamped.heightPercent).isEqualTo(SwipeDeadZone.MIN_HEIGHT)
+        }
+
+    @Test
+    fun `corrupt swipe dead zone value falls back to the default without throwing`() =
+        runBlocking {
+            val repo = repository()
+            dataStore.edit { prefs ->
+                prefs[stringPreferencesKey("swipe_dead_zone")] = "not a zone at all"
+            }
+            assertThat(repo.swipeDeadZone.first()).isEqualTo(SwipeDeadZone.DEFAULT)
+        }
+
+    @Test
+    fun `defaultDestination round trips`() =
+        runBlocking {
+            val repo = repository()
+            repo.setDefaultDestination(StartDestination.FINANCE)
+            assertThat(repo.defaultDestination.first()).isEqualTo(StartDestination.FINANCE)
+        }
+
+    @Test
+    fun `enabledSections defaults to all on and round trips per section`() =
+        runBlocking {
+            val repo = repository()
+            assertThat(repo.enabledSections.first()).isEqualTo(EnabledSections())
+            repo.setFinanceSectionEnabled(false)
+            assertThat(repo.enabledSections.first())
+                .isEqualTo(EnabledSections(inbox = true, finance = false, alerts = true))
+            repo.setInboxSectionEnabled(false)
+            assertThat(repo.enabledSections.first())
+                .isEqualTo(EnabledSections(inbox = false, finance = false, alerts = true))
+            repo.setFinanceSectionEnabled(true)
+            assertThat(repo.enabledSections.first())
+                .isEqualTo(EnabledSections(inbox = false, finance = true, alerts = true))
+        }
+
+    @Test
+    fun `an all-off combination on disk is healed to all-on at read time`() =
+        runBlocking {
+            // The settings UI cannot produce this (last-section guard), but a
+            // hand-edited settings backup restores raw keys - the read must
+            // never surface a state with zero screens.
+            val repo = repository()
+            dataStore.edit { prefs ->
+                prefs[booleanPreferencesKey("inbox_section_enabled")] = false
+                prefs[booleanPreferencesKey("finance_section_enabled")] = false
+                prefs[booleanPreferencesKey("alerts_section_enabled")] = false
+            }
+            assertThat(repo.enabledSections.first()).isEqualTo(EnabledSections())
+        }
+
+    @Test
+    fun `defaultInboxFilter round trips including All`() =
+        runBlocking {
+            val repo = repository()
+            repo.setDefaultInboxFilter(Category.PERSONAL)
+            assertThat(repo.defaultInboxFilter.first()).isEqualTo(Category.PERSONAL)
+            repo.setDefaultInboxFilter(null)
+            assertThat(repo.defaultInboxFilter.first()).isNull()
+        }
+
+    @Test
+    fun `inherited old Important default reads as All while an explicit Important choice survives`() =
+        runBlocking {
+            val repo = repository()
+            // Existing install that never touched the setting: the old
+            // "Important" default was synthesized at read time, never stored,
+            // so the key is absent and the user now sees all messages.
+            assertThat(repo.defaultInboxFilter.first()).isNull()
+            // A user who deliberately chose Important in Settings has the
+            // value on disk and must keep it across the default change.
+            dataStore.edit { it[stringPreferencesKey("default_inbox_filter")] = "IMPORTANT" }
+            assertThat(repo.defaultInboxFilter.first()).isEqualTo(Category.IMPORTANT)
+            // And an explicit "All" choice stays the stored sentinel, not an
+            // absent key, so it remains an explicit choice.
+            repo.setDefaultInboxFilter(null)
+            assertThat(dataStore.data.first()[stringPreferencesKey("default_inbox_filter")]).isEqualTo("ALL")
+        }
+
+    @Test
+    fun `defaultFinanceFilter round trips`() =
+        runBlocking {
+            val repo = repository()
+            repo.setDefaultFinanceFilter(FinanceTab.TRANSACTIONS)
+            assertThat(repo.defaultFinanceFilter.first()).isEqualTo(FinanceTab.TRANSACTIONS)
+        }
+
+    @Test
+    fun `transactionNotifications round trips`() =
+        runBlocking {
+            val repo = repository()
+            repo.setTransactionNotifications(false)
+            assertThat(repo.transactionNotifications.first()).isFalse()
+        }
+
+    @Test
+    fun `corrupt enum values fall back to defaults without throwing`() =
+        runBlocking {
+            val repo = repository()
+            dataStore.edit { prefs ->
+                prefs[stringPreferencesKey("swipe_action_start")] = "FLING_INTO_ORBIT"
+                prefs[stringPreferencesKey("swipe_action_end")] = ""
+                prefs[stringPreferencesKey("default_destination")] = "inbox"
+                prefs[stringPreferencesKey("default_inbox_filter")] = "NOT_A_CATEGORY"
+                prefs[stringPreferencesKey("default_finance_filter")] = "42"
+            }
+            assertThat(repo.swipeActionStart.first()).isEqualTo(SwipeAction.ARCHIVE)
+            assertThat(repo.swipeActionEnd.first()).isEqualTo(SwipeAction.DELETE)
+            assertThat(repo.defaultDestination.first()).isEqualTo(StartDestination.INBOX)
+            // Unknown filter value: intent is unrecoverable, fall back to All.
+            assertThat(repo.defaultInboxFilter.first()).isNull()
+            assertThat(repo.defaultFinanceFilter.first()).isEqualTo(FinanceTab.ACCOUNTS)
+        }
+
+    @Test
+    fun `unknown notification action names are dropped, valid ones kept`() =
+        runBlocking {
+            val repo = repository()
+            dataStore.edit { prefs ->
+                prefs[stringSetPreferencesKey("notification_actions")] =
+                    setOf("REPLY", "SELF_DESTRUCT", "copy_otp")
+            }
+            assertThat(repo.notificationActions.first()).isEqualTo(setOf(NotificationAction.REPLY))
+        }
+}

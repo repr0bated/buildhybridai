@@ -34,6 +34,7 @@ data class ScanInput(
     val shortCodeHistory: Boolean = false,
     val owned: com.example.callguardian.accounts.OwnedAccount? = null,
     val allOwned: List<com.example.callguardian.accounts.OwnedAccount> = emptyList(),
+    val subscriptionStatus: com.example.callguardian.subscriptions.SubscriptionStatus? = null,
 )
 
 /**
@@ -83,21 +84,32 @@ object HeuristicScanner {
         val lower = body.lowercase()
 
         if (input.channel == Channel.SMS && body.isNotBlank()) {
-            val hosts = OfficialDomains.hostsIn(body)
             val mentioned = OfficialDomains.mentionedBrands(body)
-            if (hosts.isNotEmpty()) {
-                val official = hosts.any { OfficialDomains.isAnyOfficialHost(it) }
-                flags += RuleFlag("link", "Contains a link", if (official && hosts.all { OfficialDomains.isAnyOfficialHost(it) }) 5 else 15, ScamCategory.PHISHING_LINK)
-                if (hosts.any { h -> shorteners.any { h.contains(it) } } || body.let { b -> shorteners.any { b.contains(it, true) } }) {
-                    flags += RuleFlag("shortener", "Link hidden behind a URL shortener", 15, ScamCategory.PHISHING_LINK)
-                }
-                if (ipUrlRegex.containsMatchIn(body)) flags += RuleFlag("iplink", "Link points to a bare IP address", 20, ScamCategory.PHISHING_LINK)
-                if (hosts.any { h -> riskyTlds.any { tld -> h.endsWith(tld) } && !OfficialDomains.isAnyOfficialHost(h) }) {
-                    flags += RuleFlag("tld", "Link uses a throwaway domain", 15, ScamCategory.PHISHING_LINK)
-                }
-                val lookalike = mentioned.firstNotNullOfOrNull { b -> OfficialDomains.lookalikeIn(hosts, b) }
-                    ?: hosts.firstOrNull { h -> brands.any { b -> OfficialDomains.isLookalike(h, b) } }
-                if (lookalike != null) flags += RuleFlag("lookalike", "Look-alike brand domain ($lookalike)", 25, ScamCategory.IMPERSONATION)
+            val links = LinkEvaluator.assess(body, mentioned)
+            // A link alone is never phishing. Official / first-party shortener links are a positive signal.
+            if (links.officialPositive && !links.hostile) {
+                flags += RuleFlag("official_link", "Link goes to an official site (${links.officialHost})", 0, null)
+            }
+            if (links.lookalikeHost != null) {
+                flags += RuleFlag("lookalike", "Look-alike brand domain (${links.lookalikeHost})", 25, ScamCategory.IMPERSONATION)
+            }
+            if (links.kinds.values.any { it == LinkEvaluator.HostKind.IP }) {
+                flags += RuleFlag("iplink", "Link points to a bare IP address", 20, ScamCategory.PHISHING_LINK)
+            }
+            if (links.kinds.values.any { it == LinkEvaluator.HostKind.PUNYCODE }) {
+                flags += RuleFlag("punycode", "Link uses a punycode (internationalized) host", 20, ScamCategory.PHISHING_LINK)
+            }
+            val urgencyOrPay = textPatterns.filter { it.id in setOf("urgency", "money", "credentials") }
+                .any { it.regex.containsMatchIn(body) }
+            if (links.publicShortener && urgencyOrPay) {
+                flags += RuleFlag("shortener", "Public URL shortener combined with urgency or a payment or login request", 15, ScamCategory.PHISHING_LINK)
+            }
+            if (links.hosts.any { h -> riskyTlds.any { tld -> OfficialDomains.hostOf(h).endsWith(tld) } && !OfficialDomains.isAnyOfficialHost(h) }
+                && (urgencyOrPay || mentioned.isNotEmpty() || links.hostile)) {
+                flags += RuleFlag("tld", "Link uses a throwaway domain", 15, ScamCategory.PHISHING_LINK)
+            }
+            if (input.subscriptionStatus == com.example.callguardian.subscriptions.SubscriptionStatus.CANCELED) {
+                flags += RuleFlag("still_texting", "Still texting after cancel", 25, ScamCategory.NONE)
             }
             val otp = VerificationCode.of(body)
             textPatterns.forEach { p ->
@@ -115,7 +127,7 @@ object HeuristicScanner {
                 flags += RuleFlag("verification_code", "Looks like a login or verification code", 0, null)
             }
             val brand = mentioned.firstOrNull()
-            val officialForBrand = brand != null && hosts.any { OfficialDomains.isOfficialHost(it, brand) }
+            val officialForBrand = brand != null && links.hosts.any { OfficialDomains.isOfficialHost(it, brand) }
             if (brand != null && flags.any { it.weight >= 15 } && !officialForBrand) {
                 flags += RuleFlag("brand", "Uses the name \"${brand.uppercase()}\"", 10, ScamCategory.IMPERSONATION)
             }
@@ -126,8 +138,10 @@ object HeuristicScanner {
             }
             if (ownedImpersonation != null) {
                 val senderOwned = input.owned?.id == ownedImpersonation.id
-                val lookalikeOwned = hosts.any { h -> !OfficialDomains.isOfficialHost(h, ownedImpersonation.domains.toSet()) &&
-                    OfficialDomains.tokensFor(OfficialDomains.brandKey(ownedImpersonation.service) ?: "").any { t -> h.contains(t) } }
+                val lookalikeOwned = links.hosts.any { h ->
+                    !OfficialDomains.isOfficialHost(h, ownedImpersonation.domains.toSet()) &&
+                        OfficialDomains.isLookalike(h, ownedImpersonation.service)
+                }
                 if (!senderOwned || lookalikeOwned) {
                     flags += RuleFlag("owned_impersonation", "Claims owned account \"${ownedImpersonation.service}\" from an unverified sender or look-alike domain", 30, ScamCategory.IMPERSONATION)
                 }

@@ -19,6 +19,7 @@
     "offers_money",
     "moves_to_other_app",
     "stranger_opener",
+    "reputable_official",
     "model",
     "questionsVersion",
     "inputTokens",
@@ -117,6 +118,13 @@
       "maximum": 100,
       "title": "Stranger opener (%)",
       "description": "Jev's probability that the answer is yes, in percent."
+    },
+    "reputable_official": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100,
+      "title": "Reputable official (%)",
+      "description": "Jev's probability that the sender is a reputable, well-known organization and the message matches how that organization normally communicates."
     },
     "model": {
       "type": "string",

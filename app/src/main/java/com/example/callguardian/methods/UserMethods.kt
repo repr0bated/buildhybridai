@@ -144,7 +144,7 @@ object UserMethodInputs {
 
     /** Jev probabilities from the function → output object (verdict decided here, in code). */
     fun jevOutput(eventId: Long, signals: Map<String, Double>, isContact: Boolean, model: String, questionsVersion: String, inputTokens: Int, latencyMs: Long): JsonObject {
-        val probs = JevTruthTable.Signal.entries.associateWith { s -> signals[s.id] ?: error("Jev returned no answer for ${s.id}") }
+        val probs = JevTruthTable.Signal.entries.associateWith { s -> signals[s.id] ?: if (s == JevTruthTable.Signal.REPUTABLE_OFFICIAL) 0.05 else error("Jev returned no answer for ${s.id}") }
         val r = JevTruthTable.decide(probs, isContact)
         return buildJsonObject {
             put("eventId", eventId); put("verdict", r.verdict.name); put("matchedRule", r.rule.take(80))

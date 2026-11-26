@@ -1,0 +1,328 @@
+package app.clearsms.domain.categorizer
+
+import app.clearsms.data.rules.RuleDefinition
+import app.clearsms.data.rules.RuleEngine
+import app.clearsms.domain.model.CategorizationResult
+import app.clearsms.domain.model.Category
+import app.clearsms.domain.model.SubCategory
+import app.clearsms.domain.parser.GuardId
+import app.clearsms.domain.parser.GuardLibrary
+import app.clearsms.domain.parser.OtpParser
+import app.clearsms.domain.parser.ReminderParser
+import app.clearsms.domain.parser.ScamDetector
+import app.clearsms.domain.parser.TransactionParser
+import java.time.LocalDate
+
+/**
+ * Assigns a category to an incoming message using the priority chain:
+ *
+ * 1. user-defined rules,
+ * 2. bundled (builtin) rules,
+ * 3. sender ID directory,
+ * 4. content-based regex fallback (OTP / transaction / reminder / scam),
+ * 5. contact lookup (contacts → PERSONAL),
+ * 6. UNKNOWN.
+ */
+class MessageCategorizer(
+    private val ruleEngine: RuleEngine,
+    private val senderIdLookup: SenderIdLookup,
+    private val contactLookup: ContactLookup,
+    private val otpParser: OtpParser = OtpParser(),
+    private val transactionParser: TransactionParser = TransactionParser(),
+    private val reminderParser: ReminderParser = ReminderParser(),
+    private val scamDetector: ScamDetector = ScamDetector(),
+) {
+    fun categorize(
+        sender: String,
+        body: String,
+        userRules: List<RuleDefinition>,
+        builtinRules: List<RuleDefinition>,
+        /**
+         * Reference date for yearless-date inference - the MESSAGE date
+         * wherever the caller has one. Defaults to the current clock only
+         * for contexts without a message timestamp (rule-wizard previews).
+         */
+        anchor: LocalDate = LocalDate.now(),
+    ): CategorizationResult {
+        // Regex engines only ever see a bounded prefix of the body: a
+        // concatenated multipart SMS can be tens of thousands of characters,
+        // which turns even mildly backtracking patterns into a denial of
+        // service. The full body is still stored and displayed unchanged.
+        val evalBody = body.take(MAX_EVAL_BODY_LENGTH)
+        return normalizeInformational(
+            enforceInvariants(sender, evalBody, anchor, rawCategorize(sender, evalBody, userRules, builtinRules, anchor)),
+        )
+    }
+
+    /**
+     * Final post-condition: no result ever leaves the categorizer as
+     * [Category.IMPORTANT] with their sub-category preserved - there is no
+     * notices (travel/PNR, appointment tokens, credit-score checks,
+     * broker/exchange statements, UPI-mandate lifecycle) are IMPORTANT now,
+     * keeping their sub-category so downstream meaning is unchanged. This also
+     * normalizes bundled or user rules whose action still says
+     * `category: informational` without touching the rule documents, and it
+     * runs LAST so the mandate carve-out in [enforceInvariants] keeps blocking
+     * the transaction promotion before the fold happens.
+     */
+    private fun normalizeInformational(result: CategorizationResult): CategorizationResult = result
+
+    private fun rawCategorize(
+        sender: String,
+        evalBody: String,
+        userRules: List<RuleDefinition>,
+        builtinRules: List<RuleDefinition>,
+        anchor: LocalDate,
+    ): CategorizationResult {
+        ruleEngine.evaluate(userRules, sender, evalBody, anchor)?.let { return it }
+        ruleEngine.evaluate(builtinRules, sender, evalBody, anchor)?.let { return it }
+
+        senderIdLookup.lookup(sender)?.let { info ->
+            return CategorizationResult(
+                category = info.category,
+                subCategory = contentSubCategory(sender, evalBody, anchor),
+            )
+        }
+
+        contentFallback(sender, evalBody, anchor)?.let { return it }
+
+        if (contactLookup.isContact(sender)) {
+            return CategorizationResult(category = Category.PERSONAL)
+        }
+
+        return CategorizationResult(category = Category.UNKNOWN)
+    }
+
+    /**
+     * Post-conditions applied to EVERY categorization result, regardless of
+     * which stage of the priority chain produced it:
+     *
+     * 1. An extractable OTP code always wins over PROMOTIONAL - a directory
+     *    entry or brand rule that files the sender as promotional must never
+     *    swallow a verification code.
+     * 2. An extracted transaction is never PROMOTIONAL: when the message is
+     *    tagged [SubCategory.TRANSACTION] or the transaction parser finds a
+     *    completed debit/credit, the message is promoted to IMPORTANT.
+     * 3. A keyword-ANCHORED OTP beats a transaction categorization: an
+     *    authorization request ("413423 is SECRET OTP for txn of INR 1205.23
+     *    on ... card ... at ...") quotes an amount, a card and a merchant,
+     *    but nothing has moved - the user needs the CODE, not a transaction
+     *    row. This mirrors invariant 1 for the transaction path, and also
+     *    lifts a directory-matched sender's [SubCategory.OTP] refinement to
+     *    the real OTP category so the OTP notification fires. Only
+     *    [OtpParser.parseAnchored] counts here: the bare
+     *    six-digits-near-a-context-word fallback could mistake a transaction
+     *    reference in a debit alert that merely SAYS "OTP"/"PIN" in an
+     *    advisory ("spent ... without PIN/OTP") for a code, so it must never
+     *    reclassify a real spend. Transaction-ish extracts (amount/type/
+     *    merchant) are dropped in the process so no transaction can derive
+     *    downstream from the rule's captures.
+     * 4. Financial content is never PROMOTIONAL even when no transaction
+     *    derives: strong transactional artifacts (the data-driven
+     *    `financial_evidence` guard - folio/UTR/SR ids, units allotted, NAV,
+     *    instalment/redemption/settlement/refund lifecycle verbs, TDS
+     *    summaries, recorded payments, order-number-plus-amount) demote a
+     *    promotional result to IMPORTANT, unless the body is a marketing
+     *    pitch (the `marketing_pitch` guard vetoes the rescue).
+     *    A parseable PAYMENT OBLIGATION is such an artifact too: when
+     *    [ReminderParser] reads a due date anchored to a bill / premium /
+     *    EMI / statement (the very parse the repository turns into an
+     *    Alerts reminder), the message is a BILL and is promoted. Before
+     *    this clause an insurer or card issuer whose header the directory
+     *    files as promotional (most do - their marketing arm registers the
+     *    same header) produced PROMOTIONAL with a BILL sub-category: the
+     *    reminder reached Alerts while the message sat under Promotional.
+     *    The parser vetoes investment pitches and voucher expiries; the
+     *    `sales_offer` guard additionally keeps a dated sales pitch ("Buy
+     *    health insurance, offer valid till <date>") promotional.
+     * 5. [Category.SPAM] ranks exactly like PROMOTIONAL under invariants 1,
+     *    2 and 4: whatever produced it - a bundled bait rule, the heuristic
+     *    fallback, or a user's "always sort this sender as Spam" rule - an
+     *    extractable OTP code, a parsed transaction, a payment request or
+     *    financial evidence lifts the message OUT of Spam. A sender rule is
+     *    a sorting preference; it is never allowed to hide a verification
+     *    code or a money movement, which is the worst outcome this class
+     *    can produce. (The heuristic fallback never reaches Spam with such
+     *    a body anyway, because OTP/transaction/reminder are tried first.)
+     *
+     * Exceptions, deliberately narrow:
+     * - SCAM results stay put - a phishing message quoting an "OTP" or a
+     *   fake debit must not be promoted into the trusted categories. This is
+     *   the FLAG ([SubCategory.SCAM]), which only the heuristic detector or
+     *   an explicit `scam` sub-category sets; a plain Spam sender rule does
+     *   not carry it, so invariant 5 still applies to it.
+     * - UPI-mandate lifecycle notices (created / cancelled) carry an amount
+     *   but move no money; they must never be promoted AS a transaction. They
+     *   surface as IMPORTANT bank alerts via [normalizeInformational].
+     */
+    private fun enforceInvariants(
+        sender: String,
+        evalBody: String,
+        anchor: LocalDate,
+        result: CategorizationResult,
+    ): CategorizationResult {
+        if (result.subCategory == SubCategory.SCAM) return result
+
+        // Invariant 3: an anchored OTP beats a transaction categorization
+        // (and lifts a directory sender's OTP sub-category to the category).
+        if (result.category != Category.OTP &&
+            (result.subCategory == SubCategory.TRANSACTION || result.subCategory == SubCategory.OTP)
+        ) {
+            otpParser.parseAnchored(evalBody)?.let { otp ->
+                return result.copy(
+                    category = Category.OTP,
+                    subCategory = SubCategory.OTP,
+                    extracted =
+                        result.extracted - TRANSACTION_EXTRACT_KEYS + (EXTRACT_OTP_CODE to otp.code),
+                )
+            }
+        }
+
+        // Invariants 1, 2 and 4 apply to the two junk categories alike:
+        // Spam must be no better than Promotional at hiding a real code or
+        // a real money movement (invariant 5).
+        if (result.category != Category.PROMOTIONAL && result.category != Category.SPAM) return result
+
+        otpParser.parse(evalBody)?.let { otp ->
+            return result.copy(
+                category = Category.OTP,
+                subCategory = SubCategory.OTP,
+                extracted = result.extracted + (EXTRACT_OTP_CODE to otp.code),
+            )
+        }
+
+        // Unified payment-request carve-out (mandate lifecycle + UPI collect
+        // requests): an amount that is only being asked for must never be
+        // promoted AS a transaction - it surfaces as an IMPORTANT bank alert.
+        if (transactionParser.isPaymentRequestNotice(evalBody)) {
+            return result.copy(category = Category.IMPORTANT, subCategory = SubCategory.BANK_ALERT)
+        }
+
+        val hasTransaction =
+            result.subCategory == SubCategory.TRANSACTION ||
+                transactionParser.parse(sender, evalBody) != null
+        if (hasTransaction) {
+            return result.copy(
+                category = Category.IMPORTANT,
+                subCategory = result.subCategory ?: SubCategory.TRANSACTION,
+            )
+        }
+
+        // Invariant 4, obligation clause: a parseable payment obligation is
+        // financial content. The directory path tags it BILL via
+        // contentSubCategory but keeps the directory's category; a rule or
+        // bare directory result without the tag still parses here. The
+        // reminder parser rejects investment pitches, vouchers and settled
+        // payments, but a dated SALES offer ("Buy health insurance, offer
+        // valid till 31-10") can still satisfy its anchor and type evidence
+        // - the `sales_offer` guard keeps such a pitch promotional. The
+        // guard only ever forgoes a rescue, never demotes, so a genuine
+        // bill that appends an upsell merely stays where it was.
+        if ((result.subCategory == SubCategory.BILL || reminderParser.parse(sender, evalBody, anchor) != null) &&
+            !GuardLibrary.matches(GuardId.SALES_OFFER, evalBody)
+        ) {
+            return result.copy(category = Category.IMPORTANT, subCategory = SubCategory.BILL)
+        }
+
+        // Invariant 4: financial content is never PROMOTIONAL, even when no
+        // transaction derives. Evidence is a body of POSITIVE knowledge in
+        // data (the `financial_evidence` guard): transactional artifacts -
+        // folio / UTR / SR identifiers, units-allotted and NAV figures,
+        // instalment / redemption / settlement / refund lifecycle verbs, TDS
+        // period summaries, "payment ... recorded" ledger entries, an order
+        // number with its amount - never amounts alone, so a cashback pitch
+        // or a loan offer quoting money cannot qualify. A marketing pitch
+        // (the `marketing_pitch` guard) vetoes the rescue outright: pitch
+        // phrasing that name-drops an artifact stays promotional. A
+        // parseable payment obligation was already promoted as a BILL by the
+        // obligation clause above, so what reaches here lands as GENERAL
+        // financial correspondence.
+        if (GuardLibrary.matches(GuardId.FINANCIAL_EVIDENCE, evalBody) &&
+            !GuardLibrary.matches(GuardId.MARKETING_PITCH, evalBody)
+        ) {
+            return result.copy(category = Category.IMPORTANT, subCategory = SubCategory.GENERAL)
+        }
+        return result
+    }
+
+    /** Content-based regex fallback for senders no rule or directory entry knows. */
+    private fun contentFallback(
+        sender: String,
+        body: String,
+        anchor: LocalDate,
+    ): CategorizationResult? {
+        otpParser.parse(body)?.let { otp ->
+            return CategorizationResult(
+                category = Category.OTP,
+                subCategory = SubCategory.OTP,
+                extracted = mapOf(EXTRACT_OTP_CODE to otp.code),
+            )
+        }
+        // A collect / payment request or mandate notice quotes an amount but
+        // moves no money: an IMPORTANT bank alert, never a transaction. Must
+        // run before the transaction branch - "received ... request" would
+        // otherwise satisfy the credit heuristics (the parser also vetoes
+        // it, so ordering here is belt-and-braces).
+        if (transactionParser.isPaymentRequestNotice(body)) {
+            return CategorizationResult(category = Category.IMPORTANT, subCategory = SubCategory.BANK_ALERT)
+        }
+        if (transactionParser.parse(sender, body) != null) {
+            return CategorizationResult(category = Category.IMPORTANT, subCategory = SubCategory.TRANSACTION)
+        }
+        if (reminderParser.parse(sender, body, anchor) != null) {
+            return CategorizationResult(category = Category.IMPORTANT, subCategory = SubCategory.BILL)
+        }
+        // A sender no rule or directory entry knows, with a body the
+        // heuristic detector calls a scam: junk, filed under SPAM and
+        // FLAGGED, so it gets the Spam pill AND the warning treatment.
+        if (scamDetector.isScam(body)) {
+            return CategorizationResult(category = Category.SPAM, subCategory = SubCategory.SCAM)
+        }
+        return null
+    }
+
+    /** Sub-category refinement for directory-matched senders. */
+    private fun contentSubCategory(
+        sender: String,
+        body: String,
+        anchor: LocalDate,
+    ): SubCategory? =
+        when {
+            otpParser.parse(body) != null -> SubCategory.OTP
+
+            // Payment requests / mandate notices: a bank alert, even for a
+            // directory-matched sender like PhonePe.
+            transactionParser.isPaymentRequestNotice(body) -> SubCategory.BANK_ALERT
+
+            transactionParser.parse(sender, body) != null -> SubCategory.TRANSACTION
+
+            reminderParser.parse(sender, body, anchor) != null -> SubCategory.BILL
+
+            scamDetector.isScam(body) -> SubCategory.SCAM
+
+            else -> null
+        }
+
+    companion object {
+        /** Key used for OTP codes in [CategorizationResult.extracted]. */
+        const val EXTRACT_OTP_CODE = "otp_code"
+
+        /**
+         * Rule-extract keys that describe a money movement. Dropped when an
+         * anchored OTP reclassifies a rule-matched "transaction" to OTP, so
+         * an authorization request's quoted amount can never derive a
+         * transaction row or render as a signed amount downstream.
+         */
+        private val TRANSACTION_EXTRACT_KEYS = setOf("amount", "type", "merchant", "reference")
+
+        /**
+         * Maximum number of characters of a message body that rule regexes
+         * and content parsers are evaluated against. 1000 characters is ample
+         * for transactional SMS (amount / account / OTP details arrive within
+         * the first couple of segments); longer bodies are attacker-controlled
+         * or promotional filler, and capping the evaluation input bounds the
+         * regex engine's worst case. The full body is always persisted.
+         */
+        const val MAX_EVAL_BODY_LENGTH = 1000
+    }
+}

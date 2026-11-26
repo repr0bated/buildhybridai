@@ -1,0 +1,40 @@
+{
+  "version": "2026.11.6",
+  "description": "Curated official brand domains and first-party shorteners. A link to one of these is a positive signal, never phishing by itself. Look-alikes are evaluated against the registrable domain (Public Suffix List).",
+  "publicShorteners": [
+    "bit.ly", "tinyurl.com", "t.co", "is.gd", "rb.gy", "cutt.ly", "shorturl.at",
+    "ow.ly", "tiny.cc", "s.id", "rebrand.ly", "buff.ly", "trib.al", "lnkd.in"
+  ],
+  "brands": [
+    {"key": "paypal", "names": ["paypal"], "domains": ["paypal.com", "paypal.me", "paypalobjects.com"], "shorteners": ["py.pl"]},
+    {"key": "cashapp", "names": ["cash app", "cashapp", "cash-app"], "domains": ["cash.app", "cashapp.com", "square.com", "squareup.com", "squarecdn.com"], "shorteners": []},
+    {"key": "square", "names": ["square"], "domains": ["square.com", "squareup.com", "squarecdn.com", "cash.app"], "shorteners": []},
+    {"key": "amazon", "names": ["amazon"], "domains": ["amazon.com", "amazon.co.uk", "amazon.ca", "amazon.de"], "shorteners": ["amzn.to", "a.co"]},
+    {"key": "apple", "names": ["apple", "icloud", "apple id"], "domains": ["apple.com", "icloud.com", "appleid.apple.com", "me.com", "icloud.com.cn"], "shorteners": ["appsto.re"]},
+    {"key": "google", "names": ["google", "gmail", "youtube"], "domains": ["google.com", "gmail.com", "youtube.com", "googleusercontent.com", "withgoogle.com"], "shorteners": ["g.co", "goo.gle", "youtu.be"]},
+    {"key": "chase", "names": ["chase"], "domains": ["chase.com", "jpmorganchase.com", "jpmorgan.com"], "shorteners": []},
+    {"key": "wellsfargo", "names": ["wells fargo", "wellsfargo"], "domains": ["wellsfargo.com"], "shorteners": []},
+    {"key": "bankofamerica", "names": ["bank of america", "bankofamerica"], "domains": ["bankofamerica.com"], "shorteners": []},
+    {"key": "citi", "names": ["citi", "citibank"], "domains": ["citi.com", "citibank.com"], "shorteners": []},
+    {"key": "usps", "names": ["usps"], "domains": ["usps.com"], "shorteners": []},
+    {"key": "fedex", "names": ["fedex"], "domains": ["fedex.com"], "shorteners": []},
+    {"key": "ups", "names": ["ups"], "domains": ["ups.com"], "shorteners": []},
+    {"key": "dhl", "names": ["dhl"], "domains": ["dhl.com"], "shorteners": []},
+    {"key": "netflix", "names": ["netflix"], "domains": ["netflix.com"], "shorteners": []},
+    {"key": "irs", "names": ["irs"], "domains": ["irs.gov"], "shorteners": []},
+    {"key": "medicare", "names": ["medicare"], "domains": ["medicare.gov"], "shorteners": []},
+    {"key": "socialsecurity", "names": ["social security", "socialsecurity"], "domains": ["ssa.gov", "socialsecurity.gov"], "shorteners": []},
+    {"key": "ezpass", "names": ["e-zpass", "ezpass", "e-z pass", "e z pass", "ez pass"], "domains": [
+      "e-zpassny.com", "ezpassny.com", "ezpassnj.com", "e-zpassiag.com", "e-zpassgroup.org",
+      "tollsbymailny.com", "ezpasspa.com", "ezpassmd.com", "ezpassde.com", "ezpassma.com",
+      "ezpassva.com", "ezpasswv.com", "ezpassnh.com", "ezpassri.com", "ezpassmaine.com",
+      "ezpassoh.com", "getipass.com", "illinoistollway.com", "ncquickpass.com"
+    ], "shorteners": []},
+    {"key": "fastrak", "names": ["fastrak"], "domains": ["bayareafastrak.org", "thefastrak.org", "fastrak.org"], "shorteners": []},
+    {"key": "sunpass", "names": ["sunpass"], "domains": ["sunpass.com", "sunpass.org"], "shorteners": []},
+    {"key": "coinbase", "names": ["coinbase"], "domains": ["coinbase.com"], "shorteners": []},
+    {"key": "venmo", "names": ["venmo"], "domains": ["venmo.com"], "shorteners": []},
+    {"key": "zelle", "names": ["zelle"], "domains": ["zellepay.com"], "shorteners": []},
+    {"key": "microsoft", "names": ["microsoft"], "domains": ["microsoft.com", "office.com", "live.com", "microsoftonline.com", "outlook.com"], "shorteners": ["aka.ms"]}
+  ]
+}

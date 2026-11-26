@@ -418,10 +418,12 @@ enum class SyncSubscriptionSource(val value: String) {
 @Serializable
 enum class SyncSubscriptionStatus(val value: String) {
     @SerialName("ACTIVE") Active("ACTIVE"),
+    @SerialName("CANCELED") Canceled("CANCELED"),
     @SerialName("DISMISSED") Dismissed("DISMISSED"),
     @SerialName("MANAGE_OPENED") ManageOpened("MANAGE_OPENED"),
     @SerialName("MUTED") Muted("MUTED"),
-    @SerialName("STOP_SENT") StopSent("STOP_SENT");
+    @SerialName("STOP_SENT") StopSent("STOP_SENT"),
+    @SerialName("UNSUBSCRIBED") Unsubscribed("UNSUBSCRIBED");
 }
 
 /**

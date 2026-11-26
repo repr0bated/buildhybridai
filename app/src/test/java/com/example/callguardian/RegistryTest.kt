@@ -4,6 +4,7 @@ import com.example.callguardian.methods.BindingContext
 import com.example.callguardian.methods.MethodBinder
 import com.example.callguardian.model.Channel
 import com.example.callguardian.model.GuardianMethod
+import com.example.callguardian.model.ModelVerdict
 import com.example.callguardian.model.RiskLevel
 import com.example.callguardian.model.ScamCategory
 import kotlinx.serialization.json.Json
@@ -34,8 +35,8 @@ class RegistryTest {
     /** The Kotlin enum (needed by @Generable), the schema enums and the registry must agree. */
     @Test fun guardianMethodEnumMatchesSchemasAndRegistry() {
         val names = GuardianMethod.entries.map { it.name }.toSet()
-        assertEquals(names, enumOf("scam_verdict.schema.json", "method"))
         assertEquals(names - "EXPLAIN_CLOUD", enumOf("deep_analysis.schema.json", "method"))
+        // scam_verdict is the triage shape (verdict / confidence / reasons); methods live on deep_analysis.
         assertEquals(GuardianMethod.entries.filter { it != GuardianMethod.NONE }.map { it.alias }.toSet(), reg.proposableMethods.map { it.spec.alias }.toSet())
         GuardianMethod.entries.filter { it != GuardianMethod.NONE }.forEach { assertNotNull(it.name, reg.byMethod(it)) }
     }
@@ -46,8 +47,9 @@ class RegistryTest {
     }
 
     @Test fun categoryAndRiskEnumsMatchSchema() {
-        assertEquals(ScamCategory.entries.map { it.name }.toSet(), enumOf("scam_verdict.schema.json", "category"))
-        assertEquals(RiskLevel.entries.map { it.name }.toSet(), enumOf("scam_verdict.schema.json", "riskLevel"))
+        assertEquals(ScamCategory.entries.map { it.name }.toSet(), enumOf("deep_analysis.schema.json", "category"))
+        assertEquals(RiskLevel.entries.map { it.name }.toSet(), enumOf("deep_analysis.schema.json", "riskLevel"))
+        assertEquals(ModelVerdict.entries.map { it.name }.toSet(), enumOf("scam_verdict.schema.json", "verdict"))
     }
 
     /** The binder must only ever produce inputs that pass the method's own input schema. */

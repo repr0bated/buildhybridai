@@ -23,7 +23,8 @@ object JevTruthTable {
         ASKS_LOGIN_DETAILS("asks_login_details"),
         OFFERS_MONEY("offers_money"),
         MOVES_TO_OTHER_APP("moves_to_other_app"),
-        STRANGER_OPENER("stranger_opener");
+        STRANGER_OPENER("stranger_opener"),
+        REPUTABLE_OFFICIAL("reputable_official");
         companion object { fun byId(id: String) = entries.firstOrNull { it.id == id } }
     }
 
@@ -32,33 +33,56 @@ object JevTruthTable {
 
     data class Result(val verdict: Verdict, val rule: String, val unsettled: List<Signal>)
 
+    /**
+     * App-side facts. [fromOwnedAccount] is answered deterministically from the Owned list
+     * (sender or short code, plus official domain match) — it is not a Jev question.
+     * [officialDomainChecksOut] gates the reputable-organization signal.
+     */
+    data class Context(
+        val senderIsContact: Boolean,
+        val officialDomainChecksOut: Boolean = false,
+        val lookalikeDomain: Boolean = false,
+        val fromOwnedAccount: Boolean = false,
+    )
+
     fun read(p: Double): Reading = when { p >= YES -> Reading.YES; p <= NO -> Reading.NO; else -> Reading.UNSETTLED }
 
-    private data class Row(val verdict: Verdict, val rule: String, val test: (Set<Signal>, Boolean) -> Boolean)
+    private data class Row(val verdict: Verdict, val rule: String, val test: (Set<Signal>, Context) -> Boolean)
 
     private val S = Signal.entries
-    /** First matching row wins. `y` = signals read as yes; `contact` = sender is a saved contact (known to code). */
+    /** First matching row wins. Brand claim plus a look-alike domain is always impersonation. */
     private val rows = listOf(
+        Row(Verdict.SCAM, "brand claim + lookalike domain") { y, c ->
+            c.lookalikeDomain && (Signal.CLAIMS_ORGANIZATION in y || c.fromOwnedAccount) },
         Row(Verdict.SCAM, "code request + company claim or deadline") { y, _ -> Signal.ASKS_SHARE_CODE in y && (Signal.CLAIMS_ORGANIZATION in y || Signal.DEADLINE_PRESSURE in y) },
         Row(Verdict.SCAM, "asks for login details") { y, _ -> Signal.ASKS_LOGIN_DETAILS in y },
+        Row(Verdict.CLEAR, "owned account (sender and official domain match)") { _, c ->
+            c.fromOwnedAccount && c.officialDomainChecksOut && !c.lookalikeDomain },
+        Row(Verdict.CLEAR, "reputable organization and official domain, no unusual ask") { y, c ->
+            c.officialDomainChecksOut && !c.lookalikeDomain && Signal.REPUTABLE_OFFICIAL in y &&
+                Signal.ASKS_SHARE_CODE !in y && Signal.ASKS_LOGIN_DETAILS !in y &&
+                Signal.MOVES_TO_OTHER_APP !in y && Signal.STRANGER_OPENER !in y },
         Row(Verdict.SCAM, "payment or link + deadline") { y, _ -> (Signal.ASKS_PAYMENT in y || Signal.ASKS_OPEN_LINK in y) && Signal.DEADLINE_PRESSURE in y },
         Row(Verdict.SCAM, "money offer + other app or stranger opener") { y, _ -> Signal.OFFERS_MONEY in y && (Signal.MOVES_TO_OTHER_APP in y || Signal.STRANGER_OPENER in y) },
         Row(Verdict.SCAM, "stranger opener + other app") { y, _ -> Signal.STRANGER_OPENER in y && Signal.MOVES_TO_OTHER_APP in y },
-        Row(Verdict.SUSPICIOUS, "one strong signal from a non-contact") { y, contact ->
-            !contact && listOf(Signal.ASKS_SHARE_CODE, Signal.ASKS_PAYMENT, Signal.OFFERS_MONEY, Signal.MOVES_TO_OTHER_APP, Signal.STRANGER_OPENER).any { it in y } },
+        Row(Verdict.SUSPICIOUS, "one strong signal from a non-contact") { y, c ->
+            !c.senderIsContact && listOf(Signal.ASKS_SHARE_CODE, Signal.ASKS_PAYMENT, Signal.OFFERS_MONEY, Signal.MOVES_TO_OTHER_APP, Signal.STRANGER_OPENER).any { it in y } },
         Row(Verdict.SUSPICIOUS, "company claim + deadline") { y, _ -> Signal.CLAIMS_ORGANIZATION in y && Signal.DEADLINE_PRESSURE in y },
         Row(Verdict.CLEAR, "no scam combination") { _, _ -> true },
     )
 
-    private fun firstRow(yes: Set<Signal>, contact: Boolean) = rows.first { it.test(yes, contact) }
+    private fun firstRow(yes: Set<Signal>, ctx: Context) = rows.first { it.test(yes, ctx) }
 
-    fun decide(probabilities: Map<Signal, Double>, senderIsContact: Boolean): Result {
+    fun decide(probabilities: Map<Signal, Double>, senderIsContact: Boolean): Result =
+        decide(probabilities, Context(senderIsContact))
+
+    fun decide(probabilities: Map<Signal, Double>, ctx: Context): Result {
         require(probabilities.keys.containsAll(S)) { "Missing Jev answers: ${S - probabilities.keys}" }
         val readings = probabilities.mapValues { read(it.value) }
         val yes = readings.filterValues { it == Reading.YES }.keys
         val unsettled = readings.filterValues { it == Reading.UNSETTLED }.keys
-        val strict = firstRow(yes, senderIsContact)
-        val loose = firstRow(yes + unsettled, senderIsContact)
+        val strict = firstRow(yes, ctx)
+        val loose = firstRow(yes + unsettled, ctx)
         val order = S.filter { it in unsettled }
         return if (strict.verdict == loose.verdict) Result(strict.verdict, strict.rule, order)
         else Result(Verdict.UNSETTLED, "hinges on unsettled: ${order.joinToString { it.id }}".take(80), order)

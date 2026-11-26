@@ -1,0 +1,2485 @@
+package app.clearsms.data.repository
+
+import androidx.paging.PagingSource
+import androidx.room.InvalidationTracker
+import androidx.room.withTransaction
+import app.clearsms.data.db.AccountEntity
+import app.clearsms.data.db.AttachmentEntity
+import app.clearsms.data.db.CategoryUnreadCount
+import app.clearsms.data.db.ClearSmsDatabase
+import app.clearsms.data.db.DeliveryStatus
+import app.clearsms.data.db.DraftEntity
+import app.clearsms.data.db.InboxThreadRow
+import app.clearsms.data.db.MessageEntity
+import app.clearsms.data.db.MmsStatus
+import app.clearsms.data.db.ReminderEntity
+import app.clearsms.data.db.ThreadAnchor
+import app.clearsms.data.db.ThreadPinEntity
+import app.clearsms.data.db.TransactionEntity
+import app.clearsms.data.db.isSameMessageAs
+import app.clearsms.data.prefs.BlockedKeywords
+import app.clearsms.data.rules.BundledRuleLoader
+import app.clearsms.data.rules.RuleDefinition
+import app.clearsms.data.rules.RuleSources
+import app.clearsms.data.rules.toDefinition
+import app.clearsms.diagnostics.Diag
+import app.clearsms.diagnostics.DiagField
+import app.clearsms.domain.categorizer.MessageCategorizer
+import app.clearsms.domain.model.AccountType
+import app.clearsms.domain.model.CategorizationResult
+import app.clearsms.domain.model.Category
+import app.clearsms.domain.model.CurrencyCatalog
+import app.clearsms.domain.model.ExtractedValue
+import app.clearsms.domain.model.MerchantCategory
+import app.clearsms.domain.model.MessageSortOrder
+import app.clearsms.domain.model.ParsedDelivery
+import app.clearsms.domain.model.ParsedReminder
+import app.clearsms.domain.model.ParsedTransaction
+import app.clearsms.domain.model.ReminderType
+import app.clearsms.domain.model.SubCategory
+import app.clearsms.domain.model.TransactionType
+import app.clearsms.domain.model.amount
+import app.clearsms.domain.model.date
+import app.clearsms.domain.model.merchant
+import app.clearsms.domain.model.sentTimestampOrNull
+import app.clearsms.domain.model.transactionType
+import app.clearsms.domain.parser.BalanceStatement
+import app.clearsms.domain.parser.DeliveryParser
+import app.clearsms.domain.parser.OtpParser
+import app.clearsms.domain.parser.ReminderParser
+import app.clearsms.domain.parser.ReminderTypeClassifier
+import app.clearsms.domain.parser.SenderNameResolver
+import app.clearsms.domain.parser.TotalLimitStatement
+import app.clearsms.domain.parser.TransactionParser
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.yield
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.builtins.MapSerializer
+import kotlinx.serialization.builtins.serializer
+import kotlinx.serialization.json.Json
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
+import java.util.concurrent.atomic.AtomicBoolean
+
+/** Default [MessageRepository] backed by Room and the domain pipeline. */
+class MessageRepositoryImpl(
+    private val database: ClearSmsDatabase,
+    private val categorizer: MessageCategorizer,
+    private val bundledRuleLoader: BundledRuleLoader,
+    private val json: Json,
+    private val otpParser: OtpParser = OtpParser(),
+    private val transactionParser: TransactionParser = TransactionParser(),
+    private val reminderParser: ReminderParser = ReminderParser(),
+    private val deliveryParser: DeliveryParser = DeliveryParser(),
+    /** Platform hook syncing deletions to the system SMS provider (null in tests). */
+    private val systemSmsDeleter: SystemSmsDeleter? = null,
+    private val systemSmsReadWriter: SystemSmsReadWriter? = null,
+    /** Platform hook re-inserting restored bin rows into the provider (null in tests). */
+    private val systemSmsReinserter: SystemSmsReinserter? = null,
+    /** Platform hook cancelling shade notifications for read/deleted messages (null in tests). */
+    private val readNotificationCanceler: ReadNotificationCanceler? = null,
+    /** Page size for [recategorizeAll]; overridable so tests can hit batch boundaries. */
+    private val recategorizePageSize: Int = RECATEGORIZE_PAGE_SIZE,
+    /**
+     * The user's blocked keywords (see
+     * [app.clearsms.data.prefs.BlockedKeywords]); a matching incoming body
+     * is routed to the bin or dropped at ingestion. Defaults to none.
+     */
+    private val blockedKeywords: suspend () -> Set<String> = { emptySet() },
+    /**
+     * The user's blocked-sender set - the single blocking authority (see
+     * [app.clearsms.data.prefs.SettingsRepository.blockedSenders]). Entries
+     * are normalized on write, but matching re-normalizes defensively. A
+     * matching incoming message is born soft-deleted exactly like a blocked
+     * keyword. Defaults to none.
+     */
+    private val blockedSenders: suspend () -> Set<String> = { emptySet() },
+    /**
+     * Whether the recycle bin is enabled - decides whether a keyword-blocked
+     * message rests in the bin or is dropped outright, mirroring the app's
+     * committed-delete semantics. Default matches the settings default (on).
+     */
+    private val recycleBinEnabled: suspend () -> Boolean = { true },
+    /**
+     * Platform hook removing a hard-deleted message's stored MMS attachment
+     * files (see [app.clearsms.mms.AttachmentStore]); null in tests. Rows in
+     * the `attachments` table are deleted in the same transaction as the
+     * message; files go after commit (a crash in between leaves orphaned
+     * files, never dangling rows).
+     */
+    private val attachmentFileCleaner: ((Long) -> Unit)? = null,
+) : MessageRepository {
+    /** Types rule-extract reminders from body evidence (see [reminderFromExtracts]). */
+    private val reminderTypeClassifier = ReminderTypeClassifier()
+
+    private val messageDao get() = database.messageDao()
+    private val accountDao get() = database.accountDao()
+    private val transactionDao get() = database.transactionDao()
+    private val reminderDao get() = database.reminderDao()
+    private val ruleDao get() = database.ruleDao()
+    private val draftDao get() = database.draftDao()
+    private val threadPinDao get() = database.threadPinDao()
+    private val attachmentDao get() = database.attachmentDao()
+
+    /**
+     * Test seam: invoked inside the ingestion transaction after the derived
+     * rows are written, so tests can prove a mid-derivation failure rolls the
+     * message back too. Always null in production.
+     */
+    internal var ingestionFailpointForTest: (suspend () -> Unit)? = null
+
+    override fun observeInbox(
+        category: Category?,
+        unreadOnly: Boolean,
+    ): Flow<List<MessageEntity>> = messageDao.observeInbox(category, unreadOnly)
+
+    override fun observeThread(threadId: Long): Flow<List<MessageEntity>> = messageDao.observeThread(threadId)
+
+    override fun pagedInbox(
+        category: Category?,
+        unreadOnly: Boolean,
+        sortOrder: MessageSortOrder,
+    ): PagingSource<Int, InboxThreadRow> =
+        when (sortOrder) {
+            MessageSortOrder.RECEIVED -> messageDao.pagingInbox(category, unreadOnly)
+            MessageSortOrder.SENT -> messageDao.pagingInboxBySent(category, unreadOnly)
+        }
+
+    override suspend fun draftFor(threadId: Long): String? = draftDao.forThread(threadId)?.text
+
+    override suspend fun saveDraft(
+        threadId: Long,
+        text: String,
+    ) {
+        if (text.isBlank()) {
+            draftDao.delete(threadId)
+        } else {
+            draftDao.upsert(DraftEntity(threadId = threadId, text = text, updatedAt = System.currentTimeMillis()))
+        }
+    }
+
+    override suspend fun setPinned(
+        threadIds: List<Long>,
+        pinned: Boolean,
+    ) {
+        if (threadIds.isEmpty()) return
+        val senders =
+            SqliteChunker.chunk(threadIds).flatMap { messageDao.normalizedSendersForThreads(it) }.distinct()
+        if (senders.isEmpty()) return
+        if (pinned) {
+            val now = System.currentTimeMillis()
+            threadPinDao.upsertAll(senders.map { ThreadPinEntity(normalizedSender = it, pinnedAt = now) })
+        } else {
+            SqliteChunker.chunk(senders).forEach { threadPinDao.deleteBySenders(it) }
+        }
+    }
+
+    override suspend fun pinnedCountInThreads(threadIds: List<Long>): Int {
+        if (threadIds.isEmpty()) return 0
+        val senders =
+            SqliteChunker.chunk(threadIds).flatMap { messageDao.normalizedSendersForThreads(it) }.distinct()
+        return SqliteChunker.chunk(senders).sumOf { threadPinDao.countBySenders(it) }
+    }
+
+    override fun pagedThread(
+        threadId: Long,
+        sortOrder: MessageSortOrder,
+    ): PagingSource<Int, MessageEntity> =
+        when (sortOrder) {
+            MessageSortOrder.RECEIVED -> messageDao.pagingThread(threadId)
+            MessageSortOrder.SENT -> messageDao.pagingThreadBySent(threadId)
+        }
+
+    override suspend fun firstInThread(threadId: Long): MessageEntity? = messageDao.firstInThread(threadId)
+
+    override suspend fun inboxThreadIds(
+        category: Category?,
+        unreadOnly: Boolean,
+    ): List<Long> = messageDao.inboxThreadIds(category, unreadOnly)
+
+    override suspend fun messageIdsInThread(threadId: Long): List<Long> = messageDao.messageIdsInThread(threadId)
+
+    override suspend fun positionInThread(
+        threadId: Long,
+        messageId: Long,
+        sortOrder: MessageSortOrder,
+    ): Int =
+        when (sortOrder) {
+            MessageSortOrder.RECEIVED -> messageDao.newerCountInThread(threadId, messageId)
+            MessageSortOrder.SENT -> messageDao.newerCountInThreadBySent(threadId, messageId)
+        }
+
+    override suspend fun bodiesInOrder(ids: List<Long>): List<String> = SqliteChunker.chunk(ids).flatMap { messageDao.bodiesFor(it) }
+
+    override suspend fun lastSubscriptionIdInThread(threadId: Long): Int? = messageDao.lastSubscriptionIdInThread(threadId)
+
+    override suspend fun distinctSubscriptionIds(): List<Int> = messageDao.distinctSubscriptionIds()
+
+    override fun observeUnreadCounts(): Flow<List<CategoryUnreadCount>> = messageDao.observeUnreadCounts()
+
+    override fun search(query: String): Flow<List<MessageEntity>> =
+        when (val match = SearchQueryFormat.toFtsMatch(query)) {
+            null -> flowOf(emptyList())
+            else -> messageDao.search(match)
+        }
+
+    override fun pagedSearch(
+        query: String,
+        category: Category?,
+        cutoffMs: Long?,
+    ): PagingSource<Int, MessageEntity> =
+        when (val match = SearchQueryFormat.toFtsMatch(query)) {
+            null -> EmptyPagingSource()
+            else -> messageDao.pagingSearch(match, category, cutoffMs)
+        }
+
+    override fun pagedSearch(
+        query: String,
+        category: Category?,
+        cutoffMs: Long?,
+        senderAddresses: List<String>,
+    ): PagingSource<Int, MessageEntity> {
+        if (senderAddresses.isEmpty()) return pagedSearch(query, category, cutoffMs)
+        return when (val match = SearchQueryFormat.toFtsMatch(query)) {
+            // Addresses are resolved from the same tokens the MATCH is built
+            // from, so a tokenless query never carries addresses in practice.
+            null -> EmptyPagingSource()
+
+            else -> messageDao.pagingSearchWithSenders(match, senderAddresses, category, cutoffMs)
+        }
+    }
+
+    override suspend fun distinctSenders(): List<String> = messageDao.distinctSenders()
+
+    override fun observeArchived(): Flow<List<MessageEntity>> = messageDao.observeArchived()
+
+    override suspend fun archivedThreadIds(): List<Long> = messageDao.archivedThreadIds()
+
+    override suspend fun markRead(
+        messageId: Long,
+        read: Boolean,
+    ) {
+        messageDao.markRead(messageId, read)
+        syncReadToProvider(messageDao.systemSmsIdsFor(listOf(messageId)), read)
+        if (read) cancelNotificationsForRead(listOf(messageId))
+    }
+
+    override suspend fun delete(messageId: Long) = deleteMessages(listOf(messageId))
+
+    override suspend fun deleteMessages(ids: List<Long>) {
+        if (ids.isEmpty()) return
+        val chunks = SqliteChunker.chunk(ids)
+        // Collect provider ids and delete our rows atomically; the provider
+        // sync happens after commit - losing our copy but keeping the
+        // provider row (crash in between) self-heals via the unique
+        // systemSmsId re-import, the reverse would not.
+        val (systemIds, threadIds) =
+            database.withTransaction {
+                val collectedSystem = chunks.flatMap { messageDao.systemSmsIdsFor(it) }
+                val collectedThreads = chunks.flatMap { messageDao.threadIdsFor(it) }.distinct()
+                chunks.forEach { attachmentDao.deleteForMessages(it) }
+                chunks.forEach { messageDao.deleteByIds(it) }
+                collectedSystem to collectedThreads
+            }
+        deleteFromProvider(systemIds)
+        deleteAttachmentFiles(ids)
+        // A deleted message is no longer "new": its OTP / transaction / scam
+        // notifications go with it (this is what makes the OTP auto-delete
+        // path clear its notification too).
+        readNotificationCanceler?.cancelFor(ids)
+        cancelFullyReadThreadNotifications(threadIds)
+    }
+
+    override suspend fun deleteThreads(threadIds: List<Long>) {
+        if (threadIds.isEmpty()) return
+        val chunks = SqliteChunker.chunk(threadIds)
+        val (systemIds, unreadIds) =
+            database.withTransaction {
+                val collectedSystem = chunks.flatMap { messageDao.systemSmsIdsForThreads(it) }
+                // Only unread messages can still own per-message notifications
+                // (read transitions cancel them), so collect just those before
+                // the rows disappear.
+                val collectedUnread = chunks.flatMap { messageDao.unreadMessageIdsInThreads(it) }
+                chunks.forEach { messageDao.deleteByThreadIds(it) }
+                collectedSystem to collectedUnread
+            }
+        deleteFromProvider(systemIds)
+        readNotificationCanceler?.cancelFor(unreadIds)
+        readNotificationCanceler?.cancelThreads(threadIds)
+    }
+
+    /**
+     * Clears `systemSmsId` on stored rows that claim a provider id one of
+     * [page]'s messages now owns but are NOT that message (provider ids are
+     * reusable - see [app.clearsms.data.db.isSameMessageAs]).
+     */
+    private suspend fun releaseReusedSystemIds(page: List<ImportedSmsRow>) {
+        val ids = page.map { it.systemSmsId }
+        if (ids.isEmpty()) return
+        val byId = page.associateBy { it.systemSmsId }
+        SqliteChunker.chunk(ids).forEach { chunk ->
+            messageDao.bySystemSmsIds(chunk).forEach { stored ->
+                val incoming = byId[stored.systemSmsId] ?: return@forEach
+                if (!stored.isSameMessageAs(incoming.body, incoming.timestampMs)) {
+                    messageDao.clearSystemSmsId(stored.id)
+                }
+            }
+        }
+    }
+
+    /** Forwards provider ids to the platform deleter in bounded chunks. */
+    private fun deleteFromProvider(systemIds: List<Long>) {
+        val deleter = systemSmsDeleter ?: return
+        SqliteChunker.chunk(systemIds).forEach { deleter.deleteBySystemIds(it) }
+    }
+
+    // region undoable delete / recycle bin
+
+    override suspend fun stageDeleteMessages(ids: List<Long>): List<Long> {
+        if (ids.isEmpty()) return emptyList()
+        val chunks = SqliteChunker.chunk(ids)
+        val now = System.currentTimeMillis()
+        // Soft-delete atomically; the rows keep their systemSmsId so the
+        // deferred provider deletion (and an undo) need no bookkeeping
+        // beyond the flags themselves.
+        val (staged, threadIds) =
+            database.withTransaction {
+                val live = chunks.flatMap { messageDao.liveIds(it) }
+                val threads = chunks.flatMap { messageDao.threadIdsFor(it) }.distinct()
+                SqliteChunker.chunk(live).forEach { messageDao.stageDelete(it, now) }
+                live to threads
+            }
+        // Deleted messages are no longer "new": exactly the cancellation the
+        // hard-delete path performs. Undo never re-posts notifications.
+        readNotificationCanceler?.cancelFor(staged)
+        cancelFullyReadThreadNotifications(threadIds)
+        return staged
+    }
+
+    override suspend fun stageDeleteThreads(threadIds: List<Long>): List<Long> {
+        if (threadIds.isEmpty()) return emptyList()
+        val ids = SqliteChunker.chunk(threadIds).flatMap { messageDao.liveIdsInThreads(it) }
+        val staged = stageDeleteMessages(ids)
+        readNotificationCanceler?.cancelThreads(threadIds)
+        return staged
+    }
+
+    override suspend fun undoStagedDelete(ids: List<Long>) {
+        if (ids.isEmpty()) return
+        database.withTransaction {
+            SqliteChunker.chunk(ids).forEach { messageDao.undoDelete(it) }
+        }
+    }
+
+    override suspend fun commitStagedDelete(
+        ids: List<Long>,
+        toBin: Boolean,
+    ) {
+        if (ids.isEmpty()) return
+        val chunks = SqliteChunker.chunk(ids)
+        // Provider first: a crash after the provider deletion but before the
+        // flag/row write leaves providerDeletePending set, and the next
+        // launch re-issues a delete for already-gone provider ids - a no-op.
+        // The reverse order could resurrect the message in other SMS apps.
+        val systemIds = chunks.flatMap { messageDao.pendingSystemIdsFor(it) }
+        deleteFromProvider(systemIds)
+        database.withTransaction {
+            if (toBin) {
+                // The provider copy is gone; releasing the row's claim on that
+                // (reusable) provider id keeps a future message that reuses it
+                // from being mistaken for this one.
+                chunks.forEach { messageDao.clearProviderPendingAndSystemId(it) }
+            } else {
+                chunks.forEach { attachmentDao.deleteForMessages(it) }
+                chunks.forEach { messageDao.deleteByIds(it) }
+            }
+        }
+        if (!toBin) deleteAttachmentFiles(ids)
+    }
+
+    override suspend fun commitAllPendingDeletes(toBin: Boolean) {
+        commitStagedDelete(messageDao.pendingCommitIds(), toBin)
+    }
+
+    override fun observeBin(): Flow<List<MessageEntity>> = messageDao.observeBin()
+
+    override suspend fun binMessageIds(): List<Long> = messageDao.binIds()
+
+    override suspend fun restoreFromBin(ids: List<Long>): BinRestoreResult {
+        if (ids.isEmpty()) return BinRestoreResult(restored = 0, reinserted = 0)
+        val rows = SqliteChunker.chunk(ids).flatMap { messageDao.getByIds(it) }.filter { it.deletedAt != null }
+        var reinserted = 0
+        for (row in rows) {
+            // The pre-deletion provider row is gone (deleted at commit), so
+            // a restore writes a FRESH provider row; on failure the message
+            // still comes back in-app, just without a provider mapping.
+            val newSystemId =
+                if (row.isOutgoing) {
+                    systemSmsReinserter?.reinsertSent(row.sender, row.body, row.timestamp)
+                } else {
+                    systemSmsReinserter?.reinsertInbox(row.sender, row.body, row.timestamp, row.isRead)
+                }
+            if (newSystemId != null) reinserted++
+            messageDao.restoreRow(row.id, newSystemId)
+        }
+        return BinRestoreResult(restored = rows.size, reinserted = reinserted)
+    }
+
+    override suspend fun deleteForever(ids: List<Long>) = deleteMessages(ids)
+
+    override suspend fun purgeExpiredBin(cutoffMs: Long): Int {
+        val expired = messageDao.expiredBinIds(cutoffMs)
+        deleteMessages(expired)
+        return expired.size
+    }
+
+    // endregion
+
+    override suspend fun countOtpOlderThan(cutoffMs: Long): Int = messageDao.countOlderThan(Category.OTP, cutoffMs)
+
+    override suspend fun deleteOtpOlderThan(cutoffMs: Long): Int {
+        // Eligibility is category == OTP, nothing else: extractedOtp alone
+        // does not qualify a message (an IMPORTANT bank alert carrying a code
+        // must survive). Deletion reuses deleteMessages - the one batched
+        // transaction + provider-sync path - rather than a second mechanism.
+        val ids = messageDao.idsOlderThan(Category.OTP, cutoffMs)
+        deleteMessages(ids)
+        return ids.size
+    }
+
+    override suspend fun setReadForMessages(
+        ids: List<Long>,
+        read: Boolean,
+    ) {
+        if (ids.isEmpty()) return
+        val chunks = SqliteChunker.chunk(ids)
+        val systemIds =
+            database.withTransaction {
+                val collected = chunks.flatMap { messageDao.systemSmsIdsFor(it) }
+                chunks.forEach { messageDao.setReadForIds(it, read) }
+                collected
+            }
+        syncReadToProvider(systemIds, read)
+        if (read) cancelNotificationsForRead(ids)
+    }
+
+    override suspend fun setReadForThreads(
+        threadIds: List<Long>,
+        read: Boolean,
+    ) {
+        if (threadIds.isEmpty()) return
+        val chunks = SqliteChunker.chunk(threadIds)
+        val (systemIds, unreadIds) =
+            database.withTransaction {
+                val collectedSystem = chunks.flatMap { messageDao.systemSmsIdsForThreads(it) }
+                // Captured BEFORE the update: only the previously unread
+                // messages may still own per-message notifications, and after
+                // the write the distinction is gone.
+                val collectedUnread =
+                    if (read) chunks.flatMap { messageDao.unreadMessageIdsInThreads(it) } else emptyList()
+                chunks.forEach { messageDao.setReadForThreads(it, read) }
+                collectedSystem to collectedUnread
+            }
+        syncReadToProvider(systemIds, read)
+        if (read) {
+            readNotificationCanceler?.cancelFor(unreadIds)
+            // The whole thread is read by definition of this operation.
+            readNotificationCanceler?.cancelThreads(threadIds)
+        }
+    }
+
+    /**
+     * Cancels the notifications belonging to messages that just became read:
+     * their per-message notifications unconditionally, and each owning
+     * thread's message notification only once the thread has NO unread
+     * messages left (a partially read thread keeps its notification).
+     */
+    private suspend fun cancelNotificationsForRead(messageIds: List<Long>) {
+        val canceler = readNotificationCanceler ?: return
+        canceler.cancelFor(messageIds)
+        val threadIds = SqliteChunker.chunk(messageIds).flatMap { messageDao.threadIdsFor(it) }.distinct()
+        cancelFullyReadThreadNotifications(threadIds)
+    }
+
+    /** Cancels thread message notifications for the subset of [threadIds] with zero unread messages. */
+    private suspend fun cancelFullyReadThreadNotifications(threadIds: List<Long>) {
+        val canceler = readNotificationCanceler ?: return
+        if (threadIds.isEmpty()) return
+        val withUnread =
+            SqliteChunker.chunk(threadIds).flatMap { messageDao.threadIdsWithUnread(it) }.toSet()
+        val fullyRead = threadIds.filterNot { it in withUnread }
+        if (fullyRead.isNotEmpty()) canceler.cancelThreads(fullyRead)
+    }
+
+    /**
+     * Mirrors a read-state change into the system SMS provider so it survives
+     * re-import / reinstall and stays consistent with other SMS apps. No-ops
+     * off the default app (the writer guards that) or when nothing mapped to a
+     * provider row.
+     */
+    private fun syncReadToProvider(
+        systemIds: List<Long>,
+        read: Boolean,
+    ) {
+        val writer = systemSmsReadWriter ?: return
+        if (systemIds.isEmpty()) return
+        SqliteChunker.chunk(systemIds).forEach { writer.setReadBySystemIds(it, read) }
+    }
+
+    override suspend fun archiveThreads(
+        threadIds: List<Long>,
+        archived: Boolean,
+    ) {
+        if (threadIds.isEmpty()) return
+        database.withTransaction {
+            SqliteChunker.chunk(threadIds).forEach { messageDao.setArchivedForThreads(it, archived) }
+        }
+    }
+
+    override suspend fun unreadCountInThreads(threadIds: List<Long>): Int =
+        SqliteChunker.chunk(threadIds).sumOf { messageDao.unreadCountInThreads(it) }
+
+    override suspend fun archive(
+        messageId: Long,
+        archived: Boolean,
+    ) = messageDao.setArchived(messageId, archived)
+
+    override suspend fun insertIncoming(
+        sender: String,
+        body: String,
+        timestampMs: Long,
+        systemSmsId: Long?,
+    ): MessageEntity = ingestIncoming(sender, body, timestampMs, systemSmsId).entity
+
+    override suspend fun ingestIncoming(
+        sender: String,
+        body: String,
+        timestampMs: Long,
+        systemSmsId: Long?,
+        dateSentMs: Long?,
+        providerThreadId: Long?,
+    ): MessageRepository.IncomingIngest {
+        val normalized = SenderNormalizer.normalize(sender)
+        // 0/negative from a PDU or provider means "not reported" - unknown.
+        val dateSent = sentTimestampOrNull(dateSentMs)
+        // Blocked keywords and blocked senders are checked FIRST: a matching
+        // message must never reach the inbox, notifications, or the finance
+        // derivations below - it is born soft-deleted (bin on) or dropped
+        // (bin off).
+        val senderBlocked = isSenderBlocked(sender)
+        if (senderBlocked || BlockedKeywords.matches(body, blockedKeywords())) {
+            return ingestBornDeleted(
+                sender,
+                body,
+                timestampMs,
+                systemSmsId,
+                blockedSender = senderBlocked,
+                dateSent = dateSent,
+                providerThreadId = providerThreadId,
+            )
+        }
+        // Classification is pure CPU plus rule reads; only the writes below
+        // need atomicity.
+        val enriched = classify(rulesSnapshot(), sender, body, timestampMs)
+        // The decision a rule-misclassification report needs: which rule
+        // fired and what it produced. Sender only (phone-shaped ones are
+        // dropped by the logger); never the body or the extracted values.
+        Diag.d(
+            "Categorizer",
+            "classified",
+            DiagField.sender(sender),
+            DiagField.ruleId(enriched.result.matchedRuleId),
+            DiagField.label("category", enriched.result.category),
+            DiagField.label("sub", enriched.result.subCategory),
+        )
+        // Message + derived transaction/account/reminder rows commit together:
+        // a failure mid-derivation must never leave a message without its
+        // finance rows (or vice versa). Retrying the delivery then re-runs the
+        // whole unit; the import path gets the same guarantee from
+        // persistImportedPage, whose unique systemSmsId index makes retries
+        // no-ops.
+        return database.withTransaction {
+            val threadId = ThreadIdentity.resolve(messageDao, sender, normalized, providerThreadId)
+
+            val entity =
+                MessageEntity(
+                    threadId = threadId,
+                    sender = sender,
+                    normalizedSender = normalized,
+                    body = body,
+                    timestamp = timestampMs,
+                    systemSmsId = systemSmsId,
+                    category = enriched.result.category,
+                    subCategory = enriched.result.subCategory,
+                    extractedOtp = enriched.otpCode,
+                    extractedDataJson = encodeExtracted(enriched.extracted),
+                    dateSent = dateSent,
+                    providerThreadId = ThreadIdentity.anchorFor(sender, providerThreadId),
+                )
+            // IGNORE (not REPLACE) on the unique systemSmsId index: a
+            // concurrent catch-up import may have committed this provider row
+            // first. Replacing would delete the import's row (new id, lost
+            // read-state, orphaned derived rows); instead the existing row is
+            // returned marked duplicate, and the import path - which by
+            // definition sees this just-arrived row as post-watermark -
+            // carries the notification.
+            val id = messageDao.insertIgnore(entity)
+            if (id == -1L && systemSmsId != null) {
+                val existing = messageDao.bySystemSmsId(systemSmsId)
+                if (existing != null && existing.isSameMessageAs(body, timestampMs)) {
+                    return@withTransaction MessageRepository.IncomingIngest(existing, duplicate = true)
+                }
+                // Same provider id, DIFFERENT message: the provider reused a
+                // freed id (its `_id` is a plain INTEGER PRIMARY KEY). The old
+                // row's provider copy is long gone, so it releases the id
+                // rather than swallowing this message.
+                existing?.let { messageDao.clearSystemSmsId(it.id) }
+            }
+            // A -1 without a surviving row cannot happen inside this write
+            // transaction (nulls are exempt from the unique index), but a
+            // plain insert guarantees the message is never dropped either way.
+            val rowId = if (id == -1L) messageDao.insert(entity) else id
+            persistDerived(rowId, timestampMs, enriched)
+            ingestionFailpointForTest?.invoke()
+            MessageRepository.IncomingIngest(entity.copy(id = rowId), duplicate = false)
+        }
+    }
+
+    // region MMS
+
+    override suspend fun insertMmsNotification(
+        sender: String,
+        timestampMs: Long,
+        transactionId: String,
+        contentLocation: String,
+        subscriptionId: Int?,
+    ): MessageEntity {
+        // No body exists yet, so no categorization/extraction/keyword pass
+        // runs here - the downloaded content goes through the full pipeline
+        // in [completeMmsDownload]. The pending row only reserves the
+        // message's place in its thread.
+        val normalized = SenderNormalizer.normalize(sender)
+        return database.withTransaction {
+            // MMS is never mirrored to the provider (see MmsSender), so no
+            // provider thread exists: the sender key alone decides.
+            val threadId = ThreadIdentity.resolve(messageDao, sender, normalized, providerThreadId = null)
+            val entity =
+                MessageEntity(
+                    threadId = threadId,
+                    sender = sender,
+                    normalizedSender = normalized,
+                    body = "",
+                    timestamp = timestampMs,
+                    category = Category.UNKNOWN,
+                    isBlockedSender = isSenderBlocked(sender),
+                    mmsStatus = MmsStatus.PENDING,
+                    mmsTransactionId = transactionId,
+                    mmsContentLocation = contentLocation,
+                    // The SIM the notification arrived on: the retry path
+                    // re-downloads on it, and the SIM tag shows in the thread.
+                    subscriptionId = subscriptionId,
+                )
+            entity.copy(id = messageDao.insert(entity))
+        }
+    }
+
+    override suspend fun completeMmsDownload(
+        messageId: Long,
+        sender: String?,
+        body: String,
+        recipients: List<String>,
+        attachments: List<MmsAttachmentDraft>,
+    ): MessageEntity? {
+        val existing = messageDao.getById(messageId) ?: return null
+        // Group MMS attribution: the row belongs to the SENDER. The
+        // notification usually carried it already; when it used the
+        // insert-address token the retrieve-conf From re-attributes the row
+        // (and its thread) here. Recipients are stored for a future group
+        // UI - there is no group-thread UI this wave.
+        val effectiveSender = sender?.takeIf { it.isNotBlank() && existing.sender.isBlank() } ?: existing.sender
+        val enriched = classify(rulesSnapshot(), effectiveSender, body, existing.timestamp)
+        val normalized = SenderNormalizer.normalize(effectiveSender)
+        // A blocked sender's MMS is born soft-deleted like a blocked SMS:
+        // it completes (so the download machinery finishes cleanly), then
+        // rests in the bin - or, with the bin off, is removed outright
+        // below. Attachment rows are still written so a bin restore keeps
+        // its image. Unlike SMS there is no provider-copy delete here:
+        // keyword/sender blocking never touched the MMS provider.
+        val blocked = isSenderBlocked(effectiveSender)
+        val completed =
+            database.withTransaction {
+                val row = messageDao.getById(messageId) ?: return@withTransaction null
+                // A group MMS (several recipients) is attributed to its
+                // sender's one-to-one thread and anchors nothing - the app
+                // has no group threads, and a group must never absorb one.
+                val threadId =
+                    if (normalized == row.normalizedSender) {
+                        row.threadId
+                    } else {
+                        ThreadIdentity.resolve(
+                            messageDao,
+                            effectiveSender,
+                            normalized,
+                            providerThreadId = null,
+                            recipientCount = recipients.size,
+                        )
+                    }
+                val updated =
+                    row.copy(
+                        sender = effectiveSender,
+                        normalizedSender = normalized,
+                        threadId = threadId,
+                        body = body,
+                        isRead = if (blocked) true else row.isRead,
+                        category = enriched.result.category,
+                        subCategory = enriched.result.subCategory,
+                        extractedOtp = enriched.otpCode,
+                        extractedDataJson = encodeExtracted(enriched.extracted),
+                        isBlockedSender = blocked,
+                        deletedAt = if (blocked) row.timestamp else row.deletedAt,
+                        mmsStatus = MmsStatus.DOWNLOADED,
+                        mmsRecipients = encodeRecipients(recipients),
+                        attachmentKinds = attachmentKinds(attachments),
+                    )
+                messageDao.update(updated)
+                if (attachments.isNotEmpty()) {
+                    attachmentDao.insertAll(
+                        attachments.map {
+                            AttachmentEntity(
+                                messageId = messageId,
+                                mimeType = it.mimeType,
+                                fileName = it.fileName,
+                                sizeBytes = it.sizeBytes,
+                            )
+                        },
+                    )
+                }
+                // Blocked messages derive NOTHING - same as keyword blocking.
+                if (!blocked) persistDerived(messageId, row.timestamp, enriched)
+                updated
+            }
+        if (completed != null && blocked && !recycleBinEnabled()) {
+            // Bin off: dropped outright, mirroring the SMS path.
+            deleteMessages(listOf(completed.id))
+            return null
+        }
+        return completed
+    }
+
+    override suspend fun markMmsFailed(messageId: Long) = messageDao.setMmsStatus(messageId, MmsStatus.FAILED)
+
+    override suspend fun insertImportedMms(
+        systemMmsId: Long,
+        address: String,
+        isOutgoing: Boolean,
+        body: String,
+        timestampMs: Long,
+        dateSentMs: Long?,
+        isRead: Boolean,
+        providerThreadId: Long?,
+        subscriptionId: Int?,
+        recipients: List<String>,
+        attachments: List<MmsAttachmentDraft>,
+    ): MessageEntity? {
+        // Only a received message is classified: the user's own words are
+        // PERSONAL by definition, never a promotion or a transaction - the
+        // same rule the SMS import applies to sent SMS.
+        val enriched = if (isOutgoing) null else classify(rulesSnapshot(), address, body, timestampMs)
+        val normalized = SenderNormalizer.normalize(address)
+        // Imported history is never notified (the import runs over messages
+        // the user has already seen elsewhere), so unlike the live path
+        // there is no routing step here. A blocked party's MMS is still
+        // born soft-deleted, exactly as the live path does it, so importing
+        // history cannot resurrect a conversation the user blocked - a sent
+        // row included, since blocking bins the whole conversation.
+        val blocked = isSenderBlocked(address)
+        val stored =
+            database.withTransaction {
+                // A group MMS is attributed to one party (its sender, or for
+                // a sent row its first recipient) and must never anchor a
+                // thread, same rule as completeMmsDownload.
+                val threadId =
+                    ThreadIdentity.resolve(
+                        messageDao,
+                        address,
+                        normalized,
+                        providerThreadId = providerThreadId,
+                        recipientCount = recipients.size,
+                    )
+                val entity =
+                    MessageEntity(
+                        threadId = threadId,
+                        sender = address,
+                        normalizedSender = normalized,
+                        body = body,
+                        timestamp = timestampMs,
+                        // A sent row's send time IS its date; the sender
+                        // timestamp only means something on a received row.
+                        dateSent = if (isOutgoing) null else dateSentMs,
+                        isRead = if (blocked || isOutgoing) true else isRead,
+                        category = enriched?.result?.category ?: Category.PERSONAL,
+                        subCategory = enriched?.result?.subCategory,
+                        extractedOtp = enriched?.otpCode,
+                        extractedDataJson = enriched?.let { encodeExtracted(it.extracted) },
+                        isBlockedSender = blocked,
+                        deletedAt = if (blocked) timestampMs else null,
+                        systemMmsId = systemMmsId,
+                        isOutgoing = isOutgoing,
+                        // Another app sent it and the provider keeps no MMS
+                        // delivery report, so SENT is all that is known:
+                        // never DELIVERED on a guess, never SENDING (the box
+                        // says the send completed).
+                        deliveryStatus = if (isOutgoing) DeliveryStatus.SENT else null,
+                        subscriptionId = subscriptionId,
+                        providerThreadId = providerThreadId,
+                        // The provider already holds the content: the row is
+                        // complete on arrival, never PENDING. No transaction
+                        // id or content location exists to retry with, and
+                        // none is invented. Set on a sent row too, so the
+                        // details dialog can call a text-only sent MMS what
+                        // it is.
+                        mmsStatus = MmsStatus.DOWNLOADED,
+                        mmsRecipients = encodeRecipients(recipients),
+                        attachmentKinds = attachmentKinds(attachments),
+                    )
+                // IGNORE on conflict: a re-run of the same page hits the
+                // unique systemMmsId index and returns -1, which is the
+                // signal that this message is already stored.
+                val id = messageDao.insertIgnore(entity)
+                if (id <= 0L) return@withTransaction null
+                if (attachments.isNotEmpty()) {
+                    attachmentDao.insertAll(
+                        attachments.map {
+                            AttachmentEntity(
+                                messageId = id,
+                                mimeType = it.mimeType,
+                                fileName = it.fileName,
+                                sizeBytes = it.sizeBytes,
+                            )
+                        },
+                    )
+                }
+                val row = entity.copy(id = id)
+                if (!blocked && enriched != null) persistDerived(id, timestampMs, enriched)
+                row
+            }
+        if (stored != null && blocked && !recycleBinEnabled()) {
+            deleteMessages(listOf(stored.id))
+            return null
+        }
+        return stored
+    }
+
+    override suspend fun markMmsPendingForRetry(messageId: Long): MessageEntity? {
+        val row = messageDao.getById(messageId) ?: return null
+        if (row.mmsStatus != MmsStatus.FAILED || row.mmsContentLocation.isNullOrBlank()) return null
+        messageDao.setMmsStatus(messageId, MmsStatus.PENDING)
+        return row.copy(mmsStatus = MmsStatus.PENDING)
+    }
+
+    private fun encodeRecipients(recipients: List<String>): String? =
+        recipients
+            .takeIf { it.isNotEmpty() }
+            ?.let { json.encodeToString(ListSerializer(String.serializer()), it) }
+
+    /** "IMAGE", "FILE" or "IMAGE,FILE" - see [MessageEntity.attachmentKinds]. */
+    private fun attachmentKinds(attachments: List<MmsAttachmentDraft>): String? {
+        if (attachments.isEmpty()) return null
+        val kinds = mutableListOf<String>()
+        if (attachments.any { it.mimeType.startsWith("image/") }) kinds += "IMAGE"
+        if (attachments.any { !it.mimeType.startsWith("image/") }) kinds += "FILE"
+        return kinds.joinToString(",")
+    }
+
+    // endregion
+
+    /**
+     * Ingests a blocked (keyword- or sender-blocked) incoming message
+     * following the app's delete semantics: with the recycle bin ON the row
+     * is born soft-deleted (deletedAt set at ingest) and rests in the bin;
+     * with the bin OFF no row is written at all. Either way the
+     * system-provider copy is removed (like a committed delete), NO derived
+     * rows are produced - no transactions, accounts or reminders - and the
+     * returned entity carries a non-null deletedAt so
+     * [app.clearsms.notification.IncomingMessageRouter] and the catch-up
+     * fresh filter stay silent about it. [blockedSender] additionally sets
+     * the row's derived `isBlockedSender` cache flag.
+     */
+    private suspend fun ingestBornDeleted(
+        sender: String,
+        body: String,
+        timestampMs: Long,
+        systemSmsId: Long?,
+        blockedSender: Boolean,
+        dateSent: Long? = null,
+        providerThreadId: Long? = null,
+    ): MessageRepository.IncomingIngest {
+        // Classification still runs (pure CPU) so a binned message shows an
+        // honest category if the user opens the bin - but nothing is derived.
+        val enriched = classify(rulesSnapshot(), sender, body, timestampMs)
+        val normalized = SenderNormalizer.normalize(sender)
+        val binned = recycleBinEnabled()
+        val entity =
+            MessageEntity(
+                threadId = 0L,
+                sender = sender,
+                normalizedSender = normalized,
+                body = body,
+                timestamp = timestampMs,
+                // Read: a binned message must never count as unread anywhere.
+                isRead = true,
+                systemSmsId = systemSmsId,
+                category = enriched.result.category,
+                subCategory = enriched.result.subCategory,
+                extractedOtp = enriched.otpCode,
+                extractedDataJson = encodeExtracted(enriched.extracted),
+                isBlockedSender = blockedSender,
+                deletedAt = timestampMs,
+                providerDeletePending = true,
+                dateSent = dateSent,
+                providerThreadId = ThreadIdentity.anchorFor(sender, providerThreadId),
+            )
+        if (!binned) {
+            // Dropped outright - exactly what a committed delete with the
+            // bin off does. The provider copy goes too.
+            deleteFromProvider(listOfNotNull(systemSmsId))
+            return MessageRepository.IncomingIngest(entity, duplicate = false)
+        }
+        val stored =
+            database.withTransaction {
+                val threadId = ThreadIdentity.resolve(messageDao, sender, normalized, providerThreadId)
+                val row = entity.copy(threadId = threadId)
+                val id = messageDao.insertIgnore(row)
+                if (id != -1L) {
+                    row.copy(id = id)
+                } else {
+                    // Provider-id reuse handling, as in ingestIncoming: only a
+                    // row carrying the SAME message is this message.
+                    val existing = systemSmsId?.let { messageDao.bySystemSmsId(it) }
+                    if (existing != null && existing.isSameMessageAs(body, timestampMs)) {
+                        existing
+                    } else {
+                        existing?.let { messageDao.clearSystemSmsId(it.id) }
+                        row.copy(id = messageDao.insert(row))
+                    }
+                }
+            }
+        // Same commit the undo-window delete performs: the provider row is
+        // deleted and the app row rests in the bin (pending flag cleared).
+        stored?.let { commitStagedDelete(listOf(it.id), toBin = true) }
+        return MessageRepository.IncomingIngest(stored ?: entity, duplicate = false)
+    }
+
+    override suspend fun recategorizeAll(
+        checkpoints: RecategorizeCheckpointStore?,
+        onProgress: suspend (processed: Int, total: Int) -> Unit,
+    ): Int {
+        // The rules snapshot is decoded ONCE (same optimization as the bulk
+        // import) - re-decoding per message made a full re-sort O(N×R).
+        val snapshot = rulesSnapshot()
+        val total = messageDao.count()
+        // Resume where a stopped run left off (see RecategorizeCheckpoint):
+        // the pages before the checkpoint are committed and consistent, so
+        // repeating them would only re-hold the writer for nothing.
+        val resume = checkpoints?.get()
+        var processed = resume?.processed ?: 0
+        var afterId = resume?.afterId ?: 0L
+        onProgress(processed, total)
+        // Classification (regex over the full rule set) dominates the cost
+        // and is pure CPU - run it OUTSIDE the write transaction with the
+        // same bounded parallelism the initial import uses. Serial in-
+        // transaction classification is why the settings re-sort used to be
+        // many times slower than the fresh-install import over the same
+        // corpus (~900us/msg serial on a desktop JVM; worse on phone cores).
+        val parallelism = Runtime.getRuntime().availableProcessors().coerceIn(2, 6)
+        val classifyDispatcher = Dispatchers.Default.limitedParallelism(parallelism)
+        // Account ids persistDerived touches anywhere in this run (carried
+        // across a resume) - the complement feeds the orphan sweep below.
+        val touchedAccounts = mutableSetOf<Long>()
+        resume?.let { touchedAccounts += it.touchedAccounts }
+        while (true) {
+            val page = messageDao.pageAfter(afterId, recategorizePageSize)
+            if (page.isEmpty()) break
+            val classified =
+                coroutineScope {
+                    page
+                        .map { message ->
+                            async(classifyDispatcher) {
+                                message to classify(snapshot, message.sender, message.body, message.timestamp)
+                            }
+                        }.awaitAll()
+                }
+            // One transaction per page (mirrors persistImportedPage): a page
+            // either fully commits or fully rolls back, so cancelling a
+            // running re-sort never leaves a message updated without its
+            // derived rows refreshed. The transaction now only writes.
+            refreshClassifiedPage(classified, touchedAccounts)
+            processed += page.size
+            afterId = page.last().id
+            // Checkpoint AFTER the commit, so a kill in between redoes at
+            // most this one page (idempotent: same rows, same rules).
+            checkpoints?.set(RecategorizeCheckpoint(afterId, processed, touchedAccounts.toSet()))
+            onProgress(processed, total)
+            // Pages are small on purpose (RECATEGORIZE_PAGE_SIZE) and the
+            // writer is released between them: SQLite has ONE writer, and a
+            // message being received or sent right now is queued behind
+            // whatever transaction this loop holds (issue #153). The yield
+            // is a cancellation point too, which is how a stopped worker
+            // leaves the loop between pages.
+            yield()
+        }
+        sweepOrphanedAccounts(touchedAccounts)
+        checkpoints?.clear()
+        return processed
+    }
+
+    /**
+     * Commits one page of re-classified messages: the row itself, then its
+     * derived reminder and transaction rows, refreshed so parser and rule
+     * fixes reach existing history. Shared by the full re-sort and the
+     * sender-scoped one so the two can never drift in what they preserve.
+     *
+     * One transaction per page (mirrors persistImportedPage): a page either
+     * fully commits or fully rolls back, so cancelling a running re-sort never
+     * leaves a message updated without its derived rows refreshed.
+     */
+    private suspend fun refreshClassifiedPage(
+        classified: List<Pair<MessageEntity, Enriched>>,
+        touchedAccounts: MutableSet<Long>,
+    ) {
+        database.withTransaction {
+            for ((message, enriched) in classified) {
+                messageDao.update(
+                    message.copy(
+                        category = enriched.result.category,
+                        subCategory = enriched.result.subCategory,
+                        extractedOtp = enriched.otpCode,
+                        extractedDataJson = encodeExtracted(enriched.extracted),
+                    ),
+                )
+                // User-entered data survives: the transaction note is carried
+                // onto the re-derived row, account rows (which hold user-set
+                // card limits) are upserted rather than deleted, and a
+                // reminder's dismissal flag is preserved - a re-sort must never
+                // resurrect a dismissed alert.
+                val previousDismissedAt = reminderDao.findByRawSmsId(message.id)?.dismissedAt
+                reminderDao.deleteByRawSmsId(message.id)
+                val previousNote = transactionDao.findByRawSmsId(message.id)?.note
+                transactionDao.deleteByRawSmsId(message.id)
+                persistDerived(
+                    message.id,
+                    message.timestamp,
+                    enriched,
+                    preservedNote = previousNote,
+                    preservedDismissedAt = previousDismissedAt,
+                    touchedAccounts = touchedAccounts,
+                )
+            }
+        }
+    }
+
+    /**
+     * Re-sorts only the messages a sender-bound rule can affect - the set whose
+     * sender contains [senderCore]. Adding a rule from a message is the common
+     * case (Change category), and re-sorting the whole inbox for one sender
+     * would be minutes of work for a handful of rows.
+     *
+     * No orphan-account sweep runs here, unlike the full re-sort: the sweep
+     * reasons about accounts NOT touched by the run, which for a single sender
+     * is almost every account in the database.
+     */
+    override suspend fun recategorizeSenderCore(senderCore: String): Int {
+        val core = senderCore.trim()
+        if (core.isEmpty()) return 0
+        val messages = messageDao.liveMessagesBySenderCore(core)
+        if (messages.isEmpty()) return 0
+        val snapshot = rulesSnapshot()
+        val touchedAccounts = mutableSetOf<Long>()
+        val classified =
+            messages.map { message ->
+                message to classify(snapshot, message.sender, message.body, message.timestamp)
+            }
+        refreshClassifiedPage(classified, touchedAccounts)
+        return messages.size
+    }
+
+    /**
+     * Deletes account rows the re-sort left behind: rules and parsers
+     * evolve, so a message that once derived a transaction may stop doing
+     * so - its account then lingers in Finance with zero transactions and
+     * nothing ever refreshing it. An account is an orphan when the
+     * just-finished full pass NEVER touched it ([touchedAccounts]) AND no
+     * transaction links to it.
+     *
+     * What survives, and why:
+     * - balance-statement-only accounts (an NPS valuation, a card that only
+     *   ever reports its limit): their statements re-derive a balance/limit
+     *   upsert during the pass, which counts as a touch;
+     * - any account still owning a transaction row (belt and braces - a
+     *   touched-set bug must never delete real money history).
+     *
+     * User-set card limits live on the account row, so they die with a
+     * genuinely unbacked account - correct: nothing re-derives that
+     * account, so there is no row for the limit to live on.
+     *
+     * Deliberately NOT run after imports: the initial import starts from an
+     * empty database (nothing to strand), and catch-up imports only ADD
+     * derived rows for new provider messages - they never delete an
+     * existing message's transactions, so they cannot strand an account.
+     * Only a full re-derivation (this re-sort) can, so only it sweeps.
+     */
+    private suspend fun sweepOrphanedAccounts(touchedAccounts: Set<Long>) {
+        database.withTransaction {
+            for (account in accountDao.getAll()) {
+                if (account.id in touchedAccounts) continue
+                if (transactionDao.countByAccountId(account.id, excludeId = 0L) > 0) continue
+                accountDao.deleteById(account.id)
+            }
+        }
+    }
+
+    override suspend fun setBlocked(
+        sender: String,
+        blocked: Boolean,
+    ) = messageDao.setBlockedSender(SenderNormalizer.normalize(sender), blocked)
+
+    override suspend fun binThreadForSender(sender: String) {
+        val threadId = messageDao.threadIdFor(SenderNormalizer.normalize(sender)) ?: return
+        // The same stage+commit pair a timed-out UI delete performs: bin on
+        // -> the thread rests in the bin (restorable); bin off -> dropped,
+        // provider copies removed either way.
+        val staged = stageDeleteThreads(listOf(threadId))
+        commitStagedDelete(staged, toBin = recycleBinEnabled())
+    }
+
+    override suspend fun legacyBlockedSenderFlags(): List<String> = messageDao.blockedSenderFlags()
+
+    // region bulk import
+
+    /**
+     * Newest stored message timestamp - the import's notification watermark.
+     * Null on an empty database (fresh install), which the importer treats
+     * as "everything is old history": the initial onboarding import must
+     * stay silent end-to-end.
+     */
+    internal suspend fun newestTimestamp(): Long? = messageDao.maxTimestamp()
+
+    /**
+     * The decoded rule set, cached across messages and keyed on
+     * [RulesRevision] (see there for the invalidation contract). Re-reading
+     * and hashing the bundled asset and decoding the ~470 enabled rows cost
+     * 15-35 ms per message on a desktop JVM - several times that on a phone
+     * - and the receive path paid it for every single message (issue #153).
+     *
+     * Freshness: [cachedRules] records the revision read BEFORE its rows
+     * were queried, so a write that lands during the rebuild leaves the
+     * cache stamped older than [RulesRevision.current] and the next call
+     * rebuilds again. A rule saved before this call therefore always decides
+     * this message; a rule saved concurrently decides the next one.
+     */
+    internal suspend fun rulesSnapshot(): RulesSnapshot {
+        bundledRuleLoader.ensureLoaded()
+        ensureRulesObserver()
+        val revision = bundledRuleLoader.rulesRevision
+        cachedRules?.takeIf { it.revision == revision.current }?.let { return it.snapshot }
+        return rulesCacheMutex.withLock {
+            cachedRules?.takeIf { it.revision == revision.current }?.let { return@withLock it.snapshot }
+            val seen = revision.current
+            val snapshot =
+                RulesSnapshot(
+                    userRules = definitions(RuleSources.USER),
+                    builtinRules = definitions(RuleSources.BUILTIN) + definitions(RuleSources.COMMUNITY),
+                )
+            cachedRules = CachedRules(seen, snapshot)
+            snapshot
+        }
+    }
+
+    private class CachedRules(
+        val revision: Long,
+        val snapshot: RulesSnapshot,
+    )
+
+    @Volatile
+    private var cachedRules: CachedRules? = null
+    private val rulesCacheMutex = Mutex()
+    private val rulesObserverRegistered = AtomicBoolean(false)
+
+    /**
+     * The safety net behind the explicit [RulesRevision] bumps: any commit
+     * touching the `rules` table - whoever made it - bumps the revision once
+     * Room's tracker notices it. Registered lazily on the first snapshot so
+     * tests that never classify pay nothing.
+     */
+    private fun ensureRulesObserver() {
+        if (!rulesObserverRegistered.compareAndSet(false, true)) return
+        database.invalidationTracker.addObserver(
+            object : InvalidationTracker.Observer(RULES_TABLE) {
+                override fun onInvalidated(tables: Set<String>) {
+                    bundledRuleLoader.rulesRevision.bump()
+                }
+            },
+        )
+    }
+
+    /**
+     * Pure CPU classification against a pre-decoded [snapshot]; performs no
+     * database writes, so it is safe to run concurrently across a page.
+     */
+    internal fun classify(
+        snapshot: RulesSnapshot,
+        sender: String,
+        body: String,
+        /**
+         * When the message was received - the anchor for yearless-date
+         * inference ("11Dec" in a flight itinerary refers to the near future
+         * relative to when the message was SENT, never to the clock at
+         * classification time).
+         */
+        timestampMs: Long,
+    ): Enriched = enrich(sender, body, snapshot.userRules, snapshot.builtinRules, timestampMs)
+
+    /**
+     * Persists one import page in a single transaction using batch inserts.
+     *
+     * Rows whose [ImportedSmsRow.systemSmsId] already exists are skipped by
+     * the unique index (IGNORE strategy), and their derived transaction /
+     * reminder rows are skipped with them - re-processing a page can never
+     * duplicate messages or double finance totals. Skipping also covers a
+     * live delivery that beat this import to the row: the receiver already
+     * notified it, so the importer must not count it as fresh.
+     *
+     * @return the messages actually inserted, with their Room ids.
+     */
+    internal suspend fun persistImportedPage(page: List<ImportedSmsRow>): List<MessageEntity> {
+        if (page.isEmpty()) return emptyList()
+        // Keyword- and sender-blocked rows follow the same delete semantics
+        // as the live path: bin ON -> inserted born-deleted (resting in the
+        // bin, no derived rows); bin OFF -> not inserted at all. Their
+        // provider copies are removed after the page commits. The blocklist
+        // set is read (and normalized) ONCE per page.
+        val keywords = blockedKeywords()
+        val blockedEntries = blockedSenders()
+        val isBlocked = SenderNormalizer.matcher(blockedEntries)
+        val binEnabled = if (keywords.isEmpty() && blockedEntries.isEmpty()) false else recycleBinEnabled()
+        val droppedSystemIds = mutableListOf<Long>()
+        val binnedIds = mutableListOf<Long>()
+        val inserted =
+            database.withTransaction {
+                var maxThreadId = messageDao.maxThreadId() ?: 0L
+                // Per-page identity caches: rows of one page are not visible
+                // to each other's lookups until the transaction commits, so a
+                // thread opened for one row must be reused by the next row of
+                // the same person - by provider thread AND by sender key.
+                val threadIds = HashMap<String, Long>()
+                val anchoredThreads = HashMap<Long, MutableList<ThreadAnchor>>()
+                val entities =
+                    page.map { row ->
+                        val normalized = SenderNormalizer.normalize(row.sender)
+                        val anchor = ThreadIdentity.anchorFor(row.sender, row.providerThreadId)
+                        val anchored =
+                            anchor?.let { a ->
+                                anchoredThreads.getOrPut(a) { messageDao.threadsAnchoredTo(a).toMutableList() }
+                            }
+                        val threadId =
+                            anchored?.let { ThreadIdentity.threadFromAnchor(normalized, it) }
+                                ?: threadIds.getOrPut(normalized) {
+                                    messageDao.threadIdFor(normalized) ?: ++maxThreadId
+                                }
+                        if (anchored != null && anchored.none { it.threadId == threadId && it.normalizedSender == normalized }) {
+                            anchored += ThreadAnchor(threadId, normalized)
+                        }
+                        // Applies to outgoing rows too: blocking bins the
+                        // WHOLE conversation, so an import must not leave a
+                        // ghost thread of only your own sent messages.
+                        val senderBlocked = isBlocked(row.sender)
+                        val enriched = row.enriched
+                        if (enriched != null) {
+                            val born = senderBlocked || BlockedKeywords.matches(row.body, keywords)
+                            MessageEntity(
+                                threadId = threadId,
+                                sender = row.sender,
+                                normalizedSender = normalized,
+                                body = row.body,
+                                timestamp = row.timestampMs,
+                                isRead = if (born) true else row.isRead,
+                                category = enriched.result.category,
+                                subCategory = enriched.result.subCategory,
+                                extractedOtp = enriched.otpCode,
+                                extractedDataJson = encodeExtracted(enriched.extracted),
+                                isBlockedSender = senderBlocked,
+                                systemSmsId = row.systemSmsId,
+                                deletedAt = if (born) row.timestampMs else null,
+                                providerDeletePending = born,
+                                subscriptionId = row.subscriptionId,
+                                dateSent = row.dateSentMs,
+                                providerThreadId = anchor,
+                            )
+                        } else {
+                            // Outgoing (sent) message: stored as a read personal
+                            // message, right-aligned via the persisted direction.
+                            MessageEntity(
+                                threadId = threadId,
+                                sender = row.sender,
+                                normalizedSender = normalized,
+                                body = row.body,
+                                timestamp = row.timestampMs,
+                                isRead = true,
+                                category = Category.PERSONAL,
+                                isBlockedSender = senderBlocked,
+                                systemSmsId = row.systemSmsId,
+                                isOutgoing = true,
+                                deletedAt = if (senderBlocked) row.timestampMs else null,
+                                providerDeletePending = senderBlocked,
+                                deliveryStatus =
+                                    if (row.delivered) DeliveryStatus.DELIVERED else DeliveryStatus.SENT,
+                                subscriptionId = row.subscriptionId,
+                                providerThreadId = anchor,
+                            )
+                        }
+                    }
+                // Release stale claims on REUSED provider ids before inserting:
+                // a row whose provider copy was deleted may still hold an id
+                // the provider has since handed to one of these messages, and
+                // insertAllIgnore would silently skip the newcomer (a
+                // permanently missing message in a catch-up import).
+                releaseReusedSystemIds(page)
+                val toInsert =
+                    entities.map { entity ->
+                        if (entity.deletedAt != null && !binEnabled) {
+                            // Bin off: the row is dropped, never inserted.
+                            entity.systemSmsId?.let { droppedSystemIds += it }
+                            null
+                        } else {
+                            entity
+                        }
+                    }
+                val ids = messageDao.insertAllIgnore(toInsert.filterNotNull())
+                val insertedList = ArrayList<MessageEntity>(entities.size)
+                var idIndex = 0
+                toInsert.forEachIndexed { index, entity ->
+                    if (entity == null) return@forEachIndexed
+                    val id = ids[idIndex++]
+                    if (id == -1L) return@forEachIndexed
+                    insertedList += entity.copy(id = id)
+                    if (entity.deletedAt != null) {
+                        // Keyword-binned: rests in the bin, derives NOTHING.
+                        binnedIds += id
+                        return@forEachIndexed
+                    }
+                    val row = page[index]
+                    row.enriched?.let { persistDerived(id, row.timestampMs, it) }
+                }
+                insertedList
+            }
+        // Provider copies of keyword-blocked rows are removed after the page
+        // commits - the same order the committed-delete path uses.
+        commitStagedDelete(binnedIds, toBin = true)
+        deleteFromProvider(droppedSystemIds)
+        return inserted
+    }
+
+    // endregion
+
+    // region pipeline
+
+    internal data class Enriched(
+        val result: CategorizationResult,
+        val extracted: Map<String, String>,
+        val otpCode: String?,
+        val transaction: ParsedTransaction?,
+        val reminder: ParsedReminder?,
+        /** Relative dates resolve against the message timestamp at persist time. */
+        val delivery: ParsedDelivery? = null,
+        /** Balance-only statement: refreshes the account, never a transaction. */
+        val balanceStatement: BalanceStatement? = null,
+        /** Issuer-confirmed TOTAL limit: refreshes the card, never a transaction. */
+        val totalLimit: TotalLimitStatement? = null,
+    )
+
+    /** Runs categorizer + parsers and merges rule extracts with parser output. */
+    private fun enrich(
+        sender: String,
+        body: String,
+        userRules: List<RuleDefinition>,
+        builtinRules: List<RuleDefinition>,
+        timestampMs: Long,
+    ): Enriched {
+        // All yearless-date inference below anchors on the MESSAGE date -
+        // the same rule DeliveryParser's "today"/"tomorrow" resolution
+        // already follows at persist time (see persistDerived).
+        val messageDate =
+            Instant
+                .ofEpochMilli(timestampMs)
+                .atZone(ZoneId.systemDefault())
+                .toLocalDate()
+        // Same evaluation-input cap as the categorizer (see
+        // MessageCategorizer.MAX_EVAL_BODY_LENGTH): the OTP/transaction/
+        // reminder parsers below are regex-driven too, so they must never see
+        // an unbounded body. Only evaluation is capped - the stored row keeps
+        // the full text.
+        val evalBody = body.take(MessageCategorizer.MAX_EVAL_BODY_LENGTH)
+        val result = categorizer.categorize(sender, body, userRules, builtinRules, messageDate)
+        val extracts = result.extracted
+
+        val otpCode =
+            extracts["otp_code"]
+                ?: if (result.category == Category.OTP) otpParser.parse(evalBody)?.code else null
+
+        val parsedTx = transactionParser.parse(sender, evalBody)
+        val transaction =
+            when {
+                // Statement/bill notices ("Statement is sent...", "Total of Rs X
+                // ... is due") describe money OWED - they must never become a
+                // transaction, whether from the parser or from rule extracts.
+                // They stay reminders (see the reminder path below).
+                transactionParser.isStatementNotice(evalBody) -> {
+                    null
+                }
+
+                // FAILED payments moved no money: no transaction, whether
+                // from the parser (already null there) or from rule extracts.
+                transactionParser.isFailedPayment(evalBody) -> {
+                    null
+                }
+
+                // Collect / payment requests and mandate lifecycle notices
+                // quote an amount that was only ASKED for - never a
+                // transaction, from the parser OR from rule extracts. The
+                // requested figure is carried under its own unsigned key
+                // below.
+                transactionParser.isPaymentRequestNotice(evalBody) -> {
+                    null
+                }
+
+                // Refund/payout lifecycle notices whose money has not landed
+                // ("refund ... initiated"; card credit-balance refunds whose
+                // money lands in a different bank account): never a
+                // transaction, from the parser (already null there) or from
+                // rule extracts - the receiving bank's own credit SMS
+                // records the money when it lands.
+                transactionParser.isPayoutInFlight(evalBody) -> {
+                    null
+                }
+
+                // Retirement units-credited echoes re-announce a
+                // contribution whose fund-confirmation SMS already recorded
+                // the credit: never a second transaction; the valuation
+                // they quote refreshes the account balance below instead.
+                transactionParser.isRetirementUnitsEcho(evalBody) -> {
+                    null
+                }
+
+                parsedTx != null -> {
+                    mergeTransaction(parsedTx, result.typed, result.subCategory)
+                }
+
+                result.subCategory in TRANSACTION_DERIVING_SUBCATEGORIES -> {
+                    transactionFromExtracts(extracts, result.typed, result.subCategory, sender, evalBody)
+                }
+
+                else -> {
+                    null
+                }
+            }
+
+        // Delivery expectations only come from messages the categorizer
+        // already recognized as deliveries - the parser is not allowed to
+        // introduce a fresh source of false positives.
+        val delivery =
+            if (result.subCategory == SubCategory.DELIVERY) {
+                deliveryParser.parse(sender, evalBody)
+            } else {
+                null
+            }
+
+        val parsedReminder = if (delivery == null) reminderParser.parse(sender, evalBody, messageDate) else null
+        val reminder =
+            when {
+                parsedReminder != null -> mergeReminder(parsedReminder, result.typed, extracts)
+
+                // A dated journey (train or flight): the rule extracts the
+                // journey date; the entry expires past it. One shared path
+                // for both travel modes - never a train-only mechanism.
+                result.subCategory == SubCategory.TRAVEL -> travelFromExtracts(extracts, result.typed)
+
+                result.subCategory == SubCategory.BILL -> reminderFromExtracts(sender, evalBody, extracts, result.typed)
+
+                else -> null
+                // A reminder without a due date is not actionable; this also
+                // keeps transaction confirmations (SubCategory.TRANSACTION)
+                // from doubling as reminders unless they genuinely carry a
+                // due date, e.g. a card statement. The one dateless shape
+                // allowed through is a "bill ... is generated" notice
+                // carrying its amount - the freshly issued bill IS the
+                // obligation (see ReminderParser.isGeneratedBillNotice).
+            }?.takeIf {
+                it.dueDate != null || (it.totalDue != null && reminderParser.isGeneratedBillNotice(evalBody))
+            }
+
+        // A balance statement reports STATE, not movement: derived only when
+        // no transaction exists (a debit quoting "Avl Bal" keeps its balance
+        // as a secondary transaction field instead). Rule extracts win; the
+        // parser's statement shapes are the fallback. Requiring a
+        // balance-carrying extract set or a parser match keeps unrelated
+        // messages from ever refreshing an account.
+        val balanceStatement =
+            if (transaction == null) {
+                balanceFromExtracts(sender, evalBody, extracts, result.typed)
+                    ?: transactionParser.parseBalanceStatement(sender, evalBody)
+            } else {
+                null
+            }
+
+        // An issuer-confirmed total-limit statement ("changed from INR X to
+        // INR Y", "Your new limit is ...") refreshes the card's total so
+        // outstanding/utilization stay derivable without any manual entry.
+        val totalLimit = transactionParser.parseTotalLimit(sender, evalBody)
+
+        val merged = LinkedHashMap<String, String>()
+        transaction?.let { tx ->
+            merged["amount"] = tx.amount.toString()
+            merged["type"] = if (tx.type == TransactionType.DEBIT) "debit" else "credit"
+            tx.accountLast4?.let { merged["account_last4"] = it }
+            tx.bankName?.let { merged["bank"] = it }
+            tx.merchantName?.let { merged["merchant"] = it }
+            tx.balance?.let { merged["balance"] = it.toString() }
+            tx.availableLimit?.let { merged["available_limit"] = it.toString() }
+            tx.referenceNumber?.let { merged["reference"] = it }
+            // A non-rupee amount carries its currency in the details too, so
+            // the parsed notification and the conversation card render the
+            // right symbol; INR is implied when the key is absent (the
+            // encoding every pre-v23 row already uses).
+            if (tx.currency != CurrencyCatalog.INR_CODE) merged["currency"] = tx.currency
+        }
+        // Balance-only details feed the same "balance"/"account_last4"/"bank"
+        // keys the UI and the parsed notification already render blue.
+        balanceStatement?.let { statement ->
+            merged["balance"] = statement.balance.toString()
+            statement.accountLast4?.let { merged["account_last4"] = it }
+            statement.bankName?.let { merged["bank"] = it }
+        }
+        totalLimit?.let { statement ->
+            merged["total_limit"] = statement.totalLimit.toString()
+            statement.accountLast4?.let { merged.putIfAbsent("account_last4", it) }
+            statement.bankName?.let { merged.putIfAbsent("bank", it) }
+        }
+        otpCode?.let { merged["otp_code"] = it }
+        // Rule-extracted values win over parser heuristics for shared keys.
+        merged.putAll(extracts)
+        // ...except the merchant: the transaction above already applied the
+        // rule-over-parser precedence WITH normalization, so re-stamp it -
+        // otherwise a raw rule capture ("XX6894- RD Installment-Jul 2026")
+        // would land in extractedDataJson and resurface in the UI.
+        transaction?.let { tx ->
+            tx.merchantName?.let { merged["merchant"] = it } ?: merged.remove("merchant")
+        }
+        // ...and the reminder fields: the reminder object above already
+        // merged rule extracts with parser output, TYPED (its due date is a
+        // real date, not a raw "03-Jul-26" capture) and invariant-checked
+        // (totalDue >= minDue). Re-stamping keeps extractedDataJson - what
+        // the parsed notification and the conversation card render - in
+        // lockstep with the Alerts row, and normalizes the due date to ISO.
+        reminder?.let { rem ->
+            rem.totalDue?.let { merged["total_due"] = it.toString() } ?: merged.remove("total_due")
+            rem.minDue?.let { merged["min_due"] = it.toString() } ?: merged.remove("min_due")
+            rem.dueDate?.let { merged["due_date"] = it.toString() }
+            rem.accountLast4?.let { merged.putIfAbsent("account_last4", it) }
+            rem.bankName?.let { merged.putIfAbsent("bank", it) }
+            rem.label?.let { merged.putIfAbsent("label", it) }
+        }
+        // A collect / payment request or mandate notice moved no money: no
+        // signed amount may survive - not even a rule's raw "amount"/"type"
+        // extracts, which would render as a green credit downstream. The
+        // requested figure is carried under its own key so the parsed
+        // notification and the details card render it UNSIGNED (blue),
+        // like a bill or balance update.
+        if (transactionParser.isPaymentRequestNotice(evalBody)) {
+            merged.remove("amount")
+            merged.remove("type")
+            transactionParser.requestedAmount(evalBody)?.let {
+                merged["requested_amount"] = it.toString()
+            }
+        }
+
+        return Enriched(
+            result = result,
+            extracted = merged,
+            otpCode = otpCode,
+            transaction = transaction,
+            reminder = reminder,
+            delivery = delivery,
+            balanceStatement = balanceStatement,
+            totalLimit = totalLimit,
+        )
+    }
+
+    private suspend fun persistDerived(
+        messageId: Long,
+        timestampMs: Long,
+        enriched: Enriched,
+        /**
+         * User note from a previous derivation of the same message, carried
+         * onto the re-derived row by the re-sort refresh path.
+         */
+        preservedNote: String? = null,
+        /**
+         * Dismissal timestamp from a previous derivation of the same
+         * message: a re-sort refresh must not resurrect a dismissed alert.
+         */
+        preservedDismissedAt: Long? = null,
+        /**
+         * Collector for the ids of every account this derivation touched -
+         * a transaction attached, a balance/limit upserted, a digit-less
+         * issuer attachment. [recategorizeAll] passes one across its whole
+         * run so accounts NO message re-derives can be swept as orphans;
+         * live ingestion and imports pass nothing (they only ever ADD
+         * derived rows, so they cannot strand an account).
+         */
+        touchedAccounts: MutableSet<Long>? = null,
+    ) {
+        enriched.transaction?.let { tx ->
+            val accountNumber = tx.accountLast4 ?: ""
+            val canonicalBank = SenderNameResolver.canonicalize(tx.bankName).orEmpty()
+            // Account-creation guardrail: an account/card row may only
+            // carry the name of a plausible financial institution or
+            // wallet. Merchant names, payment channels (CRED) and
+            // ecommerce brands (Flipkart) - including ones a rule extract
+            // re-injected - are stripped to a blank issuer, so the row
+            // stays claimable by the real bank instead of spawning a
+            // bogus "Flipkart bank account".
+            val bankName =
+                if (SenderNameResolver.isPlausibleIssuer(canonicalBank)) canonicalBank else ""
+            // Deduplication runs BEFORE any account write: a suppressed
+            // cross-bank UPI echo (the provider bank re-announcing the
+            // user's own bank's payment) must never create a transaction
+            // OR an account under the provider bank.
+            val unlinked =
+                TransactionEntity(
+                    amount = tx.amount,
+                    currency = tx.currency,
+                    type = tx.type,
+                    merchantName = tx.merchantName,
+                    accountNumber = accountNumber,
+                    bankName = bankName,
+                    accountId = null,
+                    timestamp = timestampMs,
+                    balance = tx.balance,
+                    referenceNumber = tx.referenceNumber,
+                    category = tx.merchantCategory,
+                    rawSmsId = messageId,
+                    note = preservedNote,
+                )
+            // Banks alert the same payment more than once (spend alert +
+            // statement line), and a UPI payment is echoed by a SECOND bank
+            // (the UPI app's provider). When an existing row already records
+            // this payment (see [TransactionDeduplication]) the rows are
+            // collapsed instead of double-counting the money.
+            val duplicate = findExistingDuplicate(unlinked)
+            when {
+                duplicate == null -> {
+                    val accountId = resolveAccountId(tx, accountNumber, bankName, timestampMs)
+                    accountId?.let { touchedAccounts?.add(it) }
+                    transactionDao.insert(unlinked.copy(accountId = accountId))
+                }
+
+                duplicate.bankName.isNotEmpty() && bankName.isNotEmpty() && duplicate.bankName != bankName -> {
+                    collapseCrossBankEcho(duplicate, unlinked, tx, timestampMs)
+                        ?.let { touchedAccounts?.add(it) }
+                }
+
+                else -> {
+                    val accountId = resolveAccountId(tx, accountNumber, bankName, timestampMs)
+                    accountId?.let { touchedAccounts?.add(it) }
+                    val candidate = unlinked.copy(accountId = accountId)
+                    transactionDao.update(
+                        TransactionDeduplication.collapse(duplicate, candidate).copy(id = duplicate.id),
+                    )
+                }
+            }
+        }
+        // Balance-only messages update the account WITHOUT fabricating a
+        // transaction row. Gated hard: the message must name the account
+        // (last-4) and a plausible issuer - a merchant or shortcode balance
+        // mention can never create or touch an account. One curated
+        // exception: a RETIREMENT scheme valuation ("valuation of your
+        // Tier-I a/c is Rs.X" - KFintech omits the PRAN there) may UPDATE
+        // the scheme's sole existing account, but never create one - the
+        // PRAN-tailed shapes own the account's identity.
+        if (enriched.transaction == null) {
+            enriched.balanceStatement?.let { statement ->
+                val canonicalBank = SenderNameResolver.canonicalize(statement.bankName).orEmpty()
+                if (!SenderNameResolver.isPlausibleIssuer(canonicalBank)) return@let
+                val accountNumber =
+                    statement.accountLast4
+                        ?: soleRetirementAccountNumber(canonicalBank)
+                        ?: return@let
+                val touchedId =
+                    upsertAccountBalance(
+                        accountNumber = accountNumber,
+                        bankName = canonicalBank,
+                        accountType = statement.accountType,
+                        balance = statement.balance,
+                        timestampMs = timestampMs,
+                    )
+                touchedAccounts?.add(touchedId)
+            }
+        }
+        // A confirmed total-limit statement updates the card's total limit -
+        // the sole source of the figure now that manual entry is gone. Same
+        // guardrails as balances: the message must name the card (last-4)
+        // and a plausible issuer.
+        enriched.totalLimit?.let { statement ->
+            val accountNumber = statement.accountLast4 ?: return@let
+            val canonicalBank = SenderNameResolver.canonicalize(statement.bankName).orEmpty()
+            if (!SenderNameResolver.isPlausibleIssuer(canonicalBank)) return@let
+            val touchedId =
+                upsertAccountBalance(
+                    accountNumber = accountNumber,
+                    bankName = canonicalBank,
+                    accountType = AccountType.CREDIT_CARD,
+                    balance = null,
+                    timestampMs = timestampMs,
+                    totalLimit = statement.totalLimit,
+                )
+            touchedAccounts?.add(touchedId)
+        }
+        enriched.reminder?.let { reminder ->
+            reminderDao.insert(
+                ReminderEntity(
+                    type = reminder.type,
+                    dueDate = reminder.dueDate?.toEpochMs(),
+                    totalDue = reminder.totalDue,
+                    minDue = reminder.minDue,
+                    accountLast4 = reminder.accountLast4,
+                    bankName = reminder.bankName,
+                    label = reminder.label,
+                    rawSmsId = messageId,
+                    createdAt = timestampMs,
+                    dismissedAt = preservedDismissedAt,
+                ),
+            )
+        }
+        enriched.delivery?.let { delivery ->
+            // "today"/"tomorrow" resolve against the MESSAGE date, not the
+            // current clock - imports of old messages stay correct.
+            val messageDate =
+                Instant
+                    .ofEpochMilli(timestampMs)
+                    .atZone(ZoneId.systemDefault())
+                    .toLocalDate()
+            reminderDao.insert(
+                ReminderEntity(
+                    type = ReminderType.DELIVERY,
+                    // Null for a dispatch notice with no stated arrival: the
+                    // card shows as an undated upcoming delivery.
+                    dueDate = delivery.expectedDate(messageDate)?.toEpochMs(),
+                    bankName = delivery.merchant,
+                    label = delivery.reference,
+                    rawSmsId = messageId,
+                    createdAt = timestampMs,
+                    dismissedAt = preservedDismissedAt,
+                ),
+            )
+        }
+    }
+
+    /**
+     * An already-persisted row recording the same payment as [candidate],
+     * or null. Candidates are narrowed by the DAO (same reference on the
+     * same account last-4 at any time distance, or same amount/type/last-4
+     * inside the tier-2 window - bank-agnostic, so cross-bank echoes
+     * surface) and each pairing is confirmed by [TransactionDeduplication].
+     * A ref-LESS cross-bank pairing is additionally vetoed when BOTH banks
+     * hold independent transaction evidence for the tail: two genuine
+     * accounts at two banks sharing a last-4 and receiving the same amount
+     * is exactly the false positive that tier must never merge.
+     */
+    private suspend fun findExistingDuplicate(candidate: TransactionEntity): TransactionEntity? {
+        val normalizedRef = TransactionDeduplication.normalizedReference(candidate.referenceNumber)
+        val byReference =
+            if (normalizedRef != null) {
+                transactionDao.findByReference(normalizedRef, candidate.accountNumber)
+            } else {
+                emptyList()
+            }
+        val nearby =
+            transactionDao.findNearby(
+                amount = candidate.amount,
+                type = candidate.type,
+                accountNumber = candidate.accountNumber,
+                fromTs = candidate.timestamp - TransactionDeduplication.NEAR_DUPLICATE_WINDOW_MS,
+                toTs = candidate.timestamp + TransactionDeduplication.NEAR_DUPLICATE_WINDOW_MS,
+            )
+        for (existing in (byReference + nearby).distinctBy { it.id }) {
+            val duplicate =
+                when {
+                    TransactionDeduplication.isReferenceDuplicate(existing, candidate) -> {
+                        true
+                    }
+
+                    TransactionDeduplication.isNearDuplicateAlert(existing, candidate) -> {
+                        true
+                    }
+
+                    TransactionDeduplication.isCrossBankReferenceEcho(existing, candidate) -> {
+                        true
+                    }
+
+                    TransactionDeduplication.isCrossBankNearEcho(existing, candidate) -> {
+                        !bothBanksHoldTail(existing, candidate)
+                    }
+
+                    else -> {
+                        false
+                    }
+                }
+            if (duplicate) return existing
+        }
+        return null
+    }
+
+    /**
+     * Whether BOTH banks of a ref-less cross-bank pairing have transaction
+     * evidence for the tail beyond the pair itself - the two-genuine-accounts
+     * shape a near-echo merge must never touch.
+     */
+    private suspend fun bothBanksHoldTail(
+        existing: TransactionEntity,
+        candidate: TransactionEntity,
+    ): Boolean {
+        val existingEvidence =
+            transactionDao.countByBankAndTail(existing.bankName, existing.accountNumber, existing.id)
+        if (existingEvidence == 0) return false
+        val candidateEvidence =
+            transactionDao.countByBankAndTail(candidate.bankName, candidate.accountNumber, existing.id)
+        return candidateEvidence > 0
+    }
+
+    /**
+     * Resolves the owning account ONCE, at ingestion. With a named issuer
+     * the account is upserted and its id used. With a blank issuer NO
+     * account is ever created: the transaction attaches to an existing
+     * account only when exactly one named bank holds that last-4, otherwise
+     * it stays unattached - a nameless account row is never the answer. The
+     * one exception to "no last-4, no account" is a curated standalone CARD
+     * product or WALLET issuer (see issuerKeyedAccountId): their money SMS
+     * carry no digits at all, yet the issuer identifies the account exactly.
+     */
+    private suspend fun resolveAccountId(
+        tx: ParsedTransaction,
+        accountNumber: String,
+        bankName: String,
+        timestampMs: Long,
+    ): Long? =
+        when {
+            accountNumber.isEmpty() -> issuerKeyedAccountId(tx, bankName, timestampMs)
+            bankName.isNotEmpty() -> upsertAccount(tx, accountNumber, bankName, timestampMs)
+            else -> soleAccountIdForTail(accountNumber, tx.accountType)
+        }
+
+    /**
+     * Collapses a cross-bank UPI echo pair into ONE transaction under ONE
+     * bank. The surviving bank is the one with a real account relationship
+     * - other transactions already attributed to that (bank, last-4); the
+     * UPI provider's echo has none (see
+     * [TransactionDeduplication.crossBankSurvivor]). Only the winner's
+     * account is (up)serted; if the LOSING side already spawned an account
+     * that nothing else references - no other transaction, no balance or
+     * limit ever reported - that phantom row is reaped, so the provider
+     * bank never surfaces in Finance.
+     */
+    private suspend fun collapseCrossBankEcho(
+        existing: TransactionEntity,
+        candidate: TransactionEntity,
+        tx: ParsedTransaction,
+        timestampMs: Long,
+    ): Long? {
+        val existingEvidence =
+            transactionDao.countByBankAndTail(existing.bankName, existing.accountNumber, existing.id)
+        val candidateEvidence =
+            transactionDao.countByBankAndTail(candidate.bankName, candidate.accountNumber, existing.id)
+        val winner =
+            TransactionDeduplication.crossBankSurvivor(existing, candidate, existingEvidence, candidateEvidence)
+        val loser = if (winner === existing) candidate else existing
+        val accountId =
+            winner.accountId
+                ?: upsertAccountBalance(
+                    accountNumber = winner.accountNumber,
+                    bankName = winner.bankName,
+                    accountType = tx.accountType,
+                    balance = winner.balance,
+                    timestampMs = timestampMs,
+                    currency = if (winner.balance != null) CurrencyCatalog.INR_CODE else winner.currency,
+                )
+        transactionDao.update(
+            TransactionDeduplication
+                .collapseCrossBank(winner, loser)
+                .copy(id = existing.id, accountId = accountId),
+        )
+        // Reap the phantom: the losing side's account, when the echo was its
+        // only evidence. A row holding ANY other transaction or a reported
+        // balance/limit is a genuine account and stays.
+        val orphanId = if (loser === existing) existing.accountId else null
+        orphanId?.let { id ->
+            if (id == accountId) return@let
+            val account = accountDao.findById(id) ?: return@let
+            if (transactionDao.countByAccountId(id, existing.id) > 0) return@let
+            if (account.lastKnownBalance != null || account.creditLimit != null || account.availableLimit != null) return@let
+            accountDao.deleteById(id)
+        }
+        return accountId
+    }
+
+    private suspend fun upsertAccount(
+        tx: ParsedTransaction,
+        accountNumber: String,
+        bankName: String,
+        timestampMs: Long,
+    ): Long =
+        upsertAccountBalance(
+            accountNumber,
+            bankName,
+            tx.accountType,
+            tx.balance,
+            timestampMs,
+            tx.availableLimit,
+            // Balance / limit phrases are rupee-anchored, so when the message
+            // carries one the account's figures are INR whatever the spend
+            // was in (a USD spend on an Indian card quotes an INR limit);
+            // otherwise the account is denominated like its transaction.
+            currency = if (tx.balance != null || tx.availableLimit != null) CurrencyCatalog.INR_CODE else tx.currency,
+        )
+
+    /**
+     * The account a bank-less transaction may attach to: exactly ONE named
+     * bank must hold this last-4 (preferring the row matching [accountType]
+     * when a bank has several). Null when no bank or several banks share
+     * the tail - attaching by number alone is how cross-bank contamination
+     * happened.
+     */
+    private suspend fun soleAccountIdForTail(
+        accountNumber: String,
+        accountType: AccountType,
+    ): Long? {
+        val named = accountDao.findByNumber(accountNumber).filter { it.bankName.isNotBlank() }
+        if (named.isEmpty() || named.map { it.bankName }.distinct().size > 1) return null
+        return (named.firstOrNull { it.type == accountType } ?: named.first()).id
+    }
+
+    /**
+     * The account a TAIL-LESS retirement valuation may refresh: the scheme
+     * ([SenderNameResolver.isRetirementIssuer]) must already hold exactly
+     * ONE account - created earlier by a PRAN-tailed shape. Null (no
+     * update, and never a creation) when the issuer is not a retirement
+     * scheme, has no account yet, or ambiguously has several.
+     */
+    private suspend fun soleRetirementAccountNumber(bankName: String): String? {
+        if (!SenderNameResolver.isRetirementIssuer(bankName)) return null
+        return accountDao.findByBank(bankName).singleOrNull()?.accountNumber
+    }
+
+    /**
+     * The account for a money message whose SMS carries NO account digits
+     * at all - two curated shapes send exactly that:
+     *  - co-branded card products (Scapia Federal): "txn ... on your Scapia
+     *    Federal Visa credit card was successful", never a last-4;
+     *  - wallet products (Pluxee): "Your Pluxee Card has been successfully
+     *    credited with Rs.X towards Meal Wallet", never a last-4.
+     *
+     * The rule, deliberately narrow:
+     *  - the resolved issuer must be a curated standalone CARD product
+     *    ([SenderNameResolver.isCardProductIssuer]) with a body that reads
+     *    as a card ([AccountType.CREDIT_CARD]), OR a curated WALLET issuer
+     *    ([SenderNameResolver.isWalletIssuer]) with a body that reads as a
+     *    wallet ([AccountType.WALLET]) - a digit-less SAVINGS debit stays
+     *    unattached exactly as before;
+     *  - when the issuer already has exactly ONE account of that type (a
+     *    template change later adds a last-4, say), the money attaches
+     *    to it;
+     *  - when it has none, ONE account is created under a stable synthetic
+     *    key ([SenderNameResolver.syntheticAccountKey]) - the issuer alone
+     *    identifies the card/wallet, and the user's money belongs on it,
+     *    not in an unattached limbo;
+     *  - several same-type accounts of the same issuer are ambiguous:
+     *    unattached (null).
+     *
+     * Known failure mode: if the issuer later starts quoting a real last-4,
+     * the first such message creates a second (digit-keyed) account next to
+     * the synthetic one and history splits between them. Accepted: the
+     * attach-to-sole-existing branch handles the reverse (and far likelier)
+     * order, and merchants still can never become accounts - the issuer
+     * must survive the curated card-product/wallet-issuer check.
+     */
+    private suspend fun issuerKeyedAccountId(
+        tx: ParsedTransaction,
+        bankName: String,
+        timestampMs: Long,
+    ): Long? {
+        if (bankName.isEmpty()) return null
+        val ownedType =
+            when {
+                tx.accountType == AccountType.CREDIT_CARD && SenderNameResolver.isCardProductIssuer(bankName) -> {
+                    AccountType.CREDIT_CARD
+                }
+
+                tx.accountType == AccountType.WALLET && SenderNameResolver.isWalletIssuer(bankName) -> {
+                    AccountType.WALLET
+                }
+
+                else -> {
+                    return null
+                }
+            }
+        val owned = accountDao.findByBank(bankName).filter { it.type == ownedType }
+        return when {
+            owned.size > 1 -> {
+                null
+            }
+
+            owned.size == 1 -> {
+                upsertAccountBalance(
+                    accountNumber = owned.single().accountNumber,
+                    bankName = bankName,
+                    accountType = ownedType,
+                    balance = tx.balance,
+                    timestampMs = timestampMs,
+                    availableLimit = tx.availableLimit,
+                )
+            }
+
+            else -> {
+                upsertAccountBalance(
+                    accountNumber = SenderNameResolver.syntheticAccountKey(bankName),
+                    bankName = bankName,
+                    accountType = ownedType,
+                    balance = tx.balance,
+                    timestampMs = timestampMs,
+                    availableLimit = tx.availableLimit,
+                )
+            }
+        }
+    }
+
+    /**
+     * Creates or refreshes an account row from either a transaction or a
+     * balance-only statement - ONE mechanism, so the timestamp ordering
+     * (older messages never clobber a newer balance) and the blank-bank
+     * claim behave identically for both sources. Returns the row id of the
+     * created or updated account, so transactions link to it explicitly.
+     */
+    private suspend fun upsertAccountBalance(
+        accountNumber: String,
+        bankName: String,
+        accountType: AccountType,
+        balance: Double?,
+        timestampMs: Long,
+        /** Issuer-reported available credit limit; follows the same ordering rules as [balance]. */
+        availableLimit: Double? = null,
+        /** Issuer-confirmed TOTAL credit limit; follows the same ordering rules as [balance]. */
+        totalLimit: Double? = null,
+        /**
+         * ISO code the written figures are in. Stamped on a NEW account, and
+         * on an existing one whenever this message actually carries a
+         * figure (balance / limit) and is not older than what the row holds
+         * - a figure-less older echo never changes a denomination. Balance
+         * and limit statements are rupee-anchored, so callers pass INR there.
+         */
+        currency: String = CurrencyCatalog.INR_CODE,
+    ): Long {
+        val carriesFigure = balance != null || availableLimit != null || totalLimit != null
+        val existing = accountDao.find(accountNumber, bankName)
+        if (existing == null) {
+            // A pre-resolution row of the same account carries a blank bank
+            // name: claim and name it instead of spawning a duplicate card.
+            val blank = if (bankName.isNotEmpty()) accountDao.findBlankBank(accountNumber, accountType) else null
+            if (blank != null) {
+                accountDao.update(
+                    blank.copy(
+                        bankName = bankName,
+                        lastKnownBalance =
+                            if (timestampMs >= blank.lastUpdated) {
+                                balance ?: blank.lastKnownBalance
+                            } else {
+                                blank.lastKnownBalance
+                            },
+                        availableLimit =
+                            if (timestampMs >= blank.lastUpdated) {
+                                availableLimit ?: blank.availableLimit
+                            } else {
+                                blank.availableLimit
+                            },
+                        creditLimit =
+                            if (timestampMs >= blank.lastUpdated) {
+                                totalLimit ?: blank.creditLimit
+                            } else {
+                                blank.creditLimit
+                            },
+                        currency = if (timestampMs >= blank.lastUpdated && carriesFigure) currency else blank.currency,
+                        lastUpdated = maxOf(timestampMs, blank.lastUpdated),
+                    ),
+                )
+                return blank.id
+            }
+            return accountDao.insert(
+                AccountEntity(
+                    accountNumber = accountNumber,
+                    bankName = bankName,
+                    type = accountType,
+                    currency = currency,
+                    lastKnownBalance = balance,
+                    availableLimit = availableLimit,
+                    creditLimit = totalLimit,
+                    lastUpdated = timestampMs,
+                ),
+            )
+        }
+        if (timestampMs >= existing.lastUpdated) {
+            accountDao.update(
+                existing.copy(
+                    lastKnownBalance = balance ?: existing.lastKnownBalance,
+                    availableLimit = availableLimit ?: existing.availableLimit,
+                    creditLimit = totalLimit ?: existing.creditLimit,
+                    currency = if (carriesFigure) currency else existing.currency,
+                    lastUpdated = timestampMs,
+                ),
+            )
+        }
+        return existing.id
+    }
+
+    /**
+     * Balance statement assembled from rule extracts (the "balance" key,
+     * plus optional account/bank). Only consulted for messages WITHOUT a
+     * transaction; the issuer must survive the plausible-issuer check or the
+     * bank stays null (and persistence then skips the account entirely).
+     */
+    private fun balanceFromExtracts(
+        sender: String,
+        evalBody: String,
+        extracts: Map<String, String>,
+        typed: Map<String, ExtractedValue>,
+    ): BalanceStatement? {
+        val balance = typed.amount("balance") ?: return null
+        val bank = extracts["bank"] ?: SenderNameResolver.bankNameFor(sender, evalBody)
+        return BalanceStatement(
+            balance = balance,
+            accountLast4 = extracts["account_last4"],
+            bankName = bank?.takeIf { SenderNameResolver.isPlausibleIssuer(it, evalBody) },
+            accountType = AccountType.SAVINGS,
+        )
+    }
+
+    private suspend fun definitions(source: String): List<RuleDefinition> =
+        ruleDao.getEnabledBySource(source).mapNotNull { it.toDefinition(json) }
+
+    /**
+     * Set-authoritative block check: matches the RAW [sender] against the
+     * normalized blocklist under [SenderNormalizer.sameSender]. Entries are
+     * stored normalized, but each is re-normalized here so a raw variant (a
+     * restored backup, a hand-typed "VM-JIOPAY") still matches, and the
+     * membership rule also honours entries stored under the pre-#42 key -
+     * which can only be recomputed from the sender's own digits, hence the
+     * raw sender rather than its current key. Never row-derived: the old
+     * EXISTS-over-rows check evaporated the block when its thread was
+     * deleted.
+     */
+    private suspend fun isSenderBlocked(sender: String): Boolean = SenderNormalizer.matchesAny(blockedSenders(), sender)
+
+    private fun deleteAttachmentFiles(messageIds: List<Long>) {
+        val cleaner = attachmentFileCleaner ?: return
+        messageIds.forEach(cleaner)
+    }
+
+    /**
+     * Overlays rule-extracted values onto the parser's transaction.
+     *
+     * The engine already resolved each extract to its typed value - amounts
+     * parsed, the merchant normalized (see [ExtractedValue]) - so this is a
+     * pure precedence merge: a typed rule value wins over the parser's
+     * heuristic. A merchant capture that was pure reference noise normalized
+     * to null and falls back to the parser's (already clean) title, keeping
+     * a rule's precise capture from ever REGRESSING it.
+     */
+    private fun mergeTransaction(
+        parsed: ParsedTransaction,
+        typed: Map<String, ExtractedValue>,
+        subCategory: SubCategory?,
+    ): ParsedTransaction =
+        // The currency stays the parser's: the rule engine typed its amount
+        // extract under that same currency (see RuleEngine.currencyOf), so
+        // the merged figure and its currency agree.
+        parsed.copy(
+            amount = typed.amount("amount") ?: parsed.amount,
+            type = typed.transactionType("type") ?: parsed.type,
+            merchantName = typed.merchant("merchant") ?: parsed.merchantName,
+            accountLast4 = (typed["account_last4"] as? ExtractedValue.Text)?.raw ?: parsed.accountLast4,
+            bankName = (typed["bank"] as? ExtractedValue.Text)?.raw ?: parsed.bankName,
+            balance = typed.amount("balance") ?: parsed.balance,
+            availableLimit = typed.amount("available_limit") ?: parsed.availableLimit,
+            merchantCategory = subCategory.toMerchantCategory() ?: parsed.merchantCategory,
+        )
+
+    /**
+     * Builds a transaction purely from rule extracts when the parser found
+     * none. Amount AND type extracts are mandatory, so balance-only rules
+     * (NPS investment-value statements, data-balance alerts) can never
+     * create a transaction.
+     */
+    private fun transactionFromExtracts(
+        extracts: Map<String, String>,
+        typed: Map<String, ExtractedValue>,
+        subCategory: SubCategory?,
+        sender: String,
+        body: String,
+    ): ParsedTransaction? {
+        val amount = typed.amount("amount") ?: return null
+        val type = typed.transactionType("type") ?: return null
+        return ParsedTransaction(
+            amount = amount,
+            // The currency the body names (or the device/override fallback) -
+            // the same one the engine read the amount extract under.
+            currency = transactionParser.currencyOf(body),
+            type = type,
+            // A recharge / bill payment / top-up has no third-party merchant -
+            // the biller IS the sender - so the title falls back to the resolved
+            // sender brand ("Airtel") rather than a generic phrase. A merchant
+            // named in the body still wins. It goes in the MERCHANT slot, not
+            // bankName, so the account-creation guardrail is untouched.
+            merchantName =
+                typed.merchant("merchant")
+                    ?: extracts["operator"]
+                    ?: subCategory
+                        ?.takeIf { it in BILLER_BRANDED_SUBCATEGORIES }
+                        ?.let { SenderNameResolver.brandNameFor(sender, body) },
+            accountLast4 = extracts["account_last4"],
+            bankName = extracts["bank"],
+            balance = typed.amount("balance"),
+            availableLimit = typed.amount("available_limit"),
+            merchantCategory = subCategory.toMerchantCategory() ?: MerchantCategory.OTHER,
+            // The body's own wording decides the account kind - a rule-matched
+            // card spend ("on your ... credit card was successful") must land
+            // on the card, never on a phantom savings account.
+            accountType = transactionParser.accountTypeOf(body),
+        )
+    }
+
+    /**
+     * Spend category implied by the rule's sub-category: a recharge rule
+     * always yields a RECHARGE spend, an investment/mutual-fund rule an
+     * INVESTMENT spend - regardless of what the body-keyword heuristic says.
+     */
+    private fun SubCategory?.toMerchantCategory(): MerchantCategory? =
+        when (this) {
+            SubCategory.RECHARGE -> MerchantCategory.RECHARGE
+            SubCategory.INVESTMENT, SubCategory.MUTUAL_FUND -> MerchantCategory.INVESTMENT
+            else -> null
+        }
+
+    /**
+     * Rule extracts win over parser heuristics per field. A rule's generic
+     * "amount" extract is the amount DUE - it backfills the total when
+     * neither the rule nor the parser produced an explicit total (the ICICI
+     * Pru premium rule captures the premium as "amount"; dropping it was why
+     * premiums surfaced with no amount). [ensureTotalNotBelowMin] re-applies
+     * the totalDue >= minDue invariant AFTER the merge, because raw rule
+     * captures bypass the parser's own [ReminderParser] resolution.
+     */
+    private fun mergeReminder(
+        parsed: ParsedReminder,
+        typed: Map<String, ExtractedValue>,
+        extracts: Map<String, String>,
+    ): ParsedReminder =
+        ensureTotalNotBelowMin(
+            parsed.copy(
+                dueDate = typed.date("due_date") ?: parsed.dueDate,
+                totalDue = typed.amount("total_due") ?: parsed.totalDue ?: typed.amount("amount"),
+                minDue = typed.amount("min_due") ?: parsed.minDue,
+                accountLast4 = (typed["account_last4"] as? ExtractedValue.Text)?.raw ?: parsed.accountLast4,
+                bankName = (typed["bank"] as? ExtractedValue.Text)?.raw ?: parsed.bankName,
+                label = extracts["label"] ?: parsed.label,
+            ),
+        )
+
+    /**
+     * Travel Alerts entry from a rule's typed extracts. Requires a
+     * `journey_date` (typed via `extract_types`): the entry sits in
+     * upcoming until the journey day and moves to past after it - the same
+     * lifecycle for trains AND flights, so any travel rule extracting a
+     * journey date surfaces identically. Undated travel notices (gate
+     * changes, chart prepared) stay out of Alerts exactly as before. The
+     * label never carries a full PNR - only its masked tail.
+     */
+    private fun travelFromExtracts(
+        extracts: Map<String, String>,
+        typed: Map<String, ExtractedValue>,
+    ): ParsedReminder? {
+        val journeyDate = typed.date("journey_date") ?: return null
+        val mode =
+            extracts["train"]?.let { "Train $it" }
+                ?: extracts["flight"]?.let { "Flight $it" }
+        val label =
+            listOfNotNull(mode, extracts["route"], extracts["departure_time"]?.let { "dep $it" })
+                .joinToString(" \u00b7 ")
+                .ifBlank { null }
+                ?: extracts["pnr"]?.let { "PNR xx${it.takeLast(4)}" }
+        return ParsedReminder(
+            type = ReminderType.TRAVEL,
+            dueDate = journeyDate,
+            totalDue = null,
+            minDue = null,
+            accountLast4 = null,
+            bankName = null,
+            label = label,
+        )
+    }
+
+    private fun reminderFromExtracts(
+        sender: String,
+        evalBody: String,
+        extracts: Map<String, String>,
+        typed: Map<String, ExtractedValue>,
+    ): ParsedReminder? {
+        // Undated candidates are not actionable reminders - an amount alone
+        // (e.g. a reimbursement-claim SMS) must not become an Alerts card.
+        val dueDate = typed.date("due_date") ?: return null
+        return ensureTotalNotBelowMin(
+            ParsedReminder(
+                // A rule only says "this is a bill-like reminder"; the TYPE still
+                // comes from the body's evidence (a card mini-statement matched
+                // by a bill rule is a credit-card bill, not a generic bill).
+                type = reminderTypeClassifier.classify(sender, evalBody) ?: ReminderType.OTHER,
+                dueDate = dueDate,
+                // A rule's generic "amount" is the amount DUE - the headline
+                // total, never the minimum (the Alerts card and the parsed
+                // notification lead with the total).
+                totalDue = typed.amount("total_due") ?: typed.amount("amount"),
+                minDue = typed.amount("min_due"),
+                accountLast4 = extracts["account_last4"],
+                bankName = extracts["bank"],
+                label = extracts["label"],
+            ),
+        )
+    }
+
+    /**
+     * Post-merge totalDue >= minDue invariant: a merged "total" below the
+     * minimum is a mis-capture (a minimum-due phrase landing in a total
+     * slot), so the total is dropped rather than stored wrong - mirroring
+     * [ReminderParser]'s own resolution, which raw rule captures bypass.
+     */
+    private fun ensureTotalNotBelowMin(reminder: ParsedReminder): ParsedReminder {
+        val total = reminder.totalDue
+        val min = reminder.minDue
+        if (total == null || min == null || total >= min) return reminder
+        return reminder.copy(totalDue = null)
+    }
+
+    private fun encodeExtracted(extracted: Map<String, String>): String? =
+        if (extracted.isEmpty()) {
+            null
+        } else {
+            json.encodeToString(MapSerializer(String.serializer(), String.serializer()), extracted)
+        }
+
+    private fun LocalDate.toEpochMs(): Long = atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
+
+    // endregion
+
+    companion object {
+        /**
+         * Messages per re-categorization transaction. The transaction is the
+         * window during which a message being received or sent right now
+         * cannot be written (one SQLite writer): 200 rows held it for
+         * ~0.5-1 s on a phone, long enough for a just-sent bubble to be
+         * visibly late (issue #153). 50 rows keeps it around 0.1-0.25 s
+         * while still amortising the commit over a 14k-message inbox.
+         */
+        const val RECATEGORIZE_PAGE_SIZE = 50
+
+        /** Room table name the rules observer watches (see ensureRulesObserver). */
+        private const val RULES_TABLE = "rules"
+
+        /**
+         * Sub-categories whose rule extracts may derive a transaction on
+         * their own (no parser match needed): plain transactions, prepaid
+         * recharges, and investment/mutual-fund contributions - all real
+         * money movements the user asked to see in Finance. Amount + type
+         * extracts remain mandatory (see transactionFromExtracts), so
+         * balance-only rules under these sub-categories never create rows.
+         */
+        private val TRANSACTION_DERIVING_SUBCATEGORIES =
+            setOf(
+                SubCategory.TRANSACTION,
+                SubCategory.RECHARGE,
+                SubCategory.INVESTMENT,
+                SubCategory.MUTUAL_FUND,
+            )
+
+        /**
+         * Sub-categories where the BILLER is the counterparty, so a transaction
+         * with no merchant in its body is titled with the resolved sender brand
+         * ("Airtel") instead of a generic phrase.
+         */
+        private val BILLER_BRANDED_SUBCATEGORIES =
+            setOf(
+                SubCategory.RECHARGE,
+                SubCategory.BILL,
+            )
+    }
+}
+
+/** Immutable decoded rule set, reused for a whole import run. */
+internal data class RulesSnapshot(
+    val userRules: List<RuleDefinition>,
+    val builtinRules: List<RuleDefinition>,
+)
+
+/**
+ * One system SMS provider row prepared for batch persistence.
+ * [enriched] is null for outgoing (sent) messages, which skip classification.
+ * [delivered] is only meaningful for outgoing rows (provider `STATUS_COMPLETE`).
+ */
+internal data class ImportedSmsRow(
+    val systemSmsId: Long,
+    val sender: String,
+    val body: String,
+    val timestampMs: Long,
+    val isRead: Boolean,
+    val enriched: MessageRepositoryImpl.Enriched?,
+    val delivered: Boolean = false,
+    /**
+     * Which SIM the message travelled over, straight from the provider's
+     * `sub_id` column. Null = unknown (column missing or value invalid) -
+     * never guessed, never defaulted.
+     */
+    val subscriptionId: Int? = null,
+    /**
+     * The sender's network timestamp (provider `DATE_SENT`) for an INCOMING
+     * row, already normalized: null when the provider stored 0/absent
+     * (unknown) or the row is outgoing. Never guessed.
+     */
+    val dateSentMs: Long? = null,
+    /**
+     * The provider's `thread_id` for the row - the platform's conversation
+     * identity, THE primary thread anchor (issue #42). Null when the
+     * provider omitted the column.
+     */
+    val providerThreadId: Long? = null,
+)
+
+/** Page source that is always empty - the unsearchable-query fallback. */
+private class EmptyPagingSource : PagingSource<Int, MessageEntity>() {
+    override fun getRefreshKey(state: androidx.paging.PagingState<Int, MessageEntity>): Int? = null
+
+    override suspend fun load(params: LoadParams<Int>): LoadResult<Int, MessageEntity> =
+        LoadResult.Page(data = emptyList(), prevKey = null, nextKey = null)
+}

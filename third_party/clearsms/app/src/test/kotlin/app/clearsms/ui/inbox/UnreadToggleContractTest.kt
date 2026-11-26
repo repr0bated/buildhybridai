@@ -1,0 +1,86 @@
+package app.clearsms.ui.inbox
+
+import app.clearsms.domain.model.Category
+import app.clearsms.domain.model.InboxPill
+import app.clearsms.testing.DefaultStrings
+import com.google.common.truth.Truth.assertThat
+import org.junit.Test
+import java.io.File
+
+/**
+ * Contract for the "Unread only" control after its move out of the pill row.
+ *
+ * Users read the pill row as one vocabulary: chips select exclusively. The
+ * Unread chip broke that (it composed with any category), so it now lives as
+ * a labeled Switch on the app bar's TITLE LINE, leaving with the expanded
+ * title as the bar collapses (ScrollToTopTitleTest). These are source-level
+ * contracts (the repo has no Compose UI test infrastructure, same style as
+ * `CategoryTagSurfacesTest`) plus state-level assertions that the move did
+ * not change filter semantics.
+ */
+class UnreadToggleContractTest {
+    private fun source(path: String) = File("src/main/kotlin/app/clearsms/$path").readText()
+
+    @Test
+    fun `pill row contains exactly the category chips - no unread chip`() {
+        val inbox = source("ui/inbox/InboxScreen.kt")
+        // The old chip was the item keyed "unread" whose selection bound unreadOnly.
+        assertThat(inbox).doesNotContain("item(key = \"unread\")")
+        assertThat(inbox).doesNotContain("selected = filter.unreadOnly")
+        // The row's only content is the user's visible, reorderable pills.
+        assertThat(inbox).contains("items(pills.visible, key = { it.name })")
+    }
+
+    @Test
+    fun `unread toggle ends the title line, above and apart from the pill row`() {
+        val inbox = source("ui/inbox/InboxScreen.kt")
+        // It is the expanded-row trailing content of the shared title, so it
+        // is never a list item and can never be mistaken for a pill.
+        val toggle = inbox.indexOf("UnreadSwitch(")
+        val pills = inbox.indexOf("item(key = \"filters\")")
+        assertThat(toggle).isGreaterThan(-1)
+        assertThat(pills).isGreaterThan(-1)
+        assertThat(toggle).isLessThan(pills)
+        assertThat(inbox).doesNotContain("item(key = \"unread_toggle\")")
+        // A Switch (view mode), not another chip.
+        assertThat(inbox).contains("Switch(checked = unreadOnly, onCheckedChange = null)")
+    }
+
+    @Test
+    fun `toggle drives the same InboxFilterState unread flag as the old chip`() {
+        val inbox = source("ui/inbox/InboxScreen.kt")
+        assertThat(inbox).contains("onToggleUnread = viewModel::toggleUnread")
+        // And that flag still composes with a selected category, both ways.
+        val state = InboxFilterState(pill = InboxPill.IMPORTANT).toggleUnread()
+        assertThat(state.unreadOnly).isTrue()
+        assertThat(state.category).isEqualTo(Category.IMPORTANT)
+        assertThat(state.toggleUnread().unreadOnly).isFalse()
+        assertThat(state.selectPill(InboxPill.OTP).unreadOnly).isTrue()
+    }
+
+    @Test
+    fun `unread count surfaces on the toggle label`() {
+        val inbox = source("ui/inbox/InboxScreen.kt")
+        assertThat(inbox).contains("stringResource(R.string.inbox_unread_toggle_count, totalUnread)")
+        val strings = DefaultStrings.ui
+        assertThat(strings).contains("<string name=\"inbox_unread_toggle_count\">Unread · %1\$d</string>")
+    }
+
+    @Test
+    fun `pill order customization can never offer Unread`() {
+        // Unread is a filter flag, not an InboxPill, so neither the Settings
+        // reorder sheet (built from InboxPill.entries) nor a stored order can
+        // ever produce an Unread pill.
+        assertThat(InboxPill.entries.map { it.name }).doesNotContain("UNREAD")
+        val settings = source("ui/settings/SettingsScreen.kt")
+        assertThat(settings).contains("order = pills.ordered,")
+    }
+
+    @Test
+    fun `archived screen keeps no pill row and no unread control`() {
+        val archived = source("ui/inbox/ArchivedScreen.kt")
+        assertThat(archived).doesNotContain("FilterChipRow")
+        assertThat(archived).doesNotContain("filter_unread")
+        assertThat(archived).doesNotContain("UnreadSwitch")
+    }
+}

@@ -1,0 +1,150 @@
+package app.clearsms.notification
+
+import android.content.Context
+import androidx.core.content.ContextCompat
+import androidx.test.core.app.ApplicationProvider
+import app.clearsms.R
+import app.clearsms.data.db.MessageEntity
+import app.clearsms.domain.categorizer.SenderIdLookup
+import app.clearsms.domain.model.Category
+import app.clearsms.notification.TransactionNotifier.Content
+import app.clearsms.testing.FakeSettingsRepository
+import com.google.common.truth.Truth.assertThat
+import kotlinx.serialization.json.Json
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+
+/**
+ * The standard template cannot color its title text (setColor only tints the
+ * small icon/accent), so the amount MUST travel through the custom content
+ * views with an explicit text color. These tests pin that wiring: custom
+ * collapsed + expanded layouts are attached and the accent carries the
+ * resolved fixed `amount_*` color for the transaction kind.
+ */
+@RunWith(RobolectricTestRunner::class)
+class TransactionNotifierCustomViewTest {
+    private val context = ApplicationProvider.getApplicationContext<Context>()
+    private val notifier =
+        TransactionNotifier(
+            context,
+            Json,
+            object : NotificationSenderResolver(
+                context,
+                app.clearsms.sms.ContactsSource(context),
+                SenderIdLookup { null },
+            ) {
+                override fun resolve(sender: String) = NotificationSender(name = sender, monogram = "X")
+            },
+            SenderIconFactory(context),
+            NotificationSectionGate(FakeSettingsRepository()),
+            MutedSenderGate(FakeSettingsRepository()),
+        )
+
+    private fun message(extracted: String) =
+        MessageEntity(
+            id = 42L,
+            threadId = 3L,
+            sender = "AX-HDFCBK",
+            normalizedSender = "HDFCBK",
+            body = "Rs.1,299.00 debited from a/c **2863 to Swiggy. Avl bal Rs.12,430.00",
+            timestamp = 1_000L,
+            category = Category.IMPORTANT,
+            extractedDataJson = extracted,
+        )
+
+    @Test
+    fun `debit notification uses the custom collapsed and expanded layouts`() {
+        val notification =
+            notifier.buildNotification(
+                message("""{"amount":"1299.0","type":"debit","merchant":"Swiggy"}"""),
+                MessageNotifier.DEFAULT_SELECTED,
+            )
+        assertThat(notification).isNotNull()
+        @Suppress("DEPRECATION")
+        assertThat(notification!!.contentView.layoutId).isEqualTo(R.layout.notification_transaction)
+        @Suppress("DEPRECATION")
+        assertThat(notification.bigContentView.layoutId).isEqualTo(R.layout.notification_transaction_big)
+    }
+
+    @Test
+    fun `accent carries the resolved fixed debit color`() {
+        val notification =
+            notifier.buildNotification(
+                message("""{"amount":"1299.0","type":"debit"}"""),
+                MessageNotifier.DEFAULT_SELECTED,
+            )
+        assertThat(notification!!.color)
+            .isEqualTo(ContextCompat.getColor(context, R.color.notif_amount_debit))
+    }
+
+    @Test
+    fun `credit and balance notifications resolve their own fixed colors`() {
+        val credit =
+            notifier.buildNotification(
+                message("""{"amount":"5000.0","type":"credit"}"""),
+                MessageNotifier.DEFAULT_SELECTED,
+            )
+        assertThat(credit!!.color).isEqualTo(ContextCompat.getColor(context, R.color.notif_amount_credit))
+
+        val balance =
+            notifier.buildNotification(
+                message("""{"balance":"12430.0","bank":"HDFC Bank"}"""),
+                MessageNotifier.DEFAULT_SELECTED,
+            )
+        assertThat(balance!!.color).isEqualTo(ContextCompat.getColor(context, R.color.notif_amount_balance))
+    }
+
+    @Test
+    fun `kind to color-resource mapping is exhaustive and distinct`() {
+        val mapped = Content.Kind.entries.map(TransactionNotifier::amountColorRes)
+        assertThat(mapped)
+            .containsExactly(R.color.notif_amount_debit, R.color.notif_amount_credit, R.color.notif_amount_balance)
+            .inOrder()
+    }
+
+    @Test
+    fun `unparseable extraction yields no notification`() {
+        assertThat(notifier.buildNotification(message("not json"), MessageNotifier.DEFAULT_SELECTED)).isNull()
+        assertThat(
+            notifier.buildNotification(
+                message("""{"merchant":"Swiggy"}"""),
+                MessageNotifier.DEFAULT_SELECTED,
+            ),
+        ).isNull()
+    }
+
+    @Test
+    fun `balance-only statement builds a parsed notification with blue unsigned amount`() {
+        // The exact keys the ingestion pipeline writes for the reported HDFC
+        // "Available Bal in HDFC Bank A/c XX8709 ..." statement.
+        val notification =
+            notifier.buildNotification(
+                message("""{"balance":"40194.56","account_last4":"8709","bank":"HDFC Bank"}"""),
+                MessageNotifier.DEFAULT_SELECTED,
+            )
+        assertThat(notification).isNotNull()
+        assertThat(notification!!.color).isEqualTo(ContextCompat.getColor(context, R.color.notif_amount_balance))
+        val title = notification.extras.getCharSequence(android.app.Notification.EXTRA_TITLE).toString()
+        assertThat(title).isEqualTo("₹40,194.56")
+        assertThat(title).doesNotContain("+")
+        assertThat(title).doesNotContain("−")
+        // The custom parsed layouts are attached - same mechanism as
+        // transactions, no second notification style.
+        @Suppress("DEPRECATION")
+        assertThat(notification.contentView.layoutId).isEqualTo(R.layout.notification_transaction)
+        // Configurable action buttons keep working for balance updates.
+        assertThat(notification.actions).isNotEmpty()
+    }
+
+    @Test
+    fun `balance-only compact line leads with the balance update label`() {
+        val notification =
+            notifier.buildNotification(
+                message("""{"balance":"40194.56","account_last4":"8709","bank":"HDFC Bank"}"""),
+                MessageNotifier.DEFAULT_SELECTED,
+            )
+        val text = notification!!.extras.getCharSequence(android.app.Notification.EXTRA_TEXT).toString()
+        assertThat(text).isEqualTo("Balance update · A/c 8709 · HDFC Bank")
+    }
+}

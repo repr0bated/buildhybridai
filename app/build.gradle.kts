@@ -180,6 +180,8 @@ dependencies {
     ksp(libs.firebase.ai.ksp)
     implementation(libs.firebase.appcheck.playintegrity)
     debugImplementation(libs.firebase.appcheck.debug)
+    implementation(libs.firebase.config)
+    implementation(libs.guava)
 
     implementation(libs.json.schema.validator)
     implementation(libs.timber)

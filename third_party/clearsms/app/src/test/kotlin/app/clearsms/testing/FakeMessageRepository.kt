@@ -1,0 +1,233 @@
+package app.clearsms.testing
+
+import androidx.paging.PagingSource
+import androidx.paging.PagingState
+import app.clearsms.data.db.CategoryUnreadCount
+import app.clearsms.data.db.InboxThreadRow
+import app.clearsms.data.db.MessageEntity
+import app.clearsms.data.repository.BinRestoreResult
+import app.clearsms.data.repository.MessageRepository
+import app.clearsms.data.repository.RecategorizeCheckpointStore
+import app.clearsms.domain.model.Category
+import app.clearsms.domain.model.MessageSortOrder
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+
+/** In-memory no-op [MessageRepository] for view-model tests. */
+open class FakeMessageRepository : MessageRepository {
+    val inbox = MutableStateFlow<List<MessageEntity>>(emptyList())
+    val archived = MutableStateFlow<List<MessageEntity>>(emptyList())
+    val unreadCounts = MutableStateFlow<List<CategoryUnreadCount>>(emptyList())
+
+    /** Every pagedSearch invocation: (query, category, cutoffMs). */
+    val pagedSearchCalls = mutableListOf<Triple<String, Category?, Long?>>()
+
+    override fun observeInbox(
+        category: Category?,
+        unreadOnly: Boolean,
+    ): Flow<List<MessageEntity>> = inbox
+
+    override fun observeThread(threadId: Long): Flow<List<MessageEntity>> = inbox
+
+    /** Every pagedInbox invocation: (category, unreadOnly, sortOrder) - one per pager generation. */
+    val pagedInboxCalls = mutableListOf<Triple<Category?, Boolean, MessageSortOrder>>()
+
+    /** The most recently created inbox source; `invalidate()` it to stand in for a Room write. */
+    var lastInboxSource: InboxRowPagingSource? = null
+
+    override fun pagedInbox(
+        category: Category?,
+        unreadOnly: Boolean,
+        sortOrder: MessageSortOrder,
+    ): PagingSource<Int, InboxThreadRow> {
+        pagedInboxCalls += Triple(category, unreadOnly, sortOrder)
+        return InboxRowPagingSource(inbox.value.map { InboxThreadRow(it, draftText = drafts[it.threadId]) })
+            .also { lastInboxSource = it }
+    }
+
+    /** In-memory drafts keyed by threadId. */
+    val drafts = mutableMapOf<Long, String>()
+
+    override suspend fun draftFor(threadId: Long): String? = drafts[threadId]
+
+    override suspend fun saveDraft(
+        threadId: Long,
+        text: String,
+    ) {
+        if (text.isBlank()) drafts.remove(threadId) else drafts[threadId] = text
+    }
+
+    /** In-memory pinned thread ids. */
+    val pinnedThreads = mutableSetOf<Long>()
+
+    override suspend fun setPinned(
+        threadIds: List<Long>,
+        pinned: Boolean,
+    ) {
+        if (pinned) pinnedThreads += threadIds else pinnedThreads -= threadIds.toSet()
+    }
+
+    override suspend fun pinnedCountInThreads(threadIds: List<Long>): Int = threadIds.count { it in pinnedThreads }
+
+    override fun pagedThread(
+        threadId: Long,
+        sortOrder: MessageSortOrder,
+    ): PagingSource<Int, MessageEntity> = ListPagingSource(emptyList())
+
+    override suspend fun firstInThread(threadId: Long): MessageEntity? = null
+
+    override suspend fun inboxThreadIds(
+        category: Category?,
+        unreadOnly: Boolean,
+    ): List<Long> = emptyList()
+
+    override suspend fun messageIdsInThread(threadId: Long): List<Long> = emptyList()
+
+    override suspend fun positionInThread(
+        threadId: Long,
+        messageId: Long,
+        sortOrder: MessageSortOrder,
+    ): Int = 0
+
+    override suspend fun bodiesInOrder(ids: List<Long>): List<String> = emptyList()
+
+    override fun observeUnreadCounts(): Flow<List<CategoryUnreadCount>> = unreadCounts
+
+    override fun search(query: String): Flow<List<MessageEntity>> = inbox
+
+    override fun pagedSearch(
+        query: String,
+        category: Category?,
+        cutoffMs: Long?,
+    ): PagingSource<Int, MessageEntity> {
+        pagedSearchCalls += Triple(query, category, cutoffMs)
+        return ListPagingSource(emptyList())
+    }
+
+    /** Distinct sender addresses handed to the search name-resolution step. */
+    val senders = mutableListOf<String>()
+
+    override suspend fun distinctSenders(): List<String> = senders
+
+    /** Sender addresses passed to each sender-aware pagedSearch call. */
+    val pagedSearchSenders = mutableListOf<List<String>>()
+
+    override fun pagedSearch(
+        query: String,
+        category: Category?,
+        cutoffMs: Long?,
+        senderAddresses: List<String>,
+    ): PagingSource<Int, MessageEntity> {
+        pagedSearchSenders += senderAddresses
+        return pagedSearch(query, category, cutoffMs)
+    }
+
+    override fun observeArchived(): Flow<List<MessageEntity>> = archived
+
+    override suspend fun archivedThreadIds(): List<Long> = archived.value.map { it.threadId }
+
+    override suspend fun markRead(
+        messageId: Long,
+        read: Boolean,
+    ) = Unit
+
+    override suspend fun delete(messageId: Long) = Unit
+
+    override suspend fun deleteMessages(ids: List<Long>) = Unit
+
+    override suspend fun deleteThreads(threadIds: List<Long>) = Unit
+
+    override suspend fun stageDeleteMessages(ids: List<Long>): List<Long> = ids
+
+    override suspend fun stageDeleteThreads(threadIds: List<Long>): List<Long> = threadIds
+
+    override suspend fun undoStagedDelete(ids: List<Long>) = Unit
+
+    override suspend fun commitStagedDelete(
+        ids: List<Long>,
+        toBin: Boolean,
+    ) = Unit
+
+    override suspend fun commitAllPendingDeletes(toBin: Boolean) = Unit
+
+    override fun observeBin(): Flow<List<MessageEntity>> = MutableStateFlow(emptyList())
+
+    override suspend fun binMessageIds(): List<Long> = emptyList()
+
+    override suspend fun restoreFromBin(ids: List<Long>): BinRestoreResult = BinRestoreResult(0, 0)
+
+    override suspend fun deleteForever(ids: List<Long>) = Unit
+
+    override suspend fun purgeExpiredBin(cutoffMs: Long): Int = 0
+
+    override suspend fun countOtpOlderThan(cutoffMs: Long): Int = 0
+
+    override suspend fun deleteOtpOlderThan(cutoffMs: Long): Int = 0
+
+    override suspend fun setReadForMessages(
+        ids: List<Long>,
+        read: Boolean,
+    ) = Unit
+
+    override suspend fun setReadForThreads(
+        threadIds: List<Long>,
+        read: Boolean,
+    ) = Unit
+
+    override suspend fun archiveThreads(
+        threadIds: List<Long>,
+        archived: Boolean,
+    ) = Unit
+
+    override suspend fun unreadCountInThreads(threadIds: List<Long>): Int = 0
+
+    override suspend fun archive(
+        messageId: Long,
+        archived: Boolean,
+    ) = Unit
+
+    override suspend fun insertIncoming(
+        sender: String,
+        body: String,
+        timestampMs: Long,
+        systemSmsId: Long?,
+    ): MessageEntity = throw UnsupportedOperationException()
+
+    override suspend fun recategorizeAll(
+        checkpoints: RecategorizeCheckpointStore?,
+        onProgress: suspend (Int, Int) -> Unit,
+    ): Int = 0
+
+    /** Sender-scoped re-sort: records the request, does no work. */
+    var recategorizedSenderCores = mutableListOf<String>()
+
+    override suspend fun recategorizeSenderCore(senderCore: String): Int {
+        recategorizedSenderCores += senderCore
+        return 0
+    }
+
+    override suspend fun setBlocked(
+        sender: String,
+        blocked: Boolean,
+    ) = Unit
+
+    /** Single-page source over a fixed list. */
+    class ListPagingSource(
+        private val items: List<MessageEntity>,
+    ) : PagingSource<Int, MessageEntity>() {
+        override fun getRefreshKey(state: PagingState<Int, MessageEntity>): Int? = null
+
+        override suspend fun load(params: LoadParams<Int>): LoadResult<Int, MessageEntity> =
+            LoadResult.Page(data = items, prevKey = null, nextKey = null)
+    }
+
+    /** Single-page source over fixed joined inbox rows. */
+    class InboxRowPagingSource(
+        private val items: List<InboxThreadRow>,
+    ) : PagingSource<Int, InboxThreadRow>() {
+        override fun getRefreshKey(state: PagingState<Int, InboxThreadRow>): Int? = null
+
+        override suspend fun load(params: LoadParams<Int>): LoadResult<Int, InboxThreadRow> =
+            LoadResult.Page(data = items, prevKey = null, nextKey = null)
+    }
+}

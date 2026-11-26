@@ -1,0 +1,2769 @@
+package app.clearsms.ui.settings
+
+import android.content.Intent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.annotation.StringRes
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.automirrored.outlined.OpenInNew
+import androidx.compose.material.icons.outlined.Archive
+import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.DeleteSweep
+import androidx.compose.material.icons.outlined.Recycling
+import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.ListItem
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Switch
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
+import androidx.compose.material3.TopAppBar
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInParent
+import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import app.clearsms.BuildConfig
+import app.clearsms.R
+import app.clearsms.data.backup.BackupFileNames
+import app.clearsms.data.prefs.BlockedKeywords
+import app.clearsms.domain.model.Category
+import app.clearsms.domain.model.CurrencyCatalog
+import app.clearsms.domain.model.DelayedSendDelay
+import app.clearsms.domain.model.FinanceTab
+import app.clearsms.domain.model.LogoBackground
+import app.clearsms.domain.model.MessageSortOrder
+import app.clearsms.domain.model.MessageTextSize
+import app.clearsms.domain.model.NotificationAction
+import app.clearsms.domain.model.OtpAutoDeletePolicy
+import app.clearsms.domain.model.OtpDisplaySize
+import app.clearsms.domain.model.StartDestination
+import app.clearsms.domain.model.SwipeAction
+import app.clearsms.domain.model.SwipeDeadZone
+import app.clearsms.domain.model.ThemeMode
+import app.clearsms.domain.model.TimeFormat
+import app.clearsms.ui.alerts.displayName
+import app.clearsms.ui.common.BackupFrequency
+import app.clearsms.ui.common.HighlightTiming
+import app.clearsms.ui.components.DeleteConfirmationDialog
+import app.clearsms.ui.components.SenderAvatar
+import app.clearsms.ui.components.SwipeDismissSnackbarHost
+import app.clearsms.ui.components.TooltipIconButton
+import app.clearsms.ui.components.defaultLabel
+import app.clearsms.ui.components.displayName
+import app.clearsms.ui.components.otpPreviewFontSp
+import app.clearsms.ui.composemsg.ContactSuggestion
+import app.clearsms.ui.conversation.ConversationSelectionBarLayout
+import app.clearsms.ui.conversation.MessageSelectionAction
+import app.clearsms.ui.finance.displayName
+import app.clearsms.ui.navigation.PillConfig
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+
+private enum class SettingsDialog {
+    THEME,
+    INBOX_PILL_ORDER,
+    INBOX_VISIBLE_PILLS,
+    FINANCE_PILL_ORDER,
+    FINANCE_VISIBLE_PILLS,
+    ALERTS_PILL_ORDER,
+    ALERTS_VISIBLE_PILLS,
+    LOGO_BACKGROUND,
+    MESSAGE_TEXT_SIZE,
+    TIME_FORMAT,
+    NOTIFICATION_ACTIONS,
+    SWIPE_START,
+    SWIPE_END,
+    SWIPE_DEAD_ZONE,
+    DEFAULT_SCREEN,
+    DEFAULT_FILTER,
+    DEFAULT_FINANCE_FILTER,
+    FINANCE_CURRENCY,
+    OTP_DELETE,
+    DELAYED_SEND_DELAY,
+    MESSAGE_SORT_ORDER,
+    SELECTION_ACTION_ORDER,
+    OTP_SIZE,
+    CLEAR_OTP,
+    SIGNATURE,
+    BLOCK_LIST,
+    MUTED_SENDERS,
+    BACKUP_FREQUENCY,
+    SORT_CONFIRM,
+}
+
+/**
+ * One settings row in the declarative list the screens render and the
+ * search filters. [title] and [summary] carry the resolved user-visible
+ * strings so the search matches exactly what is on screen; [content] renders
+ * the row itself (a plain row, a toggle, an action, or the inline sort
+ * progress) with its behaviour unchanged. [item] is the catalog entry the
+ * row renders - the handle a highlight targets - and is null only for the
+ * top-level screen's "open this sub-screen" entries.
+ *
+ * [content] receives the decorative leading icon the SURFACE wants shown
+ * (see [SettingsRowList]): the top-level screen passes the section's
+ * catalog icon, a sub-screen and the search results pass null. The same
+ * row therefore renders with or without its icon through one code path.
+ */
+internal class SettingsRowEntry(
+    val section: SettingsSection,
+    val title: String,
+    val summary: String,
+    val item: SettingsItem? = null,
+    val content: @Composable (leadingIcon: ImageVector?) -> Unit,
+)
+
+/**
+ * Where the settings rows navigate to. One bundle rather than six lambdas
+ * on each of the two settings screens, so the shell wires the targets once.
+ */
+class SettingsNavigation(
+    val onManageRules: () -> Unit,
+    val onArchived: () -> Unit,
+    val onRecycleBin: () -> Unit,
+    val onPermissions: () -> Unit,
+    val onPrivacyPolicy: () -> Unit,
+    val onLicenses: () -> Unit,
+    val onShareLogs: () -> Unit,
+)
+
+/**
+ * Settings root: one entry per section (see [settingsTopLevelEntries]) - a
+ * sub-screen opener listing the rows it holds, or the section's single row
+ * rendered in place - searchable from the top bar across EVERY row,
+ * including those inside sub-screens. A nested search hit navigates to its
+ * sub-screen with the row highlighted, via [onOpenSection].
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun SettingsScreen(
+    /**
+     * Row to flash on arrival. A row that lives on a sub-screen flashes its
+     * section's entry here (the sub-screen itself is what a deep link
+     * pushes on top - see Routes.settingsPath), so an old link that only
+     * reaches this screen still points the way.
+     */
+    highlight: SettingsItem? = null,
+    onBack: () -> Unit,
+    /** Open [SettingsSection]'s sub-screen, optionally scrolled to and flashing one of its rows. */
+    onOpenSection: (SettingsSection, SettingsItem?) -> Unit,
+    navigation: SettingsNavigation,
+    viewModel: SettingsViewModel = hiltViewModel(),
+) {
+    var searchActive by rememberSaveable { mutableStateOf(false) }
+    var query by rememberSaveable { mutableStateOf("") }
+    val searchFocus = remember { FocusRequester() }
+    LaunchedEffect(searchActive) {
+        if (searchActive) searchFocus.requestFocus()
+    }
+
+    SettingsRowsHost(viewModel = viewModel, navigation = navigation) { rows, busy, snackbarHostState ->
+        Scaffold(
+            topBar = {
+                TopAppBar(
+                    title = {
+                        if (searchActive) {
+                            TextField(
+                                value = query,
+                                onValueChange = { query = it },
+                                placeholder = { Text(stringResource(R.string.settings_search_hint)) },
+                                singleLine = true,
+                                colors =
+                                    TextFieldDefaults.colors(
+                                        focusedContainerColor = Color.Transparent,
+                                        unfocusedContainerColor = Color.Transparent,
+                                        focusedIndicatorColor = Color.Transparent,
+                                        unfocusedIndicatorColor = Color.Transparent,
+                                    ),
+                                modifier = Modifier.fillMaxWidth().focusRequester(searchFocus),
+                            )
+                        } else {
+                            Text(stringResource(R.string.settings_title))
+                        }
+                    },
+                    navigationIcon = {
+                        TooltipIconButton(
+                            label =
+                                if (searchActive) {
+                                    stringResource(R.string.settings_search_close)
+                                } else {
+                                    stringResource(R.string.action_back)
+                                },
+                            onClick = {
+                                if (searchActive) {
+                                    searchActive = false
+                                    query = ""
+                                } else {
+                                    onBack()
+                                }
+                            },
+                            icon = Icons.AutoMirrored.Outlined.ArrowBack,
+                        )
+                    },
+                    actions = {
+                        if (searchActive) {
+                            if (query.isNotEmpty()) {
+                                TooltipIconButton(
+                                    label = stringResource(R.string.settings_search_clear),
+                                    onClick = { query = "" },
+                                    icon = Icons.Outlined.Close,
+                                )
+                            }
+                        } else {
+                            TooltipIconButton(
+                                label = stringResource(R.string.settings_search),
+                                onClick = { searchActive = true },
+                                icon = Icons.Outlined.Search,
+                            )
+                        }
+                    },
+                )
+            },
+            snackbarHost = { SwipeDismissSnackbarHost(snackbarHostState) },
+        ) { padding ->
+            val effectiveQuery = if (searchActive) query else ""
+            if (effectiveQuery.isBlank()) {
+                // The section list. A sub-screen entry's summary names the rows
+                // it holds, so what lives behind it is visible without a tap.
+                // Every entry leads with its section's catalog icon (see
+                // SettingsSection.icon) - a direct row reuses the very control
+                // the search renders, only decorated here.
+                val entries =
+                    settingsTopLevelEntries().map { entry ->
+                        when (entry) {
+                            is SettingsTopLevelEntry.Direct -> {
+                                rows.first { it.item == entry.item }
+                            }
+
+                            is SettingsTopLevelEntry.SubScreen -> {
+                                val sectionTitle = stringResource(entry.section.titleRes)
+                                val heldRows = rows.filter { it.section == entry.section }.joinToString { it.title }
+                                SettingsRowEntry(entry.section, sectionTitle, heldRows) { leadingIcon ->
+                                    SettingRow(
+                                        title = sectionTitle,
+                                        subtitle = heldRows,
+                                        singleLineSubtitle = true,
+                                        onClick = { onOpenSection(entry.section, null) },
+                                        leadingIcon = leadingIcon,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                SettingsRowList(
+                    rows = entries,
+                    busy = busy,
+                    showHeaders = false,
+                    leadingIcon = { it.section.icon },
+                    // A nested target flashes its section's entry: the row
+                    // itself is on the sub-screen a deep link pushes next.
+                    isHighlightTarget = { row ->
+                        highlight != null && (row.item == highlight || (row.item == null && row.section == highlight.section))
+                    },
+                    highlightKey = highlight,
+                    modifier = Modifier.fillMaxSize().padding(padding),
+                )
+            } else {
+                // Search spans every row on every screen. A hit keeps its
+                // section header for context; a nested hit renders as a
+                // navigation row that opens its sub-screen with the row
+                // flashed, a top-level hit renders its real control in place.
+                // No leading icons here: the header already names the
+                // section, and icons on only the few top-level hits among
+                // plain nested ones would read as an inconsistency.
+                val matches = searchSettingsRows(rows, effectiveQuery)
+                if (matches.isEmpty()) {
+                    Text(
+                        text = stringResource(R.string.settings_search_empty, query),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(padding).padding(24.dp),
+                    )
+                } else {
+                    val results =
+                        matches.map { row ->
+                            val item = row.item
+                            if (item != null && item.nested) {
+                                SettingsRowEntry(row.section, row.title, row.summary, item) {
+                                    SettingRow(
+                                        title = row.title,
+                                        subtitle = row.summary,
+                                        onClick = { onOpenSection(item.section, item) },
+                                    )
+                                }
+                            } else {
+                                row
+                            }
+                        }
+                    SettingsRowList(
+                        rows = results,
+                        busy = busy,
+                        showHeaders = true,
+                        leadingIcon = { null },
+                        isHighlightTarget = { false },
+                        highlightKey = null,
+                        modifier = Modifier.fillMaxSize().padding(padding),
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * One section's rows on their own screen. The title bar names the section,
+ * so no header is drawn; a [highlight] arriving from search or a deep link
+ * scrolls to that row and flashes it exactly as the root screen used to.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun SettingsSectionScreen(
+    section: SettingsSection,
+    highlight: SettingsItem? = null,
+    onBack: () -> Unit,
+    navigation: SettingsNavigation,
+    viewModel: SettingsViewModel = hiltViewModel(),
+) {
+    SettingsRowsHost(viewModel = viewModel, navigation = navigation) { rows, busy, snackbarHostState ->
+        Scaffold(
+            topBar = {
+                TopAppBar(
+                    title = { Text(stringResource(section.titleRes)) },
+                    navigationIcon = {
+                        TooltipIconButton(
+                            label = stringResource(R.string.action_back),
+                            onClick = onBack,
+                            icon = Icons.AutoMirrored.Outlined.ArrowBack,
+                        )
+                    },
+                )
+            },
+            snackbarHost = { SwipeDismissSnackbarHost(snackbarHostState) },
+        ) { padding ->
+            SettingsRowList(
+                rows = rows.filter { it.section == section },
+                busy = busy,
+                showHeaders = false,
+                // Sub-screen rows stay plain: only the root screen carries icons.
+                leadingIcon = { null },
+                isHighlightTarget = { row -> highlight != null && row.item == highlight },
+                highlightKey = highlight,
+                modifier = Modifier.fillMaxSize().padding(padding),
+            )
+        }
+    }
+}
+
+/**
+ * Search over the row catalog: a keyword may match the row's title, its
+ * summary, or the name of the section it lives in, so "about" lists every
+ * About row and a nested hit is found by what its section is called too.
+ */
+@Composable
+internal fun searchSettingsRows(
+    rows: List<SettingsRowEntry>,
+    query: String,
+): List<SettingsRowEntry> {
+    val sectionTitles = SettingsSection.entries.associateWith { stringResource(it.titleRes) }
+    return filterSettingsRows(rows, query, { it.title }) { "${sectionTitles.getValue(it.section)} ${it.summary}" }
+}
+
+/**
+ * Everything both settings screens share below the top bar: the ViewModel
+ * state, the file pickers, the snackbar events, the dialogs, and the full
+ * row catalog resolved to entries. [content] gets every visible row (the
+ * root shows the sections and searches all of them; a sub-screen filters
+ * to its own), whether a long-running job is busy, and the snackbar host
+ * state for its scaffold.
+ */
+@Composable
+private fun SettingsRowsHost(
+    viewModel: SettingsViewModel,
+    navigation: SettingsNavigation,
+    content: @Composable (rows: List<SettingsRowEntry>, busy: Boolean, snackbarHostState: SnackbarHostState) -> Unit,
+) {
+    val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val pendingOtpClear by viewModel.pendingOtpClear.collectAsStateWithLifecycle()
+    val senderSuggestions by viewModel.senderSuggestions.collectAsStateWithLifecycle()
+    val snackbarHostState = remember { SnackbarHostState() }
+    var dialog by remember { mutableStateOf<SettingsDialog?>(null) }
+
+    val backupDone = stringResource(R.string.settings_backup_done)
+    val backupFailed = stringResource(R.string.settings_backup_failed)
+    val restoreFailed = stringResource(R.string.settings_restore_failed)
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val resources = androidx.compose.ui.platform.LocalResources.current
+    val scope = rememberCoroutineScope()
+
+    // Source code / Support rows (UPI, PayPal, Star on GitHub): hand the URL to
+    // whatever app claims it; a missing handler (no browser, no UPI app)
+    // surfaces a snackbar, never a crash.
+    val linkNoHandler = stringResource(R.string.settings_link_no_handler)
+    val openLink: (String) -> Unit = { url ->
+        if (!ExternalLinks.open(context, url)) {
+            scope.launch { snackbarHostState.showSnackbar(linkNoHandler) }
+        }
+    }
+
+    // Customise notifications: hands off to Android's own notification
+    // settings for this app (channel list on 26+, app details page before
+    // channels existed). A ROM with neither screen gets a snackbar - a row
+    // that silently does nothing is worse than no row.
+    val systemSettingsUnavailable = stringResource(R.string.settings_system_notifications_no_handler)
+    val openSystemNotificationSettings: () -> Unit = {
+        if (!ExternalLinks.openAppNotificationSettings(context)) {
+            scope.launch { snackbarHostState.showSnackbar(systemSettingsUnavailable) }
+        }
+    }
+
+    val backupLauncher =
+        rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+            if (uri != null) viewModel.backupTo(uri)
+        }
+    val restoreLauncher =
+        rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+            if (uri != null) viewModel.restoreFrom(uri)
+        }
+    val settingsBackupLauncher =
+        rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+            if (uri != null) viewModel.backupSettingsTo(uri)
+        }
+    val settingsRestoreLauncher =
+        rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+            if (uri != null) viewModel.restoreSettingsFrom(uri)
+        }
+    // Automatic-backup directory: the grant must outlive this Activity, so
+    // the persistable permission is taken here, before the ViewModel ever
+    // stores the uri - a stored uri is always a usable one.
+    val backupDirectoryLauncher =
+        rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+            if (uri != null) {
+                context.contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+                )
+            }
+            viewModel.onBackupDirectoryPicked(uri?.toString())
+        }
+    // Direct call: CALL_PHONE is requested HERE, when the user switches the
+    // toggle on - never at first launch. Whatever the dialog's answer, the
+    // user's intent was ON, so ON is what goes to the ViewModel: it re-reads
+    // the grant from the package manager - the ONE source of truth for
+    // whether the permission is held - stores the preference only if it is,
+    // and on a denial leaves the toggle off AND explains why
+    // (DirectCallDenied). Passing the raw result through would turn a
+    // denial into a silent "off" that never reaches the explanation.
+    // Switching off needs no permission.
+    val callPermissionLauncher =
+        rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
+            viewModel.setDirectCall(true)
+        }
+    val setDirectCall: (Boolean) -> Unit = { on ->
+        when {
+            !on -> viewModel.setDirectCall(false)
+            DirectCall.isPermitted(context) -> viewModel.setDirectCall(true)
+            else -> callPermissionLauncher.launch(DirectCall.PERMISSION)
+        }
+    }
+    // First-time DAILY/WEEKLY selection with no directory yet: the ViewModel
+    // parks the requested frequency and this launches the picker for it.
+    val pendingBackupFrequency by viewModel.pendingBackupFrequency.collectAsStateWithLifecycle()
+    LaunchedEffect(pendingBackupFrequency) {
+        if (pendingBackupFrequency != null) backupDirectoryLauncher.launch(null)
+    }
+
+    LaunchedEffect(Unit) {
+        viewModel.eventFlow.collect { event ->
+            snackbarHostState.showSnackbar(
+                when (event) {
+                    SettingsEvent.BackupDone -> {
+                        backupDone
+                    }
+
+                    SettingsEvent.BackupFailed -> {
+                        backupFailed
+                    }
+
+                    SettingsEvent.BackupDirectoryDeclined -> {
+                        resources.getString(R.string.settings_backup_dir_declined)
+                    }
+
+                    is SettingsEvent.RestoreDone -> {
+                        val r = event.result
+                        buildString {
+                            append(
+                                resources.getString(
+                                    R.string.settings_restore_done_counts,
+                                    r.messages,
+                                    r.transactions,
+                                    r.accounts,
+                                    r.rules,
+                                    r.reminders,
+                                ),
+                            )
+                            if (r.defaultedValues > 0 || r.skippedRows > 0) {
+                                append(' ')
+                                append(
+                                    resources.getString(
+                                        R.string.settings_restore_done_issues,
+                                        r.defaultedValues,
+                                        r.skippedRows,
+                                    ),
+                                )
+                            }
+                        }
+                    }
+
+                    is SettingsEvent.RestoreFailed -> {
+                        event.reason
+                            ?.let { resources.getString(R.string.settings_restore_failed_reason, it) }
+                            ?: restoreFailed
+                    }
+
+                    SettingsEvent.SettingsBackupDone -> {
+                        resources.getString(R.string.settings_backup_settings_done)
+                    }
+
+                    SettingsEvent.SettingsBackupFailed -> {
+                        resources.getString(R.string.settings_backup_settings_failed)
+                    }
+
+                    is SettingsEvent.SettingsRestoreDone -> {
+                        buildString {
+                            append(
+                                resources.getString(
+                                    R.string.settings_restore_settings_done,
+                                    event.result.applied,
+                                ),
+                            )
+                            if (event.result.rules > 0) {
+                                append(' ')
+                                append(
+                                    resources.getString(
+                                        R.string.settings_restore_settings_rules,
+                                        event.result.rules,
+                                    ),
+                                )
+                            }
+                            if (event.result.skipped > 0) {
+                                append(' ')
+                                append(
+                                    resources.getString(
+                                        R.string.settings_restore_settings_skipped,
+                                        event.result.skipped,
+                                    ),
+                                )
+                            }
+                        }
+                    }
+
+                    SettingsEvent.SettingsRestoreFailed -> {
+                        resources.getString(R.string.settings_restore_settings_failed)
+                    }
+
+                    is SettingsEvent.SortDone -> {
+                        resources.getString(R.string.settings_sort_done_count, event.count)
+                    }
+
+                    is SettingsEvent.OtpCleared -> {
+                        resources.getString(R.string.settings_clear_otp_done, event.count)
+                    }
+
+                    SettingsEvent.OtpClearEmpty -> {
+                        resources.getString(R.string.settings_clear_otp_empty)
+                    }
+
+                    SettingsEvent.LastSectionKept -> {
+                        resources.getString(R.string.settings_last_section_kept)
+                    }
+
+                    SettingsEvent.MuteRefusedBlocked -> {
+                        resources.getString(R.string.settings_mute_refused_blocked)
+                    }
+
+                    SettingsEvent.DirectCallDenied -> {
+                        resources.getString(R.string.settings_direct_call_denied)
+                    }
+
+                    SettingsEvent.DirectCallRevoked -> {
+                        resources.getString(R.string.settings_direct_call_revoked)
+                    }
+                },
+            )
+        }
+    }
+
+    val rows =
+        settingsRowEntries(
+            state = state,
+            viewModel = viewModel,
+            openDialog = { dialog = it },
+            onBackupNow = { backupLauncher.launch(BackupFileNames.manualMessages(System.currentTimeMillis())) },
+            onRestore = { restoreLauncher.launch(arrayOf("application/json", "text/plain")) },
+            onBackupSettings = { settingsBackupLauncher.launch(BackupFileNames.manualSettings(System.currentTimeMillis())) },
+            onRestoreSettings = { settingsRestoreLauncher.launch(arrayOf("application/json", "text/plain")) },
+            onPickBackupLocation = { backupDirectoryLauncher.launch(null) },
+            onManageRules = navigation.onManageRules,
+            onArchived = navigation.onArchived,
+            onRecycleBin = navigation.onRecycleBin,
+            onPermissions = navigation.onPermissions,
+            onPrivacyPolicy = navigation.onPrivacyPolicy,
+            onLicenses = navigation.onLicenses,
+            onShareLogs = navigation.onShareLogs,
+            onOpenLink = openLink,
+            onSystemNotificationSettings = openSystemNotificationSettings,
+            onDirectCall = setDirectCall,
+        )
+
+    content(rows, state.busy, snackbarHostState)
+
+    when (dialog) {
+        SettingsDialog.THEME -> {
+            RadioDialog(
+                title = stringResource(R.string.settings_theme),
+                options = ThemeMode.entries.map { it to themeLabel(it) },
+                selected = state.theme,
+                onSelect = {
+                    viewModel.setTheme(it)
+                    dialog = null
+                },
+                onDismiss = { dialog = null },
+            )
+        }
+
+        SettingsDialog.INBOX_PILL_ORDER -> {
+            // Hidden pills are reordered too, under their built-in names: the
+            // order is one preference, visibility another (InboxPillConfig).
+            val pills by viewModel.inboxPills.collectAsStateWithLifecycle()
+            PillOrderDialog(
+                title = stringResource(R.string.settings_pill_order),
+                order = pills.ordered,
+                label = { it.defaultLabel() },
+                onOrderChange = viewModel::setInboxPillOrder,
+                onReset = {
+                    viewModel.resetInboxPillOrder()
+                    dialog = null
+                },
+                onDismiss = { dialog = null },
+            )
+        }
+
+        SettingsDialog.INBOX_VISIBLE_PILLS -> {
+            val pills by viewModel.inboxPills.collectAsStateWithLifecycle()
+            VisiblePillsDialog(
+                pills = pills.pills,
+                hint = stringResource(R.string.settings_inbox_visible_pills_hint),
+                label = { it.defaultLabel() },
+                onConfirm = {
+                    viewModel.setInboxHiddenPills(it)
+                    dialog = null
+                },
+                onDismiss = { dialog = null },
+            )
+        }
+
+        SettingsDialog.FINANCE_VISIBLE_PILLS -> {
+            val pills by viewModel.financePills.collectAsStateWithLifecycle()
+            VisiblePillsDialog(
+                pills = pills,
+                hint = stringResource(R.string.settings_finance_visible_pills_hint),
+                label = { it.displayName() },
+                onConfirm = {
+                    viewModel.setFinanceHiddenPills(it)
+                    dialog = null
+                },
+                onDismiss = { dialog = null },
+            )
+        }
+
+        SettingsDialog.ALERTS_VISIBLE_PILLS -> {
+            val pills by viewModel.alertsPills.collectAsStateWithLifecycle()
+            VisiblePillsDialog(
+                pills = pills,
+                hint = stringResource(R.string.settings_alerts_visible_pills_hint),
+                label = { it.displayName() },
+                onConfirm = {
+                    viewModel.setAlertsHiddenPills(it)
+                    dialog = null
+                },
+                onDismiss = { dialog = null },
+            )
+        }
+
+        SettingsDialog.FINANCE_PILL_ORDER -> {
+            // Hidden pills are reordered too (order and visibility are
+            // independent preferences), exactly like the Inbox.
+            val pills by viewModel.financePills.collectAsStateWithLifecycle()
+            PillOrderDialog(
+                title = stringResource(R.string.settings_pill_order),
+                order = pills.ordered,
+                label = { it.displayName() },
+                onOrderChange = viewModel::setFinancePillOrder,
+                onReset = {
+                    viewModel.resetFinancePillOrder()
+                    dialog = null
+                },
+                onDismiss = { dialog = null },
+            )
+        }
+
+        SettingsDialog.ALERTS_PILL_ORDER -> {
+            val pills by viewModel.alertsPills.collectAsStateWithLifecycle()
+            PillOrderDialog(
+                title = stringResource(R.string.settings_pill_order),
+                order = pills.ordered,
+                label = { it.displayName() },
+                onOrderChange = viewModel::setAlertsPillOrder,
+                onReset = {
+                    viewModel.resetAlertsPillOrder()
+                    dialog = null
+                },
+                onDismiss = { dialog = null },
+            )
+        }
+
+        SettingsDialog.SELECTION_ACTION_ORDER -> {
+            // The conversation selection bar's actions (issue #61), ordered
+            // by the SAME dialog as the pills: order only, nothing hidden,
+            // the first INLINE_SLOTS sit inline and the rest overflow.
+            val actions by viewModel.selectionActions.collectAsStateWithLifecycle()
+            PillOrderDialog(
+                title = stringResource(R.string.settings_selection_action_order),
+                order = actions.ordered,
+                label = { stringResource(it.labelRes()) },
+                onOrderChange = viewModel::setSelectionActionOrder,
+                onReset = {
+                    viewModel.resetSelectionActionOrder()
+                    dialog = null
+                },
+                onDismiss = { dialog = null },
+                hint = stringResource(R.string.selection_action_order_drag_hint),
+            )
+        }
+
+        SettingsDialog.LOGO_BACKGROUND -> {
+            RadioDialog(
+                title = stringResource(R.string.settings_logo_background),
+                options = LogoBackground.entries.map { it to logoBackgroundLabel(it) },
+                selected = state.logoBackground,
+                onSelect = {
+                    viewModel.setLogoBackground(it)
+                    dialog = null
+                },
+                onDismiss = { dialog = null },
+            )
+        }
+
+        SettingsDialog.MESSAGE_TEXT_SIZE -> {
+            RadioDialog(
+                title = stringResource(R.string.settings_message_text_size),
+                options = MessageTextSize.entries.map { it to messageTextSizeLabel(it) },
+                selected = state.messageTextSize,
+                onSelect = {
+                    viewModel.setMessageTextSize(it)
+                    dialog = null
+                },
+                onDismiss = { dialog = null },
+            )
+        }
+
+        SettingsDialog.TIME_FORMAT -> {
+            RadioDialog(
+                title = stringResource(R.string.settings_time_format),
+                options = TimeFormat.entries.map { it to timeFormatLabel(it) },
+                selected = state.timeFormat,
+                onSelect = {
+                    viewModel.setTimeFormat(it)
+                    dialog = null
+                },
+                onDismiss = { dialog = null },
+            )
+        }
+
+        SettingsDialog.NOTIFICATION_ACTIONS -> {
+            NotificationActionsDialog(
+                selected = state.notificationActions,
+                directCall = state.directCall,
+                onDirectCall = setDirectCall,
+                onConfirm = {
+                    viewModel.setNotificationActions(it)
+                    dialog = null
+                },
+                onDismiss = { dialog = null },
+            )
+        }
+
+        SettingsDialog.SWIPE_START -> {
+            RadioDialog(
+                title = stringResource(R.string.settings_swipe_right),
+                options = SwipeAction.entries.map { it to swipeActionLabel(it) },
+                selected = state.swipeActionStart,
+                onSelect = {
+                    viewModel.setSwipeActionStart(it)
+                    dialog = null
+                },
+                onDismiss = { dialog = null },
+            )
+        }
+
+        SettingsDialog.SWIPE_END -> {
+            RadioDialog(
+                title = stringResource(R.string.settings_swipe_left),
+                options = SwipeAction.entries.map { it to swipeActionLabel(it) },
+                selected = state.swipeActionEnd,
+                onSelect = {
+                    viewModel.setSwipeActionEnd(it)
+                    dialog = null
+                },
+                onDismiss = { dialog = null },
+            )
+        }
+
+        SettingsDialog.SWIPE_DEAD_ZONE -> {
+            SwipeDeadZoneDialog(
+                value = state.swipeDeadZone,
+                onChange = viewModel::setSwipeDeadZone,
+                onDismiss = { dialog = null },
+            )
+        }
+
+        SettingsDialog.DEFAULT_SCREEN -> {
+            RadioDialog(
+                title = stringResource(R.string.settings_default_screen),
+                // Only enabled sections are offered - a hidden tab cannot be
+                // the start screen. The stored preference survives untouched;
+                // what is selected here is the EFFECTIVE start (the same
+                // resolution navigation applies at cold start).
+                options = state.sections.visibleTabs.map { it to destinationLabel(it) },
+                selected = state.sections.resolveStart(state.defaultDestination),
+                onSelect = {
+                    viewModel.setDefaultDestination(it)
+                    dialog = null
+                },
+                onDismiss = { dialog = null },
+            )
+        }
+
+        SettingsDialog.DEFAULT_FILTER -> {
+            RadioDialog(
+                title = stringResource(R.string.settings_default_inbox_filter),
+                options =
+                    (listOf<Category?>(null) + Category.entries).map { it to inboxFilterLabel(it) },
+                selected = state.defaultInboxFilter,
+                onSelect = {
+                    viewModel.setDefaultInboxFilter(it)
+                    dialog = null
+                },
+                onDismiss = { dialog = null },
+            )
+        }
+
+        SettingsDialog.DEFAULT_FINANCE_FILTER -> {
+            RadioDialog(
+                title = stringResource(R.string.settings_default_finance_filter),
+                options = FinanceTab.entries.map { it to it.displayName() },
+                selected = state.defaultFinanceFilter,
+                onSelect = {
+                    viewModel.setDefaultFinanceFilter(it)
+                    dialog = null
+                },
+                onDismiss = { dialog = null },
+            )
+        }
+
+        SettingsDialog.FINANCE_CURRENCY -> {
+            RadioDialog(
+                title = stringResource(R.string.settings_finance_currency),
+                options =
+                    listOf<Pair<String?, String>>(null to stringResource(R.string.settings_finance_currency_auto)) +
+                        CurrencyCatalog.codes.sorted().map { code -> code to currencyOptionLabel(code) },
+                selected = state.financeCurrency,
+                onSelect = {
+                    viewModel.setFinanceCurrency(it)
+                    dialog = null
+                },
+                onDismiss = { dialog = null },
+            )
+        }
+
+        SettingsDialog.OTP_DELETE -> {
+            RadioDialog(
+                title = stringResource(R.string.settings_otp_auto_delete),
+                options = OtpAutoDeletePolicy.entries.map { it to otpDeleteLabel(it) },
+                selected = state.otpAutoDeletePolicy,
+                onSelect = {
+                    viewModel.setOtpAutoDeletePolicy(it)
+                    dialog = null
+                },
+                onDismiss = { dialog = null },
+            )
+        }
+
+        SettingsDialog.DELAYED_SEND_DELAY -> {
+            RadioDialog(
+                title = stringResource(R.string.settings_delayed_send_delay),
+                options = DelayedSendDelay.entries.map { it to delayedSendDelayLabel(it) },
+                selected = state.delayedSendDelay,
+                onSelect = {
+                    viewModel.setDelayedSendDelay(it)
+                    dialog = null
+                },
+                onDismiss = { dialog = null },
+            )
+        }
+
+        SettingsDialog.MESSAGE_SORT_ORDER -> {
+            RadioDialog(
+                title = stringResource(R.string.settings_message_sort_order),
+                options = MessageSortOrder.entries.map { it to messageSortOrderLabel(it) },
+                selected = state.messageSortOrder,
+                onSelect = {
+                    viewModel.setMessageSortOrder(it)
+                    dialog = null
+                },
+                onDismiss = { dialog = null },
+            )
+        }
+
+        SettingsDialog.OTP_SIZE -> {
+            OtpSizeDialog(
+                selected = state.otpDisplaySize,
+                onSelect = {
+                    viewModel.setOtpDisplaySize(it)
+                    dialog = null
+                },
+                onDismiss = { dialog = null },
+            )
+        }
+
+        SettingsDialog.CLEAR_OTP -> {
+            ClearOtpDialog(
+                onContinue = { range ->
+                    viewModel.requestClearOtp(range)
+                    dialog = null
+                },
+                onDismiss = { dialog = null },
+            )
+        }
+
+        SettingsDialog.SIGNATURE -> {
+            SignatureDialog(
+                initial = state.signature,
+                onConfirm = {
+                    viewModel.setSignature(it)
+                    dialog = null
+                },
+                onDismiss = { dialog = null },
+            )
+        }
+
+        SettingsDialog.BLOCK_LIST -> {
+            BlockListDialog(
+                blocked = state.blockedSenders,
+                blockedKeywords = state.blockedKeywords,
+                senderSuggestions = senderSuggestions,
+                onSenderQueryChange = viewModel::onSenderQueryChange,
+                onClearSenderSuggestions = viewModel::clearSenderSuggestions,
+                onBlock = viewModel::blockSender,
+                onUnblock = viewModel::unblockSender,
+                onAddKeyword = viewModel::addBlockedKeyword,
+                onRemoveKeyword = viewModel::removeBlockedKeyword,
+                onDismiss = {
+                    viewModel.clearSenderSuggestions()
+                    dialog = null
+                },
+            )
+        }
+
+        SettingsDialog.MUTED_SENDERS -> {
+            MutedSendersDialog(
+                muted = state.mutedSenders,
+                senderSuggestions = senderSuggestions,
+                onSenderQueryChange = viewModel::onSenderQueryChange,
+                onClearSenderSuggestions = viewModel::clearSenderSuggestions,
+                onMute = viewModel::muteSender,
+                onUnmute = viewModel::unmuteSender,
+                onDismiss = {
+                    viewModel.clearSenderSuggestions()
+                    dialog = null
+                },
+            )
+        }
+
+        SettingsDialog.BACKUP_FREQUENCY -> {
+            RadioDialog(
+                title = stringResource(R.string.settings_backup_frequency),
+                options = BackupFrequency.entries.map { it to backupFrequencyLabel(it) },
+                selected = state.backupFrequency,
+                onSelect = {
+                    viewModel.requestBackupFrequency(it)
+                    dialog = null
+                },
+                onDismiss = { dialog = null },
+            )
+        }
+
+        SettingsDialog.SORT_CONFIRM -> {
+            AlertDialog(
+                onDismissRequest = { dialog = null },
+                title = { Text(stringResource(R.string.settings_sort_again)) },
+                text = { Text(stringResource(R.string.settings_sort_confirm)) },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            viewModel.sortInboxAgain()
+                            dialog = null
+                        },
+                    ) { Text(stringResource(R.string.settings_sort_go)) }
+                },
+                dismissButton = {
+                    TextButton(onClick = { dialog = null }) { Text(stringResource(R.string.action_cancel)) }
+                },
+            )
+        }
+
+        null -> {
+            Unit
+        }
+    }
+
+    // Confirm-before-delete for the manual OTP cleanup: reuses the shared
+    // delete dialog because this also removes the messages from the system
+    // SMS provider and cannot be undone.
+    pendingOtpClear?.let { pending ->
+        DeleteConfirmationDialog(
+            title = stringResource(R.string.settings_clear_otp_confirm_title),
+            text = stringResource(R.string.settings_clear_otp_confirm_text, pending.count),
+            onConfirm = viewModel::confirmClearOtp,
+            onDismiss = viewModel::dismissClearOtp,
+        )
+    }
+}
+
+/**
+ * The scrolling list both settings screens render: the rows in catalog
+ * order, an optional section header whenever the section changes (search
+ * results keep them for context; a sub-screen's title bar already names
+ * its section), and the arrival highlight - the first row satisfying
+ * [isHighlightTarget] is scrolled to and flashed once, keyed on
+ * [highlightKey] so a new target re-arms it and a recomposition does not.
+ */
+@Composable
+private fun SettingsRowList(
+    rows: List<SettingsRowEntry>,
+    busy: Boolean,
+    showHeaders: Boolean,
+    /**
+     * The decorative leading icon to render for a row, or null for none. The
+     * root screen answers with the section's catalog icon; a sub-screen and
+     * the search results answer null. One place decides, so no row can
+     * differ from its neighbours by accident.
+     */
+    leadingIcon: (SettingsRowEntry) -> ImageVector?,
+    isHighlightTarget: (SettingsRowEntry) -> Boolean,
+    highlightKey: Any?,
+    modifier: Modifier = Modifier,
+) {
+    val scrollState = rememberScrollState()
+    // The flash fades once, then never returns for this visit - a wash that
+    // reappeared on every recomposition would be a strobe.
+    var highlighted by remember(highlightKey) { mutableStateOf(highlightKey != null) }
+    var highlightOffset by remember(highlightKey) { mutableStateOf<Int?>(null) }
+    LaunchedEffect(highlightKey, highlightOffset) {
+        val offset = highlightOffset ?: return@LaunchedEffect
+        // Leave the row a little clear of the top bar rather than pinning it
+        // flush, so its section header stays visible for context.
+        scrollState.animateScrollTo((offset - 200).coerceAtLeast(0))
+        delay(HighlightTiming.HOLD_MS)
+        highlighted = false
+    }
+    Column(modifier = modifier.verticalScroll(scrollState)) {
+        if (busy) {
+            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+        }
+        var lastSection: SettingsSection? = null
+        rows.forEach { row ->
+            if (showHeaders && row.section != lastSection) {
+                lastSection = row.section
+                SectionHeader(stringResource(row.section.titleRes))
+            }
+            val icon = leadingIcon(row)
+            if (isHighlightTarget(row)) {
+                HighlightedRow(
+                    active = highlighted,
+                    onPositioned = { y -> if (highlightOffset == null) highlightOffset = y },
+                    content = { row.content(icon) },
+                )
+            } else {
+                row.content(icon)
+            }
+        }
+    }
+}
+
+/**
+ * The full settings list as a declarative model: one entry per row, with
+ * the resolved title/summary the search filters on. Section order and row
+ * order come from [SettingsItem]'s declaration order (see SettingsCatalog),
+ * so a plain unit test can assert the exact layout; this function only maps
+ * each item to its behaviour.
+ */
+@Composable
+private fun settingsRowEntries(
+    state: SettingsUiState,
+    viewModel: SettingsViewModel,
+    openDialog: (SettingsDialog) -> Unit,
+    onBackupNow: () -> Unit,
+    onRestore: () -> Unit,
+    onBackupSettings: () -> Unit,
+    onRestoreSettings: () -> Unit,
+    onPickBackupLocation: () -> Unit,
+    onManageRules: () -> Unit,
+    onArchived: () -> Unit,
+    onRecycleBin: () -> Unit,
+    onPermissions: () -> Unit,
+    onPrivacyPolicy: () -> Unit,
+    onLicenses: () -> Unit,
+    onShareLogs: () -> Unit,
+    onOpenLink: (String) -> Unit,
+    onSystemNotificationSettings: () -> Unit,
+    onDirectCall: (Boolean) -> Unit,
+): List<SettingsRowEntry> {
+    // Both helpers forward the surface's leading icon, so a direct-entry
+    // row (Default screen, Manage rules, Signature) shows its section icon
+    // on the root screen and stays plain in the search results.
+    fun row(
+        section: SettingsSection,
+        title: String,
+        summary: String,
+        onClick: () -> Unit,
+    ) = SettingsRowEntry(section, title, summary) { leadingIcon ->
+        SettingRow(title = title, subtitle = summary, onClick = onClick, leadingIcon = leadingIcon)
+    }
+
+    fun toggle(
+        section: SettingsSection,
+        title: String,
+        summary: String,
+        checked: Boolean,
+        onToggle: (Boolean) -> Unit,
+    ) = SettingsRowEntry(section, title, summary) { leadingIcon ->
+        ToggleRow(title = title, subtitle = summary, checked = checked, onToggle = onToggle, leadingIcon = leadingIcon)
+    }
+
+    // A disabled section contributes only its "Show … tab" toggle (the
+    // other rows configure a screen that is currently hidden), and the
+    // sending-delay picker only appears while delayed sending is on.
+    return visibleSettingsItems(SettingsVisibility(state.sections, state.delayedSendEnabled)).map { item ->
+        val section = item.section
+        val title = stringResource(item.titleRes)
+        // Every row is tagged with the catalog entry it renders, so a highlight
+        // can target one without each branch having to remember to say so.
+        val entry =
+            when (item) {
+                SettingsItem.ARCHIVED -> {
+                    val archivedSummary = stringResource(R.string.settings_archived_summary)
+                    SettingsRowEntry(section, title, archivedSummary) {
+                        ActionRow(
+                            icon = Icons.Outlined.Archive,
+                            title = title,
+                            subtitle = archivedSummary,
+                            onClick = onArchived,
+                        )
+                    }
+                }
+
+                // Tap opens the bin (like Archived); the trailing switch flips
+                // the behaviour of committed deletes. Retention is fixed at 30
+                // days, stated in the summary.
+                SettingsItem.RECYCLE_BIN -> {
+                    val binSummary =
+                        stringResource(
+                            if (state.recycleBinEnabled) {
+                                R.string.settings_recycle_bin_summary_on
+                            } else {
+                                R.string.settings_recycle_bin_summary_off
+                            },
+                        )
+                    SettingsRowEntry(section, title, binSummary) {
+                        NavigableToggleRow(
+                            icon = Icons.Outlined.Recycling,
+                            title = title,
+                            subtitle = binSummary,
+                            checked = state.recycleBinEnabled,
+                            onClick = onRecycleBin,
+                            onToggle = viewModel::setRecycleBinEnabled,
+                        )
+                    }
+                }
+
+                SettingsItem.BLOCK_LIST -> {
+                    row(
+                        section,
+                        title,
+                        stringResource(
+                            R.string.settings_block_list_summary_with_keywords,
+                            state.blockedSenders.size,
+                            state.blockedKeywords.size,
+                        ),
+                    ) {
+                        openDialog(SettingsDialog.BLOCK_LIST)
+                    }
+                }
+
+                SettingsItem.MUTED_SENDERS -> {
+                    row(
+                        section,
+                        title,
+                        pluralStringResource(
+                            R.plurals.settings_muted_senders_summary,
+                            state.mutedSenders.size,
+                            state.mutedSenders.size,
+                        ),
+                    ) {
+                        openDialog(SettingsDialog.MUTED_SENDERS)
+                    }
+                }
+
+                SettingsItem.STRIP_ACCENTS -> {
+                    toggle(
+                        section = section,
+                        title = title,
+                        summary = stringResource(R.string.settings_strip_accents_summary),
+                        checked = state.stripAccents,
+                        onToggle = viewModel::setStripAccents,
+                    )
+                }
+
+                SettingsItem.MMS_SENDING -> {
+                    toggle(
+                        section = section,
+                        title = title,
+                        summary = stringResource(R.string.settings_mms_sending_summary),
+                        checked = state.mmsSendingEnabled,
+                        onToggle = viewModel::setMmsSendingEnabled,
+                    )
+                }
+
+                SettingsItem.DELAYED_SEND -> {
+                    toggle(
+                        section = section,
+                        title = title,
+                        summary = stringResource(R.string.settings_delayed_send_summary),
+                        checked = state.delayedSendEnabled,
+                        onToggle = viewModel::setDelayedSendEnabled,
+                    )
+                }
+
+                SettingsItem.DELAYED_SEND_DELAY -> {
+                    row(section, title, delayedSendDelayLabel(state.delayedSendDelay)) {
+                        openDialog(SettingsDialog.DELAYED_SEND_DELAY)
+                    }
+                }
+
+                SettingsItem.SHOW_EXTRACTED_DETAILS -> {
+                    toggle(
+                        section = section,
+                        title = title,
+                        summary = stringResource(R.string.settings_show_transaction_details_summary),
+                        checked = state.showTransactionDetails,
+                        onToggle = viewModel::setShowTransactionDetails,
+                    )
+                }
+
+                SettingsItem.MESSAGE_SORT_ORDER -> {
+                    row(section, title, messageSortOrderLabel(state.messageSortOrder)) {
+                        openDialog(SettingsDialog.MESSAGE_SORT_ORDER)
+                    }
+                }
+
+                SettingsItem.SELECTION_ACTION_ORDER -> {
+                    val actions by viewModel.selectionActions.collectAsStateWithLifecycle()
+                    row(section, title, selectionActionOrderSummary(actions.ordered)) {
+                        openDialog(SettingsDialog.SELECTION_ACTION_ORDER)
+                    }
+                }
+
+                // Direct call (opt-in, default OFF): governs BOTH Call
+                // surfaces - the conversation title bar and the
+                // notification action - through one DirectCall mapping.
+                // Switching on goes through the CALL_PHONE request
+                // (SettingsRowsHost); the checked state is the stored value,
+                // which the ViewModel keeps in step with the grant.
+                SettingsItem.DIRECT_CALL -> {
+                    toggle(
+                        section = section,
+                        title = title,
+                        summary = stringResource(R.string.settings_direct_call_summary),
+                        checked = state.directCall,
+                        onToggle = onDirectCall,
+                    )
+                }
+
+                SettingsItem.SORT_AGAIN -> {
+                    val sortSummary = stringResource(R.string.settings_sort_again_summary)
+                    SettingsRowEntry(section, title, sortSummary) {
+                        val sort = state.sortProgress
+                        if (sort != null) {
+                            // Running: determinate inline progress with "x of y", re-trigger
+                            // disabled (row is not clickable), and a cancel affordance.
+                            ListItem(
+                                headlineContent = { Text(stringResource(R.string.settings_sort_running)) },
+                                supportingContent = {
+                                    Column {
+                                        LinearProgressIndicator(
+                                            progress = { if (sort.total > 0) sort.processed / sort.total.toFloat() else 0f },
+                                            modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                                        )
+                                        Text(
+                                            text =
+                                                stringResource(
+                                                    R.string.settings_sort_progress,
+                                                    sort.processed,
+                                                    sort.total,
+                                                ),
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+                                },
+                                trailingContent = {
+                                    TextButton(onClick = viewModel::cancelSort) {
+                                        Text(stringResource(R.string.action_cancel))
+                                    }
+                                },
+                            )
+                        } else {
+                            // Same convention as "Clear older OTPs": one-shot
+                            // ACTION rows get a leading icon; preference and
+                            // navigation rows stay plain.
+                            ActionRow(
+                                icon = Icons.Outlined.Refresh,
+                                title = title,
+                                subtitle = sortSummary,
+                                onClick = { openDialog(SettingsDialog.SORT_CONFIRM) },
+                            )
+                        }
+                    }
+                }
+
+                SettingsItem.THEME -> {
+                    row(section, title, themeLabel(state.theme)) { openDialog(SettingsDialog.THEME) }
+                }
+
+                SettingsItem.DYNAMIC_COLOR -> {
+                    toggle(
+                        section = section,
+                        title = title,
+                        summary = stringResource(R.string.settings_dynamic_color_summary),
+                        checked = state.dynamicColor,
+                        onToggle = viewModel::setDynamicColor,
+                    )
+                }
+
+                SettingsItem.SHOW_RICH_AVATARS -> {
+                    toggle(
+                        section = section,
+                        title = title,
+                        summary =
+                            stringResource(
+                                if (state.showRichAvatars) {
+                                    R.string.settings_show_rich_avatars_on
+                                } else {
+                                    R.string.settings_show_rich_avatars_off
+                                },
+                            ),
+                        checked = state.showRichAvatars,
+                        onToggle = viewModel::setShowRichAvatars,
+                    )
+                }
+
+                SettingsItem.LOGO_BACKGROUND -> {
+                    row(section, title, logoBackgroundLabel(state.logoBackground)) {
+                        openDialog(SettingsDialog.LOGO_BACKGROUND)
+                    }
+                }
+
+                // GitHub #157. The summary says plainly that Android's own
+                // font-size setting already applies: this multiplies it.
+                SettingsItem.MESSAGE_TEXT_SIZE -> {
+                    row(
+                        section,
+                        title,
+                        stringResource(R.string.settings_message_text_size_summary, messageTextSizeLabel(state.messageTextSize)),
+                    ) {
+                        openDialog(SettingsDialog.MESSAGE_TEXT_SIZE)
+                    }
+                }
+
+                // GitHub #158.
+                SettingsItem.TIME_FORMAT -> {
+                    row(section, title, timeFormatLabel(state.timeFormat)) {
+                        openDialog(SettingsDialog.TIME_FORMAT)
+                    }
+                }
+
+                // TODO: deliveryReports is written here but not consumed yet - the
+                //  platform stage must read it in SmsSender to request delivery
+                //  status for outgoing messages.
+                SettingsItem.DELIVERY_REPORTS -> {
+                    toggle(
+                        section = section,
+                        title = title,
+                        summary = stringResource(R.string.settings_delivery_reports_summary),
+                        checked = state.deliveryReports,
+                        onToggle = viewModel::setDeliveryReports,
+                    )
+                }
+
+                SettingsItem.NOTIFICATION_ACTIONS -> {
+                    row(section, title, notificationActionsSummary(state.notificationActions)) {
+                        openDialog(SettingsDialog.NOTIFICATION_ACTIONS)
+                    }
+                }
+
+                SettingsItem.TRANSACTION_NOTIFICATIONS -> {
+                    toggle(
+                        section = section,
+                        title = title,
+                        summary = stringResource(R.string.settings_transaction_notifications_summary),
+                        checked = state.transactionNotifications,
+                        onToggle = viewModel::setTransactionNotifications,
+                    )
+                }
+
+                // ONE switch for every surface the conversation shortcuts
+                // feed - the launcher menu AND the share sheet's direct-share
+                // row - because they are the same ShortcutInfoCompat objects:
+                // a shortcut is either published (and then the launcher has
+                // its name and photo) or it is not, so the two cannot be
+                // split without lying about one of them. The summary says
+                // plainly what is handed over (names and photos, visible to
+                // anyone holding the phone) and what is never handed over,
+                // in both states.
+                SettingsItem.CONVERSATION_SHORTCUTS -> {
+                    toggle(
+                        section = section,
+                        title = title,
+                        summary =
+                            stringResource(
+                                if (state.conversationShortcuts) {
+                                    R.string.settings_conversation_shortcuts_on
+                                } else {
+                                    R.string.settings_conversation_shortcuts_off
+                                },
+                            ),
+                        checked = state.conversationShortcuts,
+                        onToggle = viewModel::setConversationShortcuts,
+                    )
+                }
+
+                // ACTION row (leading icon per convention): leaves the app for
+                // Android's own notification settings, where per-category
+                // channels are tuned. Nothing is stored, nothing to back up.
+                SettingsItem.SYSTEM_NOTIFICATION_SETTINGS -> {
+                    val systemSummary = stringResource(R.string.settings_system_notifications_summary)
+                    SettingsRowEntry(section, title, systemSummary) {
+                        ActionRow(
+                            icon = Icons.AutoMirrored.Outlined.OpenInNew,
+                            title = title,
+                            subtitle = systemSummary,
+                            onClick = onSystemNotificationSettings,
+                        )
+                    }
+                }
+
+                SettingsItem.OTP_AUTO_COPY -> {
+                    toggle(
+                        section = section,
+                        title = title,
+                        summary = stringResource(R.string.settings_otp_auto_copy_summary),
+                        checked = state.otpAutoCopy,
+                        onToggle = viewModel::setOtpAutoCopy,
+                    )
+                }
+
+                SettingsItem.OTP_AUTO_DELETE -> {
+                    row(section, title, otpDeleteLabel(state.otpAutoDeletePolicy)) {
+                        openDialog(SettingsDialog.OTP_DELETE)
+                    }
+                }
+
+                SettingsItem.OTP_SIZE -> {
+                    row(section, title, otpSizeLabel(state.otpDisplaySize)) { openDialog(SettingsDialog.OTP_SIZE) }
+                }
+
+                // One-shot ACTION, not a preference: the leading icon and the
+                // "runs now" copy keep it visually distinct from "Auto delete
+                // OTP" above, which is the recurring policy.
+                SettingsItem.CLEAR_OTP -> {
+                    val clearOtpSummary = stringResource(R.string.settings_clear_otp_summary)
+                    SettingsRowEntry(section, title, clearOtpSummary) {
+                        ActionRow(
+                            icon = Icons.Outlined.DeleteSweep,
+                            title = title,
+                            subtitle = clearOtpSummary,
+                            onClick = { openDialog(SettingsDialog.CLEAR_OTP) },
+                        )
+                    }
+                }
+
+                SettingsItem.SHOW_INBOX_TAB -> {
+                    toggle(
+                        section = section,
+                        title = title,
+                        summary =
+                            stringResource(
+                                if (state.sections.inbox) {
+                                    R.string.settings_show_tab_on
+                                } else {
+                                    R.string.settings_show_inbox_tab_off
+                                },
+                            ),
+                        checked = state.sections.inbox,
+                        onToggle = { viewModel.setSectionEnabled(StartDestination.INBOX, it) },
+                    )
+                }
+
+                SettingsItem.INBOX_PILL_ORDER -> {
+                    row(section, title, stringResource(R.string.settings_pill_order_summary)) {
+                        openDialog(SettingsDialog.INBOX_PILL_ORDER)
+                    }
+                }
+
+                SettingsItem.INBOX_VISIBLE_PILLS -> {
+                    val pills by viewModel.inboxPills.collectAsStateWithLifecycle()
+                    row(section, title, visiblePillsSummary(pills.pills)) {
+                        openDialog(SettingsDialog.INBOX_VISIBLE_PILLS)
+                    }
+                }
+
+                SettingsItem.INBOX_UNREAD_TOGGLE -> {
+                    val shown by viewModel.inboxUnreadToggle.collectAsStateWithLifecycle()
+                    toggle(
+                        section = section,
+                        title = title,
+                        summary =
+                            stringResource(
+                                if (shown) {
+                                    R.string.settings_inbox_unread_toggle_on
+                                } else {
+                                    R.string.settings_inbox_unread_toggle_off
+                                },
+                            ),
+                        checked = shown,
+                        onToggle = viewModel::setInboxUnreadToggle,
+                    )
+                }
+
+                SettingsItem.DEFAULT_INBOX_FILTER -> {
+                    row(section, title, inboxFilterLabel(state.defaultInboxFilter)) {
+                        openDialog(SettingsDialog.DEFAULT_FILTER)
+                    }
+                }
+
+                SettingsItem.SWIPE_RIGHT -> {
+                    row(section, title, swipeActionLabel(state.swipeActionStart)) {
+                        openDialog(SettingsDialog.SWIPE_START)
+                    }
+                }
+
+                SettingsItem.SWIPE_LEFT -> {
+                    row(section, title, swipeActionLabel(state.swipeActionEnd)) {
+                        openDialog(SettingsDialog.SWIPE_END)
+                    }
+                }
+
+                SettingsItem.SWIPE_DEAD_ZONE -> {
+                    row(section, title, swipeDeadZoneSummary(state.swipeDeadZone)) {
+                        openDialog(SettingsDialog.SWIPE_DEAD_ZONE)
+                    }
+                }
+
+                SettingsItem.SHOW_FINANCE_TAB -> {
+                    toggle(
+                        section = section,
+                        title = title,
+                        summary =
+                            stringResource(
+                                if (state.sections.finance) {
+                                    R.string.settings_show_tab_on
+                                } else {
+                                    R.string.settings_show_finance_tab_off
+                                },
+                            ),
+                        checked = state.sections.finance,
+                        onToggle = { viewModel.setSectionEnabled(StartDestination.FINANCE, it) },
+                    )
+                }
+
+                SettingsItem.FINANCE_PILL_ORDER -> {
+                    row(section, title, stringResource(R.string.settings_pill_order_summary)) {
+                        openDialog(SettingsDialog.FINANCE_PILL_ORDER)
+                    }
+                }
+
+                SettingsItem.FINANCE_VISIBLE_PILLS -> {
+                    val pills by viewModel.financePills.collectAsStateWithLifecycle()
+                    row(section, title, visiblePillsSummary(pills)) {
+                        openDialog(SettingsDialog.FINANCE_VISIBLE_PILLS)
+                    }
+                }
+
+                // Privacy, not Appearance: hiding balances behind the device lock is
+                // a confidentiality control, not a cosmetic one - living under
+                // Finance also keeps it visually distinct from the extracted-details
+                // verbosity toggle, which users previously conflated with it.
+                SettingsItem.SHOW_BALANCE -> {
+                    toggle(
+                        section = section,
+                        title = title,
+                        summary =
+                            stringResource(
+                                if (state.showBalance) {
+                                    R.string.settings_show_balance_on
+                                } else {
+                                    R.string.settings_show_balance_off
+                                },
+                            ),
+                        checked = state.showBalance,
+                        onToggle = viewModel::setShowBalance,
+                    )
+                }
+
+                SettingsItem.DEFAULT_FINANCE_FILTER -> {
+                    row(section, title, state.defaultFinanceFilter.displayName()) {
+                        openDialog(SettingsDialog.DEFAULT_FINANCE_FILTER)
+                    }
+                }
+
+                SettingsItem.FINANCE_CURRENCY -> {
+                    row(
+                        section,
+                        title,
+                        state.financeCurrency?.let { code ->
+                            stringResource(R.string.settings_finance_currency_forced_summary, currencyOptionLabel(code))
+                        } ?: stringResource(R.string.settings_finance_currency_auto_summary),
+                    ) { openDialog(SettingsDialog.FINANCE_CURRENCY) }
+                }
+
+                SettingsItem.SHOW_ALERTS_TAB -> {
+                    toggle(
+                        section = section,
+                        title = title,
+                        summary =
+                            stringResource(
+                                if (state.sections.alerts) {
+                                    R.string.settings_show_tab_on
+                                } else {
+                                    R.string.settings_show_alerts_tab_off
+                                },
+                            ),
+                        checked = state.sections.alerts,
+                        onToggle = { viewModel.setSectionEnabled(StartDestination.ALERTS, it) },
+                    )
+                }
+
+                SettingsItem.ALERTS_PILL_ORDER -> {
+                    row(section, title, stringResource(R.string.settings_pill_order_summary)) {
+                        openDialog(SettingsDialog.ALERTS_PILL_ORDER)
+                    }
+                }
+
+                SettingsItem.ALERTS_VISIBLE_PILLS -> {
+                    val pills by viewModel.alertsPills.collectAsStateWithLifecycle()
+                    row(section, title, visiblePillsSummary(pills)) {
+                        openDialog(SettingsDialog.ALERTS_VISIBLE_PILLS)
+                    }
+                }
+
+                SettingsItem.DEFAULT_SCREEN -> {
+                    // The summary shows the EFFECTIVE start screen: a stored
+                    // preference for a disabled section resolves to the first
+                    // enabled tab, exactly as navigation does at cold start.
+                    row(section, title, destinationLabel(state.sections.resolveStart(state.defaultDestination))) {
+                        openDialog(SettingsDialog.DEFAULT_SCREEN)
+                    }
+                }
+
+                SettingsItem.BACKUP_NOW -> {
+                    row(section, title, stringResource(R.string.settings_backup_now_summary), onBackupNow)
+                }
+
+                SettingsItem.RESTORE -> {
+                    row(section, title, stringResource(R.string.settings_restore_summary), onRestore)
+                }
+
+                SettingsItem.BACKUP_SETTINGS -> {
+                    row(section, title, stringResource(R.string.settings_backup_settings_summary), onBackupSettings)
+                }
+
+                SettingsItem.RESTORE_SETTINGS -> {
+                    row(section, title, stringResource(R.string.settings_restore_settings_summary), onRestoreSettings)
+                }
+
+                SettingsItem.BACKUP_FREQUENCY -> {
+                    val frequencyLabel = backupFrequencyLabel(state.backupFrequency)
+                    val directoryName = backupDirectoryDisplayName(state.backupDirectoryUri)
+                    // The chosen directory rides along in the summary once
+                    // automatic backups are active, so where the data lands is
+                    // visible without opening anything.
+                    val backupFrequencySummary =
+                        if (state.backupFrequency != BackupFrequency.OFF && directoryName != null) {
+                            stringResource(R.string.settings_backup_frequency_summary, frequencyLabel, directoryName)
+                        } else {
+                            frequencyLabel
+                        }
+                    val autoBackupNote = stringResource(R.string.settings_auto_backup_note)
+                    SettingsRowEntry(section, title, backupFrequencySummary) {
+                        SettingRow(
+                            title = title,
+                            subtitle = backupFrequencySummary,
+                            onClick = { openDialog(SettingsDialog.BACKUP_FREQUENCY) },
+                        )
+                        if (state.backupDirectoryError) {
+                            Text(
+                                text = stringResource(R.string.settings_backup_dir_error),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                            )
+                        }
+                        Text(
+                            text = autoBackupNote,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                        )
+                    }
+                }
+
+                SettingsItem.BACKUP_LOCATION -> {
+                    row(
+                        section,
+                        title,
+                        backupDirectoryDisplayName(state.backupDirectoryUri)
+                            ?: stringResource(R.string.settings_backup_location_not_set),
+                        onPickBackupLocation,
+                    )
+                }
+
+                SettingsItem.MANAGE_RULES -> {
+                    row(section, title, stringResource(R.string.settings_manage_rules_summary), onManageRules)
+                }
+
+                SettingsItem.SIGNATURE -> {
+                    row(
+                        section,
+                        title,
+                        state.signature.ifBlank { stringResource(R.string.settings_signature_disabled) },
+                    ) { openDialog(SettingsDialog.SIGNATURE) }
+                }
+
+                SettingsItem.VERSION -> {
+                    // Interpolate the real build version so the link always lands
+                    // on this build's release notes - never a hardcoded tag.
+                    val url = stringResource(R.string.url_release_notes, BuildConfig.VERSION_NAME)
+                    row(section, title, appVersion()) { onOpenLink(url) }
+                }
+
+                SettingsItem.SOURCE_CODE -> {
+                    val url = stringResource(R.string.url_source_code)
+                    row(section, title, stringResource(R.string.settings_source_code_summary)) { onOpenLink(url) }
+                }
+
+                SettingsItem.SHARE_LOGS -> {
+                    row(section, title, stringResource(R.string.settings_share_logs_summary), onShareLogs)
+                }
+
+                SettingsItem.UPI -> {
+                    val url = stringResource(R.string.url_donate_upi)
+                    row(section, title, stringResource(R.string.settings_donate_upi_summary)) { onOpenLink(url) }
+                }
+
+                SettingsItem.PAYPAL -> {
+                    val url = stringResource(R.string.url_donate_paypal)
+                    row(section, title, stringResource(R.string.settings_donate_paypal_summary)) { onOpenLink(url) }
+                }
+
+                SettingsItem.STAR_ON_GITHUB -> {
+                    // Deliberately the SAME resource as About's Source code
+                    // row: one URL, so the two can never drift apart.
+                    val url = stringResource(R.string.url_source_code)
+                    row(section, title, stringResource(R.string.settings_star_on_github_summary)) { onOpenLink(url) }
+                }
+
+                SettingsItem.PERMISSIONS -> {
+                    row(section, title, stringResource(R.string.settings_permissions_summary), onPermissions)
+                }
+
+                SettingsItem.PRIVACY_POLICY -> {
+                    row(section, title, stringResource(R.string.settings_privacy_policy_summary), onPrivacyPolicy)
+                }
+
+                SettingsItem.LICENSES -> {
+                    row(section, title, stringResource(R.string.settings_licenses_summary), onLicenses)
+                }
+            }
+        SettingsRowEntry(entry.section, entry.title, entry.summary, item, content = entry.content)
+    }
+}
+
+@Composable
+private fun SectionHeader(title: String) {
+    Text(
+        text = title,
+        style = MaterialTheme.typography.labelLarge,
+        color = MaterialTheme.colorScheme.primary,
+        modifier = Modifier.padding(start = 16.dp, top = 20.dp, bottom = 4.dp),
+    )
+}
+
+/**
+ * A row that runs a one-shot action rather than editing a preference - the
+ * leading icon separates it visually from the plain [SettingRow]s around it.
+ */
+@Composable
+private fun ActionRow(
+    icon: ImageVector,
+    title: String,
+    subtitle: String,
+    onClick: () -> Unit,
+) {
+    ListItem(
+        modifier = Modifier.clickable(onClick = onClick),
+        leadingContent = { DecorativeRowIcon(icon) },
+        headlineContent = { Text(title) },
+        supportingContent = {
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        },
+    )
+}
+
+/**
+ * Single-choice picker for the one-shot OTP cleanup. Unlike [RadioDialog]
+ * nothing is pre-selected and nothing is persisted: the choice only feeds the
+ * confirmation step that follows.
+ */
+@Composable
+private fun ClearOtpDialog(
+    onContinue: (ClearOtpRange) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var choice by remember { mutableStateOf<ClearOtpRange?>(null) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.settings_clear_otp)) },
+        text = {
+            Column {
+                Text(
+                    text = stringResource(R.string.settings_clear_otp_note),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                ClearOtpRange.entries.forEach { range ->
+                    Row(
+                        modifier =
+                            Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 48.dp)
+                                .selectable(
+                                    selected = choice == range,
+                                    onClick = { choice = range },
+                                    role = Role.RadioButton,
+                                ).padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        RadioButton(selected = choice == range, onClick = null)
+                        Spacer(Modifier.padding(horizontal = 6.dp))
+                        Text(clearOtpRangeLabel(range))
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = choice != null,
+                onClick = { choice?.let(onContinue) },
+            ) { Text(stringResource(R.string.action_continue)) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) }
+        },
+    )
+}
+
+@Composable
+private fun clearOtpRangeLabel(range: ClearOtpRange): String =
+    when (range) {
+        ClearOtpRange.ALL -> stringResource(R.string.clear_otp_all)
+        ClearOtpRange.OLDER_THAN_1_DAY -> stringResource(R.string.clear_otp_1_day)
+        ClearOtpRange.OLDER_THAN_3_DAYS -> stringResource(R.string.clear_otp_3_days)
+        ClearOtpRange.OLDER_THAN_1_WEEK -> stringResource(R.string.clear_otp_1_week)
+        ClearOtpRange.OLDER_THAN_2_WEEKS -> stringResource(R.string.clear_otp_2_weeks)
+        ClearOtpRange.OLDER_THAN_1_MONTH -> stringResource(R.string.clear_otp_1_month)
+    }
+
+/**
+ * A plain navigation/picker row. [leadingIcon], when given, is DECORATIVE:
+ * it sits beside the label that already names the row, so it is rendered
+ * with a null content description and TalkBack reads the row once. Tinted
+ * with the theme's primary like the app's other row icons, so it follows
+ * light/dark and dynamic colour; ListItem keeps its own min height, so a
+ * row with an icon is as tall as one without and text still wraps freely
+ * at large font scales.
+ */
+@Composable
+private fun SettingRow(
+    title: String,
+    subtitle: String,
+    onClick: () -> Unit,
+    /** Sub-screen entries list the rows they hold: one ellipsised line, not a paragraph. */
+    singleLineSubtitle: Boolean = false,
+    leadingIcon: ImageVector? = null,
+) {
+    ListItem(
+        modifier = Modifier.clickable(onClick = onClick),
+        leadingContent = leadingIcon?.let { { DecorativeRowIcon(it) } },
+        headlineContent = { Text(title) },
+        supportingContent = {
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = if (singleLineSubtitle) 1 else Int.MAX_VALUE,
+                overflow = TextOverflow.Ellipsis,
+            )
+        },
+    )
+}
+
+/**
+ * The one way a settings row draws a leading glyph: no content description
+ * (the row's headline is the accessible name; announcing the icon too would
+ * read the row twice) and the primary tint every row icon in Settings uses.
+ */
+@Composable
+private fun DecorativeRowIcon(icon: ImageVector) {
+    Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+}
+
+@Composable
+private fun ToggleRow(
+    title: String,
+    subtitle: String,
+    checked: Boolean,
+    onToggle: (Boolean) -> Unit,
+    leadingIcon: ImageVector? = null,
+) {
+    ListItem(
+        modifier = Modifier.clickable { onToggle(!checked) },
+        leadingContent = leadingIcon?.let { { DecorativeRowIcon(it) } },
+        headlineContent = { Text(title) },
+        supportingContent = {
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        },
+        trailingContent = { Switch(checked = checked, onCheckedChange = onToggle) },
+    )
+}
+
+/**
+ * Row that both navigates (tap anywhere) and carries a trailing switch -
+ * the Recycle bin row opens the bin like Archived while its switch flips
+ * the delete behaviour.
+ */
+@Composable
+private fun NavigableToggleRow(
+    title: String,
+    subtitle: String,
+    checked: Boolean,
+    onClick: () -> Unit,
+    onToggle: (Boolean) -> Unit,
+    icon: ImageVector? = null,
+) {
+    ListItem(
+        modifier = Modifier.clickable(onClick = onClick),
+        leadingContent = icon?.let { { DecorativeRowIcon(it) } },
+        headlineContent = { Text(title) },
+        supportingContent = {
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        },
+        trailingContent = { Switch(checked = checked, onCheckedChange = onToggle) },
+    )
+}
+
+/** "INR (₹)" - the ISO code first (what a bank SMS prints), its display symbol after. */
+private fun currencyOptionLabel(code: String): String = "$code (${CurrencyCatalog.of(code).symbol.trim()})"
+
+@Composable
+private fun <T> RadioDialog(
+    title: String,
+    options: List<Pair<T, String>>,
+    selected: T,
+    onSelect: (T) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            // Scrollable: the currency picker lists a few dozen options.
+            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                options.forEach { (value, label) ->
+                    Row(
+                        modifier =
+                            Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 48.dp)
+                                .selectable(
+                                    selected = selected == value,
+                                    onClick = { onSelect(value) },
+                                    role = Role.RadioButton,
+                                ).padding(vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        RadioButton(selected = selected == value, onClick = null)
+                        Spacer(Modifier.padding(horizontal = 6.dp))
+                        Text(label)
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) }
+        },
+    )
+}
+
+/**
+ * Multi-select picker for notification action buttons. Android renders at
+ * most 3 actions on a notification, so selection is capped at [MAX_NOTIFICATION_ACTIONS].
+ */
+@Composable
+private fun NotificationActionsDialog(
+    selected: Set<NotificationAction>,
+    /**
+     * The Direct call preference, surfaced under the Call entry as a NESTED
+     * control (not a second catalog row - SettingsCatalogTest pins that
+     * every row lives on one screen). It writes the same preference as the
+     * Messages row and commits immediately, independent of Save/Cancel,
+     * because switching it on may need the CALL_PHONE request.
+     */
+    directCall: Boolean,
+    onDirectCall: (Boolean) -> Unit,
+    onConfirm: (Set<NotificationAction>) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var current by remember { mutableStateOf(selected) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.settings_notification_actions)) },
+        text = {
+            Column {
+                Text(
+                    text = stringResource(R.string.settings_notification_actions_hint),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                NotificationAction.entries.forEach { action ->
+                    val checked = action in current
+                    val enabled = checked || current.size < MAX_NOTIFICATION_ACTIONS
+                    Row(
+                        modifier =
+                            Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 48.dp)
+                                .toggleable(
+                                    value = checked,
+                                    enabled = enabled,
+                                    onValueChange = {
+                                        current = if (it) current + action else current - action
+                                    },
+                                    role = Role.Checkbox,
+                                ).padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Checkbox(checked = checked, onCheckedChange = null, enabled = enabled)
+                        Spacer(Modifier.padding(horizontal = 6.dp))
+                        Text(notificationActionLabel(action))
+                    }
+                    if (action == NotificationAction.CALL && checked) {
+                        DirectCallNestedSwitch(checked = directCall, onToggle = onDirectCall)
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onConfirm(current) }) { Text(stringResource(R.string.action_save)) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) }
+        },
+    )
+}
+
+private const val MAX_NOTIFICATION_ACTIONS = 3
+
+/**
+ * The Direct call switch as it appears INSIDE the notification-action
+ * picker, indented under a checked Call entry: the same preference as
+ * Settings → Messages → Direct call (one stored value, one catalog row),
+ * with the short summary that names the consequence - the call is placed
+ * at once, no confirmation.
+ */
+@Composable
+private fun DirectCallNestedSwitch(
+    checked: Boolean,
+    onToggle: (Boolean) -> Unit,
+) {
+    Row(
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .padding(start = 36.dp)
+                .heightIn(min = 48.dp)
+                .toggleable(value = checked, onValueChange = onToggle, role = Role.Switch)
+                .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(stringResource(R.string.settings_direct_call), style = MaterialTheme.typography.bodyMedium)
+            Text(
+                text = stringResource(R.string.settings_direct_call_short_summary),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Switch(checked = checked, onCheckedChange = null)
+    }
+}
+
+/**
+ * OTP size picker with a live preview of the digit size: exactly five
+ * options, Option 1 (smallest) to Option 5 (largest). Option 2 is the
+ * default - there is no separate "Default" entry.
+ */
+@Composable
+private fun OtpSizeDialog(
+    selected: OtpDisplaySize,
+    onSelect: (OtpDisplaySize) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.settings_otp_size)) },
+        text = {
+            Column {
+                OtpDisplaySize.entries.forEach { size ->
+                    Row(
+                        modifier =
+                            Modifier
+                                .fillMaxWidth()
+                                .selectable(
+                                    selected = selected == size,
+                                    onClick = { onSelect(size) },
+                                    role = Role.RadioButton,
+                                ).padding(vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        RadioButton(selected = selected == size, onClick = null)
+                        Spacer(Modifier.padding(horizontal = 6.dp))
+                        Column {
+                            Text(otpSizeLabel(size))
+                            Text(
+                                text = "123456",
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = otpPreviewFontSp(size).sp,
+                            )
+                        }
+                    }
+                    HorizontalDivider()
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) }
+        },
+    )
+}
+
+@Composable
+private fun SignatureDialog(
+    initial: String,
+    onConfirm: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var text by rememberSaveable { mutableStateOf(initial) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.settings_signature)) },
+        text = {
+            OutlinedTextField(
+                value = text,
+                onValueChange = { text = it },
+                label = { Text(stringResource(R.string.settings_signature_hint)) },
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = { onConfirm(text) }) { Text(stringResource(R.string.action_save)) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) }
+        },
+    )
+}
+
+/**
+ * One dialog for everything the user blocks - senders and keywords live as
+ * two sections of the SAME "Block & allow list" surface rather than a new
+ * settings row, because they are one mental task ("stop these messages")
+ * and splitting them would leave two half-empty screens.
+ */
+@Composable
+private fun BlockListDialog(
+    blocked: List<String>,
+    blockedKeywords: List<String>,
+    senderSuggestions: List<ContactSuggestion>,
+    onSenderQueryChange: (String) -> Unit,
+    onClearSenderSuggestions: () -> Unit,
+    onBlock: (String) -> Unit,
+    onUnblock: (String) -> Unit,
+    onAddKeyword: (String) -> Unit,
+    onRemoveKeyword: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var newSender by rememberSaveable { mutableStateOf("") }
+    var newKeyword by rememberSaveable { mutableStateOf("") }
+    var keywordError by rememberSaveable { mutableStateOf<BlockedKeywords.ValidationError?>(null) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.settings_block_list)) },
+        text = {
+            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                Text(
+                    text = stringResource(R.string.settings_blocked_senders_header),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                Text(
+                    text = stringResource(R.string.settings_blocked_senders_note),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedTextField(
+                        value = newSender,
+                        onValueChange = {
+                            newSender = it
+                            onSenderQueryChange(it)
+                        },
+                        modifier = Modifier.weight(1f),
+                        label = { Text(stringResource(R.string.settings_block_add_hint)) },
+                        singleLine = true,
+                    )
+                    TextButton(
+                        onClick = {
+                            if (newSender.isNotBlank()) {
+                                onBlock(newSender.trim())
+                                newSender = ""
+                                onClearSenderSuggestions()
+                            }
+                        },
+                    ) { Text(stringResource(R.string.settings_block_add)) }
+                }
+                // Contact autocomplete, same source and debounce as the compose
+                // screen. Plain rows (not a LazyColumn): this dialog already
+                // scrolls, and nesting a scrollable inside it would break both.
+                // Picking fills the field with the NUMBER - blocking keys on the
+                // normalized sender, and a display name is not blockable - while
+                // the explicit Block press stays the confirmation.
+                senderSuggestions.forEach { suggestion ->
+                    ListItem(
+                        modifier =
+                            Modifier.clickable {
+                                newSender = suggestion.number
+                                onClearSenderSuggestions()
+                            },
+                        leadingContent = {
+                            SenderAvatar(
+                                name = suggestion.name,
+                                richAvatars = true,
+                                photoUri = suggestion.photoUri,
+                            )
+                        },
+                        headlineContent = { Text(suggestion.name) },
+                        supportingContent = {
+                            Text(
+                                text = suggestion.number,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        },
+                    )
+                }
+                blocked.forEach { sender ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(text = sender, modifier = Modifier.weight(1f))
+                        TextButton(onClick = { onUnblock(sender) }) {
+                            Text(stringResource(R.string.settings_unblock))
+                        }
+                    }
+                }
+                Text(
+                    text = stringResource(R.string.settings_blocked_keywords_header),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(top = 16.dp),
+                )
+                Text(
+                    text = stringResource(R.string.settings_blocked_keywords_note),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedTextField(
+                        value = newKeyword,
+                        onValueChange = {
+                            newKeyword = it
+                            keywordError = null
+                        },
+                        modifier = Modifier.weight(1f),
+                        label = { Text(stringResource(R.string.settings_block_keyword_hint)) },
+                        singleLine = true,
+                        isError = keywordError != null,
+                    )
+                    TextButton(
+                        onClick = {
+                            val error = BlockedKeywords.validate(newKeyword, blockedKeywords.toSet())
+                            keywordError = error
+                            if (error == null) {
+                                onAddKeyword(newKeyword.trim())
+                                newKeyword = ""
+                            }
+                        },
+                    ) { Text(stringResource(R.string.settings_block_add)) }
+                }
+                keywordError?.let { error ->
+                    Text(
+                        text =
+                            stringResource(
+                                when (error) {
+                                    BlockedKeywords.ValidationError.TOO_SHORT -> {
+                                        R.string.settings_block_keyword_too_short
+                                    }
+
+                                    BlockedKeywords.ValidationError.DUPLICATE -> {
+                                        R.string.settings_block_keyword_duplicate
+                                    }
+
+                                    BlockedKeywords.ValidationError.LIMIT_REACHED -> {
+                                        R.string.settings_block_keyword_limit
+                                    }
+                                },
+                            ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+                blockedKeywords.forEach { keyword ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(text = keyword, modifier = Modifier.weight(1f))
+                        TextButton(onClick = { onRemoveKeyword(keyword) }) {
+                            Text(stringResource(R.string.settings_block_keyword_remove))
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_done)) }
+        },
+    )
+}
+
+/**
+ * The muted-senders manager: the blocked-senders section of [BlockListDialog]
+ * with "mute" in place of "block" - same field, same contact autocomplete,
+ * same one-tap removal - so a user who knows one knows the other. The note
+ * states exactly what a mute covers (OTPs quiet, scam warnings kept), so
+ * the decision is discoverable where the list is managed.
+ */
+@Composable
+private fun MutedSendersDialog(
+    muted: List<String>,
+    senderSuggestions: List<ContactSuggestion>,
+    onSenderQueryChange: (String) -> Unit,
+    onClearSenderSuggestions: () -> Unit,
+    onMute: (String) -> Unit,
+    onUnmute: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var newSender by rememberSaveable { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.settings_muted_senders)) },
+        text = {
+            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                Text(
+                    text = stringResource(R.string.settings_muted_senders_note),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedTextField(
+                        value = newSender,
+                        onValueChange = {
+                            newSender = it
+                            onSenderQueryChange(it)
+                        },
+                        modifier = Modifier.weight(1f),
+                        label = { Text(stringResource(R.string.settings_block_add_hint)) },
+                        singleLine = true,
+                    )
+                    TextButton(
+                        onClick = {
+                            if (newSender.isNotBlank()) {
+                                onMute(newSender.trim())
+                                newSender = ""
+                                onClearSenderSuggestions()
+                            }
+                        },
+                    ) { Text(stringResource(R.string.settings_mute_add)) }
+                }
+                // Same contact autocomplete as the block dialog; picking fills
+                // the NUMBER (muting keys on the normalized sender).
+                senderSuggestions.forEach { suggestion ->
+                    ListItem(
+                        modifier =
+                            Modifier.clickable {
+                                newSender = suggestion.number
+                                onClearSenderSuggestions()
+                            },
+                        leadingContent = {
+                            SenderAvatar(
+                                name = suggestion.name,
+                                richAvatars = true,
+                                photoUri = suggestion.photoUri,
+                            )
+                        },
+                        headlineContent = { Text(suggestion.name) },
+                        supportingContent = {
+                            Text(
+                                text = suggestion.number,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        },
+                    )
+                }
+                if (muted.isEmpty()) {
+                    Text(
+                        text = stringResource(R.string.settings_muted_senders_empty),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(vertical = 8.dp),
+                    )
+                }
+                muted.forEach { sender ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(text = sender, modifier = Modifier.weight(1f))
+                        TextButton(onClick = { onUnmute(sender) }) {
+                            Text(stringResource(R.string.settings_unmute))
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_done)) }
+        },
+    )
+}
+
+@Composable
+private fun notificationActionLabel(action: NotificationAction): String =
+    when (action) {
+        NotificationAction.MARK_READ -> stringResource(R.string.action_mark_read)
+        NotificationAction.DELETE -> stringResource(R.string.ui_action_delete)
+        NotificationAction.REPLY -> stringResource(R.string.notification_action_reply)
+        NotificationAction.CALL -> stringResource(R.string.notification_action_call)
+        NotificationAction.SHARE -> stringResource(R.string.notification_action_share)
+        NotificationAction.COPY_OTP -> stringResource(R.string.action_copy_otp)
+        NotificationAction.SHARE_OTP -> stringResource(R.string.notification_action_share_otp)
+    }
+
+@Composable
+private fun notificationActionsSummary(actions: Set<NotificationAction>): String =
+    if (actions.isEmpty()) {
+        stringResource(R.string.settings_notification_actions_none)
+    } else {
+        NotificationAction.entries
+            .filter { it in actions }
+            .map { notificationActionLabel(it) }
+            .joinToString(separator = ", ")
+    }
+
+/** "All 6 shown" / "4 of 6 shown" / "None - the pill row is hidden" - one summary for every screen's pills. */
+@Composable
+private fun <T> visiblePillsSummary(pills: PillConfig<T>): String {
+    val total = pills.ordered.size
+    return when (val shown = pills.visible.size) {
+        total -> stringResource(R.string.settings_inbox_visible_pills_summary_all, total)
+        0 -> stringResource(R.string.settings_inbox_visible_pills_summary_none)
+        else -> stringResource(R.string.settings_inbox_visible_pills_summary_some, shown, total)
+    }
+}
+
+@Composable
+private fun swipeDeadZoneSummary(zone: SwipeDeadZone): String =
+    if (zone.enabled) {
+        stringResource(R.string.settings_swipe_dead_zone_summary_on, zone.widthPercent)
+    } else {
+        stringResource(R.string.settings_swipe_dead_zone_summary_off)
+    }
+
+@Composable
+private fun swipeActionLabel(action: SwipeAction): String =
+    when (action) {
+        SwipeAction.NONE -> stringResource(R.string.swipe_action_none)
+        SwipeAction.TOGGLE_READ -> stringResource(R.string.swipe_action_toggle_read)
+        SwipeAction.DELETE -> stringResource(R.string.ui_action_delete)
+        SwipeAction.ARCHIVE -> stringResource(R.string.action_archive)
+    }
+
+@Composable
+private fun messageSortOrderLabel(order: MessageSortOrder): String =
+    when (order) {
+        MessageSortOrder.RECEIVED -> stringResource(R.string.settings_message_sort_received)
+        MessageSortOrder.SENT -> stringResource(R.string.settings_message_sort_sent)
+    }
+
+/**
+ * The user-facing name of a selection-bar action - the SAME strings the bar
+ * itself uses (its tooltips and menu entries), so the Settings list and
+ * the bar can never disagree about what an action is called.
+ */
+@StringRes
+fun MessageSelectionAction.labelRes(): Int =
+    when (this) {
+        MessageSelectionAction.COPY -> R.string.action_copy_message
+        MessageSelectionAction.DELETE -> R.string.ui_action_delete
+        MessageSelectionAction.MORE_DETAILS -> R.string.action_message_details
+        MessageSelectionAction.FORWARD -> R.string.action_forward_message
+        MessageSelectionAction.SHARE -> R.string.action_share_message
+        MessageSelectionAction.SELECT_ALL -> R.string.action_select_all
+        MessageSelectionAction.COPY_OTP -> R.string.action_copy_otp
+        MessageSelectionAction.ADD_RULE -> R.string.action_add_rule
+        MessageSelectionAction.SAVE_ATTACHMENT -> R.string.action_save_attachment
+    }
+
+/** Row summary: the actions that sit in the bar, in order ("Copy message, Delete, More details"). */
+@Composable
+private fun selectionActionOrderSummary(ordered: List<MessageSelectionAction>): String {
+    val inline = ordered.take(ConversationSelectionBarLayout.INLINE_SLOTS).map { stringResource(it.labelRes()) }
+    return inline.joinToString(", ")
+}
+
+@Composable
+private fun destinationLabel(destination: StartDestination): String =
+    when (destination) {
+        StartDestination.INBOX -> stringResource(R.string.nav_inbox)
+        StartDestination.FINANCE -> stringResource(R.string.nav_finance)
+        StartDestination.ALERTS -> stringResource(R.string.nav_alerts)
+    }
+
+@Composable
+private fun inboxFilterLabel(filter: Category?): String = filter?.displayName() ?: stringResource(R.string.settings_filter_all)
+
+@Composable
+private fun logoBackgroundLabel(value: LogoBackground): String =
+    stringResource(
+        when (value) {
+            LogoBackground.WHITE -> R.string.logo_background_white
+            LogoBackground.DARK -> R.string.logo_background_dark
+            LogoBackground.DYNAMIC -> R.string.logo_background_dynamic
+            LogoBackground.NONE -> R.string.logo_background_none
+        },
+    )
+
+@Composable
+private fun messageTextSizeLabel(value: MessageTextSize): String =
+    stringResource(
+        when (value) {
+            MessageTextSize.SMALL -> R.string.message_text_size_small
+            MessageTextSize.DEFAULT -> R.string.message_text_size_default
+            MessageTextSize.LARGE -> R.string.message_text_size_large
+            MessageTextSize.EXTRA_LARGE -> R.string.message_text_size_extra_large
+        },
+    )
+
+@Composable
+private fun timeFormatLabel(value: TimeFormat): String =
+    stringResource(
+        when (value) {
+            TimeFormat.SYSTEM -> R.string.time_format_system
+            TimeFormat.HOUR_12 -> R.string.time_format_12_hour
+            TimeFormat.HOUR_24 -> R.string.time_format_24_hour
+        },
+    )
+
+@Composable
+private fun themeLabel(mode: ThemeMode): String =
+    when (mode) {
+        ThemeMode.SYSTEM -> stringResource(R.string.theme_system)
+        ThemeMode.LIGHT -> stringResource(R.string.theme_light)
+        ThemeMode.DARK -> stringResource(R.string.theme_dark)
+    }
+
+@Composable
+private fun backupFrequencyLabel(frequency: BackupFrequency): String =
+    when (frequency) {
+        BackupFrequency.OFF -> stringResource(R.string.frequency_off)
+        BackupFrequency.DAILY -> stringResource(R.string.frequency_daily)
+        BackupFrequency.WEEKLY -> stringResource(R.string.frequency_weekly)
+    }
+
+@Composable
+private fun delayedSendDelayLabel(delay: DelayedSendDelay): String = stringResource(R.string.settings_delayed_send_seconds, delay.seconds)
+
+@Composable
+private fun otpDeleteLabel(policy: OtpAutoDeletePolicy): String =
+    when (policy) {
+        OtpAutoDeletePolicy.NEVER -> stringResource(R.string.otp_delete_never)
+        OtpAutoDeletePolicy.HOURS_24 -> stringResource(R.string.otp_delete_24h)
+        OtpAutoDeletePolicy.DAYS_3 -> stringResource(R.string.otp_delete_3d)
+        OtpAutoDeletePolicy.DAYS_7 -> stringResource(R.string.otp_delete_7d)
+        OtpAutoDeletePolicy.MONTH_1 -> stringResource(R.string.otp_delete_1m)
+        OtpAutoDeletePolicy.MONTHS_3 -> stringResource(R.string.otp_delete_3m)
+    }
+
+@Composable
+private fun otpSizeLabel(size: OtpDisplaySize): String =
+    when (size) {
+        OtpDisplaySize.OPTION_1 -> stringResource(R.string.otp_size_1)
+        OtpDisplaySize.OPTION_2 -> stringResource(R.string.otp_size_2)
+        OtpDisplaySize.OPTION_3 -> stringResource(R.string.otp_size_3)
+        OtpDisplaySize.OPTION_4 -> stringResource(R.string.otp_size_4)
+        OtpDisplaySize.OPTION_5 -> stringResource(R.string.otp_size_5)
+    }
+
+@Composable
+private fun appVersion(): String {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    return try {
+        context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "-"
+    } catch (_: Exception) {
+        "-"
+    }
+}
+
+/**
+ * A settings row the screen arrived pointed at: reports its position so the
+ * list can scroll to it, and carries the same primary-color wash a message
+ * highlighted from search does, fading out after [HighlightTiming.HOLD_MS].
+ */
+@Composable
+private fun HighlightedRow(
+    active: Boolean,
+    onPositioned: (Int) -> Unit,
+    content: @Composable () -> Unit,
+) {
+    val wash by animateColorAsState(
+        targetValue =
+            if (active) {
+                MaterialTheme.colorScheme.primary.copy(alpha = HighlightTiming.WASH_ALPHA)
+            } else {
+                Color.Transparent
+            },
+        animationSpec = tween(durationMillis = HighlightTiming.FADE_MS),
+        label = "settings_highlight",
+    )
+    Box(
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                // Drawn OVER the row, not behind it: a settings row is a
+                // Material ListItem, which paints its own opaque surface and
+                // would swallow a background tint. (The message bubbles get
+                // away with a background because a bubble is narrower than its
+                // row, so the wash shows around it.) At this alpha the row's
+                // text stays legible through the wash.
+                .drawWithContent {
+                    drawContent()
+                    drawRect(wash)
+                }.onGloballyPositioned { onPositioned(it.positionInParent().y.toInt()) },
+    ) {
+        content()
+    }
+}

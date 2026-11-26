@@ -1,0 +1,192 @@
+{
+  "version": "1.0",
+  "rules": [
+    {
+      "id": "epfo-contribution-01",
+      "name": "EPFO EPF Contribution Credited",
+      "priority": 270,
+      "match": {
+        "sender_pattern": "(?i)(?:EPFOHO|EPFO)",
+        "body_pattern": "(?i)(?:PF|EPF)\\s+contribution\\s+of\\s+(?:INR|Rs\\.?|\\u20b9)\\s*([\\d,]+(?:\\.\\d{1,2})?)"
+      },
+      "action": {
+        "category": "important",
+        "sub_category": "government",
+        "extract": {
+          "amount": "$1"
+        }
+      },
+      "contributed_by": "clearsms",
+      "created_at": "2026-07-27T00:00:00Z"
+    },
+    {
+      "id": "epfo-passbook-contribution-01",
+      "name": "EPF Passbook Contribution Credited",
+      "priority": 275,
+      "match": {
+        "sender_pattern": "(?i)(?:EPFOHO|EPFO)",
+        "body_pattern": "(?i)\\bpassbook\\s+balance\\s+against\\s+[A-Z]{2,6}[0-9*]{0,28}?(\\d{4})\\s+is\\s+Rs\\.?\\s*([\\d,]+)[\\s\\S]{0,20}?Contribution\\s+of\\s+(?:INR|Rs\\.?|\\u20b9)\\s*([\\d,]+(?:\\.\\d{1,2})?)"
+      },
+      "action": {
+        "category": "important",
+        "sub_category": "investment",
+        "extract": {
+          "account_last4": "$1",
+          "balance": "$2",
+          "amount": "$3",
+          "type": "credit",
+          "merchant": "EPF",
+          "bank": "EPFO"
+        }
+      },
+      "contributed_by": "clearsms",
+      "created_at": "2026-07-28T00:00:00Z"
+    },
+    {
+      "id": "epfo-passbook-balance-01",
+      "name": "EPF Passbook Balance Notice",
+      "priority": 268,
+      "match": {
+        "sender_pattern": "(?i)(?:EPFOHO|EPFO)",
+        "body_pattern": "(?i)\\bpassbook\\s+balance\\s+against\\b"
+      },
+      "action": {
+        "category": "important",
+        "sub_category": "investment"
+      },
+      "contributed_by": "clearsms",
+      "created_at": "2026-07-28T00:00:00Z"
+    },
+    {
+      "id": "epfo-interest-credited-01",
+      "name": "EPF Interest Credited",
+      "priority": 274,
+      "match": {
+        "sender_pattern": "(?i)(?:EPFOHO|EPFO)",
+        "body_pattern": "(?i)\\bPF\\s+interest\\s+of\\s+([\\d,]+(?:\\.\\d{1,2})?)\\s+for\\b[\\s\\S]{0,20}?\\bcredited\\s+to\\s+your\\s+UAN\\b"
+      },
+      "action": {
+        "category": "important",
+        "sub_category": "investment",
+        "extract": {
+          "amount": "$1"
+        }
+      },
+      "contributed_by": "clearsms",
+      "created_at": "2026-07-28T00:00:00Z"
+    },
+    {
+      "id": "epfo-claim-settled-01",
+      "name": "EPF Claim Settled",
+      "priority": 272,
+      "match": {
+        "sender_pattern": "(?i)(?:EPFOHO|EPFO)",
+        "body_pattern": "(?i)\\b(?:claim|withdrawal)\\b[\\s\\S]{0,50}?\\b(?:has\\s+been|is|stands)\\s+settled\\b"
+      },
+      "action": {
+        "category": "important",
+        "sub_category": "government"
+      },
+      "contributed_by": "clearsms",
+      "created_at": "2026-07-28T00:00:00Z"
+    },
+    {
+      "id": "epfo-claim-status-01",
+      "name": "EPF Claim Status Update",
+      "priority": 271,
+      "match": {
+        "sender_pattern": "(?i)(?:EPFOHO|EPFO)",
+        "body_pattern": "(?i)\\bClaim\\s+Id\\b[\\s\\S]{0,40}?\\b(?:is\\s+under\\s+process|has\\s+been\\s+received|is\\s+approved)\\b|\\b(?:claim|withdrawal)\\b[\\s\\S]{0,50}?\\bunder\\s+process\\b"
+      },
+      "action": {
+        "category": "important",
+        "sub_category": "government"
+      },
+      "contributed_by": "clearsms",
+      "created_at": "2026-07-28T00:00:00Z"
+    },
+    {
+      "id": "epfo-uan-activated-01",
+      "name": "EPFO UAN Activated",
+      "priority": 267,
+      "match": {
+        "sender_pattern": "(?i)(?:EPFOHO|EPFO)",
+        "body_pattern": "(?i)\\bUAN\\b[\\s\\S]{0,30}?\\b(?:is|has\\s+been)\\s+activated\\b"
+      },
+      "action": {
+        "category": "important",
+        "sub_category": "government"
+      },
+      "contributed_by": "clearsms",
+      "created_at": "2026-07-28T00:00:00Z"
+    },
+    {
+      "id": "epfo-uan-security-01",
+      "name": "EPFO UAN Credential Change Notice",
+      "priority": 266,
+      "match": {
+        "sender_pattern": "(?i)(?:EPFOHO|EPFO)",
+        "body_pattern": "(?i)\\bPassword\\s+for\\s+your\\s+UAN\\b[\\s\\S]{0,30}?\\bchanged\\b|\\bmobile\\s+no\\b[\\s\\S]{0,30}?\\blinked\\s+to\\s+the\\s+UAN\\b[\\s\\S]{0,80}?\\bchanged\\b"
+      },
+      "action": {
+        "category": "important",
+        "sub_category": "government"
+      },
+      "contributed_by": "clearsms",
+      "created_at": "2026-07-28T00:00:00Z"
+    },
+    {
+      "id": "epfo-enomination-01",
+      "name": "EPFO e-Nomination Pending",
+      "priority": 265,
+      "match": {
+        "sender_pattern": "(?i)(?:EPFOHO|EPFO)",
+        "body_pattern": "(?i)\\be-?nomination\\s+is\\s+pending\\b"
+      },
+      "action": {
+        "category": "important",
+        "sub_category": "government"
+      },
+      "contributed_by": "clearsms",
+      "created_at": "2026-07-28T00:00:00Z"
+    },
+    {
+      "id": "epfo-otp-01",
+      "name": "EPFO OTP (use OTP ... to)",
+      "priority": 330,
+      "match": {
+        "sender_pattern": "(?i)(?:EPFOHO|EPFO)",
+        "body_pattern": "(?i)use\\s+OTP\\s+(\\d{4,8})\\s*(?:\\(OTP-ID:?\\s*\\d{1,10}\\))?\\s*to\\b"
+      },
+      "action": {
+        "category": "otp",
+        "sub_category": "otp",
+        "extract": {
+          "otp_code": "$1"
+        },
+        "notification": "otp_popup"
+      },
+      "contributed_by": "clearsms",
+      "created_at": "2026-08-12T00:00:00Z"
+    },
+    {
+      "id": "epfo-login-otp-01",
+      "name": "EPFO Member Interface Login OTP",
+      "priority": 330,
+      "match": {
+        "sender_pattern": "(?i)(?:EPFOHO|EPFO)",
+        "body_pattern": "(?i)OTP\\s+to\\s+login\\s+to\\s+Member\\s+Interface\\s+is\\s+(\\d{4,8})"
+      },
+      "action": {
+        "category": "otp",
+        "sub_category": "otp",
+        "extract": {
+          "otp_code": "$1"
+        },
+        "notification": "otp_popup"
+      },
+      "contributed_by": "clearsms",
+      "created_at": "2026-08-12T00:00:00Z"
+    }
+  ]
+}

@@ -11,10 +11,10 @@ object Prompts {
         senderFeatures: String? = null, linkDomains: String? = null, ownedList: String? = null,
     ): String = buildString {
         appendLine("You are Call Guardian, a scam detector running privately on the user's phone.")
-        appendLine("Classify this incoming ${if (channel == Channel.SMS) "text message" else "phone call"} and pick ONE method to call.")
-        appendLine("Methods: NONE (normal), " + (if (channel == Channel.SMS) "QUARANTINE_SMS (hide behind a warning), " else "REJECT_CALL (silence or reject), ") +
-            "BLOCK_NUMBER (only for an obvious scam), ALLOW_NUMBER (clearly legitimate), REPORT_SCAM, EXPLAIN_CLOUD (unsure; ask for a deeper look).")
-        appendLine("You only propose; a policy checks your choice. Be calm and specific. Reasons must quote or paraphrase the content.")
+        appendLine("Classify this incoming ${if (channel == Channel.SMS) "text message" else "phone call"}.")
+        appendLine("Respond with JSON only, matching {\"verdict\": one of SCAM, SUSPICIOUS, CLEAR, SUBSCRIPTION, CODE, OWNED, \"confidence\": 0-99, \"reasons\": up to 3 short strings}.")
+        appendLine("SCAM if fraudulent, SUSPICIOUS if unsettled, CLEAR if legitimate, SUBSCRIPTION if a list the user could opt out of, CODE if a login or verification code, OWNED if it is from an account the user owns.")
+        appendLine("A link alone is never phishing. An official domain of the claimed brand is a positive signal. A look-alike domain is impersonation.")
         appendLine("Never treat a brand name alone as proof the message is legitimate. An official link domain lowers suspicion; a look-alike domain raises it.")
         appendLine("Do not use 100 for confidence; leave room for uncertainty. Prefer a mid confidence when sender or domain evidence is mixed.")
         appendLine("A text that only contains a login or verification code, with no link and no request to share the code, call, or reply, is legitimate (CLEAR / Code) — especially from a short code. 'Never share this code' is a standard warning, not a scam. Flag a code text only if it asks the user to share the code or includes a link.")

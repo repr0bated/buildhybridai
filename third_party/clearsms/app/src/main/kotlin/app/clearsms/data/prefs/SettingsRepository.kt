@@ -1,0 +1,412 @@
+package app.clearsms.data.prefs
+
+import app.clearsms.domain.model.Category
+import app.clearsms.domain.model.DelayedSendDelay
+import app.clearsms.domain.model.EnabledSections
+import app.clearsms.domain.model.FinanceTab
+import app.clearsms.domain.model.InboxPill
+import app.clearsms.domain.model.LogoBackground
+import app.clearsms.domain.model.MessageSortOrder
+import app.clearsms.domain.model.MessageTextSize
+import app.clearsms.domain.model.NotificationAction
+import app.clearsms.domain.model.OtpAutoDeletePolicy
+import app.clearsms.domain.model.OtpDisplaySize
+import app.clearsms.domain.model.StartDestination
+import app.clearsms.domain.model.SwipeAction
+import app.clearsms.domain.model.SwipeDeadZone
+import app.clearsms.domain.model.ThemeMode
+import app.clearsms.domain.model.TimeFormat
+import app.clearsms.ui.alerts.AlertFilter
+import app.clearsms.ui.conversation.MessageSelectionAction
+import kotlinx.coroutines.flow.Flow
+
+/** User settings backed by Preferences DataStore. */
+interface SettingsRepository {
+    val theme: Flow<ThemeMode>
+
+    suspend fun setTheme(value: ThemeMode)
+
+    val otpAutoCopy: Flow<Boolean>
+
+    suspend fun setOtpAutoCopy(value: Boolean)
+
+    val otpAutoDeletePolicy: Flow<OtpAutoDeletePolicy>
+
+    suspend fun setOtpAutoDeletePolicy(value: OtpAutoDeletePolicy)
+
+    val otpDisplaySize: Flow<OtpDisplaySize>
+
+    suspend fun setOtpDisplaySize(value: OtpDisplaySize)
+
+    /** Show the parsed extraction card under tapped messages in a conversation. */
+    val showTransactionDetails: Flow<Boolean>
+
+    suspend fun setShowTransactionDetails(value: Boolean)
+
+    /**
+     * Whether conversations and their messages are ordered by when they
+     * were RECEIVED (default - today's behaviour, so no inbox reshuffles
+     * on update) or by the sender's SENT time where known (GitHub #45).
+     */
+    val messageSortOrder: Flow<MessageSortOrder>
+
+    suspend fun setMessageSortOrder(value: MessageSortOrder)
+
+    /**
+     * Recycle bin for deleted messages. Default ON. When ON, a committed
+     * delete keeps the message in an in-app bin for 30 days (the
+     * system-provider copy is still removed) instead of dropping the row;
+     * when OFF, deletes are permanent.
+     */
+    val recycleBinEnabled: Flow<Boolean>
+
+    suspend fun setRecycleBinEnabled(value: Boolean)
+
+    /**
+     * Privacy gate for the Finance tab: when false, balances (account
+     * balances, card outstanding, the month summary) are masked until the
+     * user authenticates with the device screen lock. Default FALSE -
+     * privacy-first: balances stay hidden until the user deliberately
+     * reveals them (users who never touched the toggle get the hidden
+     * default too). Display-only - nothing sensitive is
+     * stored because of this flag.
+     */
+    val showBalance: Flow<Boolean>
+
+    suspend fun setShowBalance(value: Boolean)
+
+    /**
+     * Delayed sending (GitHub #40): when ON, a plain Send waits
+     * [delayedSendDelay] before dispatching, with a Cancel affordance that
+     * puts the text back in the composer. Default OFF - the maintainer's
+     * decision on the issue: sending stays immediate unless the user opts in.
+     */
+    val delayedSendEnabled: Flow<Boolean>
+
+    suspend fun setDelayedSendEnabled(value: Boolean)
+
+    /** How long a delayed send waits; only consulted when [delayedSendEnabled]. */
+    val delayedSendDelay: Flow<DelayedSendDelay>
+
+    suspend fun setDelayedSendDelay(value: DelayedSendDelay)
+
+    /**
+     * Whether sending MMS is offered at all (issue #94). ON by default; when
+     * OFF the composer's "+" sheet drops Photo / Camera / Any file (its
+     * insert-a-contact-as-text row stays, GitHub #150) and sharing an image
+     * into the app has nothing to attach to, so no MMS send can be started.
+     *
+     * Exists because a carrier can discontinue MMS entirely - Germany's last
+     * network switched it off in July 2026 - leaving the attachment rows as
+     * affordances that can only ever fail. Clear SMS already hides them when the
+     * carrier CONFIG declares MMS disabled, but that config reflects the
+     * carrier's config table rather than live service, so a carrier that
+     * stops the service without updating it still reads as enabled. This
+     * switch is the user's own answer for that case, and it does not depend
+     * on guessing anything from locale or region.
+     *
+     * Receiving is untouched: an MMS that still arrives is always stored and
+     * shown, and the history import keeps working.
+     */
+    val mmsSendingEnabled: Flow<Boolean>
+
+    suspend fun setMmsSendingEnabled(value: Boolean)
+
+    val signature: Flow<String>
+
+    suspend fun setSignature(value: String)
+
+    val onboardingComplete: Flow<Boolean>
+
+    suspend fun setOnboardingComplete(value: Boolean)
+
+    /** Whether the one-time "long-press Send to schedule" tip was already shown. */
+    val scheduleSendTipShown: Flow<Boolean>
+
+    suspend fun setScheduleSendTipShown(value: Boolean)
+
+    /** Show contact photos and sender brand marks instead of plain icon/monogram avatars. */
+    val showRichAvatars: Flow<Boolean>
+
+    suspend fun setShowRichAvatars(value: Boolean)
+
+    /** Action buttons attached to message notifications (Android shows at most 3). */
+    val notificationActions: Flow<Set<NotificationAction>>
+
+    suspend fun setNotificationActions(value: Set<NotificationAction>)
+
+    /** Action for a left-to-right (start) swipe on an inbox row. */
+    val swipeActionStart: Flow<SwipeAction>
+
+    suspend fun setSwipeActionStart(value: SwipeAction)
+
+    /** Action for a right-to-left (end) swipe on an inbox row. */
+    val swipeActionEnd: Flow<SwipeAction>
+
+    suspend fun setSwipeActionEnd(value: SwipeAction)
+
+    /** Per-row band where a swipe never starts; off by default. */
+    val swipeDeadZone: Flow<SwipeDeadZone>
+
+    suspend fun setSwipeDeadZone(value: SwipeDeadZone)
+
+    /** Bottom destination the app opens on. */
+    val defaultDestination: Flow<StartDestination>
+
+    suspend fun setDefaultDestination(value: StartDestination)
+
+    /**
+     * Which top-level sections (bottom-navigation tabs) are shown. Read as
+     * one normalized value - an all-off combination restored from a
+     * hand-edited backup heals to all-on at read time (see
+     * [app.clearsms.domain.model.EnabledSections.from]). A disabled section
+     * is a view choice only: ingestion and extraction keep running. The
+     * last-enabled guard lives with the callers ([EnabledSections.canDisable]);
+     * these setters are raw key writes like their neighbours.
+     */
+    val enabledSections: Flow<EnabledSections>
+
+    suspend fun setInboxSectionEnabled(value: Boolean)
+
+    suspend fun setFinanceSectionEnabled(value: Boolean)
+
+    suspend fun setAlertsSectionEnabled(value: Boolean)
+
+    /** Inbox category filter applied at startup; null means All. */
+    val defaultInboxFilter: Flow<Category?>
+
+    suspend fun setDefaultInboxFilter(value: Category?)
+
+    /**
+     * Finance pill the Finance screen opens on (Settings → Finance →
+     * Default Finance filter). A deliberate user choice, distinct from
+     * remembered UI state: tapping a pill on the Finance screen changes the
+     * session's tab only and never writes this back.
+     */
+    val defaultFinanceFilter: Flow<FinanceTab>
+
+    suspend fun setDefaultFinanceFilter(value: FinanceTab)
+
+    /**
+     * Manual currency override for amount parsing (issue #65): the ISO 4217
+     * code every amount is read in when the message itself names no
+     * unambiguous currency, or null for automatic detection (the message's
+     * own marker, else the SIM / device locale). The honest safety net for
+     * when detection is unreliable: with `CLP` forced, a bare `$1.000` is a
+     * thousand pesos even on a device whose locale says otherwise. It only
+     * applies to messages sorted AFTER it changes; "Sort messages again"
+     * re-derives the rest. Never rewrites a stored amount by itself.
+     */
+    val financeCurrency: Flow<String?>
+
+    suspend fun setFinanceCurrency(value: String?)
+
+    /** Show a parsed amount in transaction notifications instead of the raw message. */
+    val transactionNotifications: Flow<Boolean>
+
+    suspend fun setTransactionNotifications(value: Boolean)
+
+    /**
+     * Publish pinned and recent conversations as launcher shortcuts (long-
+     * press the app icon), issue #81. Default ON - the feature was asked
+     * for, and one nobody can see is not a feature. OFF keeps the static
+     * "New message" shortcut and removes (and disables, for any the user
+     * pinned to the home screen) every conversation shortcut. Governs
+     * [app.clearsms.shortcuts.ConversationShortcutPublisher]; the exclusion
+     * set (blocked, muted, binned, Spam) applies regardless of this flag.
+     */
+    val conversationShortcuts: Flow<Boolean>
+
+    suspend fun setConversationShortcuts(value: Boolean)
+
+    /**
+     * Direct call: the Call button (conversation title bar AND the
+     * notification's Call action) PLACES the call (ACTION_CALL) instead of
+     * opening the dialer prefilled (ACTION_DIAL). Default OFF - the
+     * maintainer declined one-click calling in GitHub #99 ("to avoid mistake
+     * calls"), and today's dialer behaviour stays for everyone who does not
+     * opt in; that opt-in is the whole reason the reversal is safe.
+     *
+     * ON requires the CALL_PHONE runtime permission, requested when the
+     * toggle is switched on - never at first launch. The stored value is
+     * only ever true while the grant exists: a denied request leaves it
+     * false, and a later revocation flips it back (SettingsViewModel). The
+     * call surfaces re-check the grant at call time regardless and fall
+     * back to the dialer ([app.clearsms.ui.settings.DirectCall]), so a
+     * stale true can never produce a button that silently does nothing.
+     * Who gets a Call button at all is unchanged: DialableNumber decides.
+     */
+    val directCall: Flow<Boolean>
+
+    suspend fun setDirectCall(value: Boolean)
+
+    /** Backing plate drawn behind bundled sender logos. */
+    val logoBackground: Flow<LogoBackground>
+
+    suspend fun setLogoBackground(value: LogoBackground)
+
+    /**
+     * In-app multiplier for the text inside conversation bubbles (#157), on
+     * top of Android's own font-size setting, which every sp size already
+     * honours. Bubbles only - the inbox preview is unchanged.
+     */
+    val messageTextSize: Flow<MessageTextSize>
+
+    suspend fun setMessageTextSize(value: MessageTextSize)
+
+    /**
+     * 12/24-hour clock for every time the app writes (#158). Defaults to
+     * following the phone's setting; resolved once, in
+     * `app.clearsms.ui.common.ClockFormat`.
+     */
+    val timeFormat: Flow<TimeFormat>
+
+    suspend fun setTimeFormat(value: TimeFormat)
+
+    /**
+     * Id of the newest OTP message the user has handled (copied or dismissed)
+     * from the inbox banner; 0 when none. Message ids are monotonically
+     * increasing, so the banner hides this id and everything older forever -
+     * across navigation, restarts and re-categorization - while a newer OTP
+     * still surfaces.
+     */
+    val handledOtpMessageId: Flow<Long>
+
+    suspend fun setHandledOtpMessageId(value: Long)
+
+    /**
+     * User-chosen order of the Inbox pills. Always emits every [InboxPill]
+     * exactly once: unknown stored names are dropped and entries missing
+     * from the stored list are appended in declaration order, so a pill
+     * added in a future version (the scam pill was one) can never
+     * disappear. Default is the enum's declaration order. Stored values
+     * written before the scam pill existed hold [Category] names, which are
+     * the same names, so they decode unchanged.
+     */
+    val inboxPillOrder: Flow<List<InboxPill>>
+
+    suspend fun setInboxPillOrder(value: List<InboxPill>)
+
+    /**
+     * Inbox pills the user has HIDDEN (issue #49). Independent of
+     * [inboxPillOrder], so hiding never disturbs the order and a re-shown
+     * pill returns to its place. Unknown stored names are dropped. Empty
+     * (the default) shows every pill; hiding all of them is allowed and
+     * removes the pill row - see [app.clearsms.ui.inbox.InboxPillConfig].
+     */
+    val inboxHiddenPills: Flow<Set<InboxPill>>
+
+    suspend fun setInboxHiddenPills(value: Set<InboxPill>)
+
+    /**
+     * Whether the "Unread" switch above the Inbox pills is shown (issue
+     * #49). Default true. Purely an affordance toggle: unread counts, the
+     * per-pill badges and notification behaviour are untouched, and the
+     * filter itself is reset to "all" while the switch is hidden so no
+     * invisible unread-only view can persist.
+     */
+    val inboxUnreadToggle: Flow<Boolean>
+
+    suspend fun setInboxUnreadToggle(value: Boolean)
+
+    /** User-chosen order of the Finance pills; same guarantees as [inboxPillOrder]. */
+    val financePillOrder: Flow<List<FinanceTab>>
+
+    suspend fun setFinancePillOrder(value: List<FinanceTab>)
+
+    /**
+     * Finance pills the user has HIDDEN; same contract as [inboxHiddenPills]
+     * (independent of the order, unknown names dropped, no minimum - all
+     * hidden removes the row and the screen is the month summary alone).
+     * Resolved through the shared [app.clearsms.ui.navigation.PillConfig].
+     */
+    val financeHiddenPills: Flow<Set<FinanceTab>>
+
+    suspend fun setFinanceHiddenPills(value: Set<FinanceTab>)
+
+    /**
+     * Keywords whose presence in an incoming message body (case-insensitive
+     * substring) routes the message straight to the recycle bin - or drops
+     * it entirely when the bin is off. Validated through
+     * [BlockedKeywords.validate] before writing; matching happens at
+     * ingestion, before any notification or finance derivation.
+     */
+    val blockedKeywords: Flow<Set<String>>
+
+    suspend fun setBlockedKeywords(value: Set<String>)
+
+    /**
+     * The blocked-sender list - THE single source of truth for sender
+     * blocking. Entries are stored normalized (see
+     * [app.clearsms.data.repository.SenderNormalizer]) so route variants of
+     * one sender ("VM-JIOPAY", "JIOPAY") share one entry. Consulted at
+     * ingestion (live delivery, catch-up and initial import, MMS download):
+     * a match is born soft-deleted into the recycle bin - or dropped when
+     * the bin is off - exactly like a blocked keyword. The per-row
+     * `isBlockedSender` flag is only a derived cache of this set. All
+     * writes go through [app.clearsms.data.repository.SenderBlocker].
+     */
+    val blockedSenders: Flow<Set<String>>
+
+    suspend fun setBlockedSenders(value: Set<String>)
+
+    /**
+     * The muted-sender list - the "quiet middle" between normal delivery
+     * and blocking. Stored and matched EXACTLY like [blockedSenders]
+     * (normalized through [app.clearsms.data.repository.SenderNormalizer],
+     * so "VM-HDFCBK" and "HDFCBK", or "+91 98765 43210" and "9876543210",
+     * share one entry). A muted sender's messages still arrive, still land
+     * in the inbox unread, still extract transactions and OTPs - they just
+     * never post a notification (scam warnings excepted; see
+     * [app.clearsms.notification.MutedSenderGate]). All writes go through
+     * [app.clearsms.data.repository.SenderMuter].
+     */
+    val mutedSenders: Flow<Set<String>>
+
+    suspend fun setMutedSenders(value: Set<String>)
+
+    /**
+     * User-chosen order of the Alerts filter pills; same guarantees as
+     * [inboxPillOrder]. Persisted as enum names, so [AlertFilter] staying in
+     * the ui layer costs nothing at the storage level.
+     */
+    val alertsPillOrder: Flow<List<AlertFilter>>
+
+    suspend fun setAlertsPillOrder(value: List<AlertFilter>)
+
+    /**
+     * Alerts pills the user has HIDDEN; same contract as [inboxHiddenPills]
+     * (independent of the order, unknown names dropped, no minimum - all
+     * hidden removes the row and the list shows every reminder). Resolved
+     * through the shared [app.clearsms.ui.navigation.PillConfig].
+     */
+    val alertsHiddenPills: Flow<Set<AlertFilter>>
+
+    suspend fun setAlertsHiddenPills(value: Set<AlertFilter>)
+
+    /**
+     * User-chosen order of the conversation selection-bar actions (issue
+     * #61); the first few in the order sit inline, the rest overflow - see
+     * [app.clearsms.ui.conversation.ConversationSelectionBarLayout]. Same
+     * guarantees as [inboxPillOrder]: persisted as enum NAMES, unknown
+     * names dropped, missing actions appended in declaration order, so an
+     * action added later appears without a migration and a stale backup
+     * can never lose one. Order only - there is no hidden set, every action
+     * stays reachable. Default is the enum's declaration order.
+     */
+    val messageSelectionActionOrder: Flow<List<MessageSelectionAction>>
+
+    suspend fun setMessageSelectionActionOrder(value: List<MessageSelectionAction>)
+
+    /**
+     * App versionCode whose rules/parsers last fully sorted the database -
+     * set when the initial import completes and when any full re-sort
+     * (manual or automatic) completes; 0 when never. A mismatch against the
+     * running version triggers the automatic post-update re-sort, so users
+     * never need to remember "Sort messages again". Device/version state,
+     * never backed up.
+     */
+    val lastSortedVersionCode: Flow<Int>
+
+    suspend fun setLastSortedVersionCode(value: Int)
+}

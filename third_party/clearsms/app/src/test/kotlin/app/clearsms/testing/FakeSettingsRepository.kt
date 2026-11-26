@@ -1,0 +1,253 @@
+package app.clearsms.testing
+
+import app.clearsms.data.prefs.SettingsRepository
+import app.clearsms.domain.model.Category
+import app.clearsms.domain.model.DelayedSendDelay
+import app.clearsms.domain.model.EnabledSections
+import app.clearsms.domain.model.FinanceTab
+import app.clearsms.domain.model.InboxPill
+import app.clearsms.domain.model.LogoBackground
+import app.clearsms.domain.model.MessageSortOrder
+import app.clearsms.domain.model.MessageTextSize
+import app.clearsms.domain.model.NotificationAction
+import app.clearsms.domain.model.OtpAutoDeletePolicy
+import app.clearsms.domain.model.OtpDisplaySize
+import app.clearsms.domain.model.StartDestination
+import app.clearsms.domain.model.SwipeAction
+import app.clearsms.domain.model.SwipeDeadZone
+import app.clearsms.domain.model.ThemeMode
+import app.clearsms.domain.model.TimeFormat
+import app.clearsms.ui.alerts.AlertFilter
+import app.clearsms.ui.conversation.MessageSelectionAction
+import kotlinx.coroutines.flow.MutableStateFlow
+
+/** In-memory [SettingsRepository] for view-model tests. */
+open class FakeSettingsRepository : SettingsRepository {
+    override val theme = MutableStateFlow(ThemeMode.SYSTEM)
+
+    override suspend fun setTheme(value: ThemeMode) = Unit
+
+    override val otpAutoCopy = MutableStateFlow(true)
+
+    override suspend fun setOtpAutoCopy(value: Boolean) = Unit
+
+    override val otpAutoDeletePolicy = MutableStateFlow(OtpAutoDeletePolicy.NEVER)
+
+    override suspend fun setOtpAutoDeletePolicy(value: OtpAutoDeletePolicy) = Unit
+
+    override val otpDisplaySize = MutableStateFlow(OtpDisplaySize.DEFAULT)
+
+    override suspend fun setOtpDisplaySize(value: OtpDisplaySize) {
+        otpDisplaySize.value = value
+    }
+
+    override val showTransactionDetails = MutableStateFlow(false)
+
+    override suspend fun setShowTransactionDetails(value: Boolean) {
+        showTransactionDetails.value = value
+    }
+
+    override val messageSortOrder = MutableStateFlow(MessageSortOrder.RECEIVED)
+
+    override suspend fun setMessageSortOrder(value: MessageSortOrder) {
+        messageSortOrder.value = value
+    }
+
+    override val recycleBinEnabled = MutableStateFlow(true)
+
+    override suspend fun setRecycleBinEnabled(value: Boolean) {
+        recycleBinEnabled.value = value
+    }
+
+    override val mmsSendingEnabled = MutableStateFlow(true)
+
+    override suspend fun setMmsSendingEnabled(value: Boolean) = Unit
+
+    override val delayedSendEnabled = MutableStateFlow(false)
+
+    override suspend fun setDelayedSendEnabled(value: Boolean) {
+        delayedSendEnabled.value = value
+    }
+
+    override val delayedSendDelay = MutableStateFlow(DelayedSendDelay.DEFAULT)
+
+    override suspend fun setDelayedSendDelay(value: DelayedSendDelay) {
+        delayedSendDelay.value = value
+    }
+
+    override val showBalance = MutableStateFlow(true)
+
+    override suspend fun setShowBalance(value: Boolean) {
+        showBalance.value = value
+    }
+
+    override val signature = MutableStateFlow("")
+
+    override suspend fun setSignature(value: String) = Unit
+
+    override val onboardingComplete = MutableStateFlow(true)
+
+    override suspend fun setOnboardingComplete(value: Boolean) = Unit
+
+    override val scheduleSendTipShown = MutableStateFlow(false)
+
+    override suspend fun setScheduleSendTipShown(value: Boolean) {
+        scheduleSendTipShown.value = value
+    }
+
+    override val showRichAvatars = MutableStateFlow(true)
+
+    override suspend fun setShowRichAvatars(value: Boolean) {
+        showRichAvatars.value = value
+    }
+
+    override val notificationActions = MutableStateFlow(emptySet<NotificationAction>())
+
+    override suspend fun setNotificationActions(value: Set<NotificationAction>) = Unit
+
+    override val swipeActionStart = MutableStateFlow(SwipeAction.ARCHIVE)
+
+    override suspend fun setSwipeActionStart(value: SwipeAction) = Unit
+
+    override val swipeActionEnd = MutableStateFlow(SwipeAction.DELETE)
+
+    override suspend fun setSwipeActionEnd(value: SwipeAction) = Unit
+
+    override val swipeDeadZone = MutableStateFlow(SwipeDeadZone.DEFAULT)
+
+    override suspend fun setSwipeDeadZone(value: SwipeDeadZone) = Unit
+
+    override val defaultDestination = MutableStateFlow(StartDestination.INBOX)
+
+    override suspend fun setDefaultDestination(value: StartDestination) = Unit
+
+    override val enabledSections = MutableStateFlow(EnabledSections())
+
+    override suspend fun setInboxSectionEnabled(value: Boolean) {
+        enabledSections.value = enabledSections.value.copy(inbox = value)
+    }
+
+    override suspend fun setFinanceSectionEnabled(value: Boolean) {
+        enabledSections.value = enabledSections.value.copy(finance = value)
+    }
+
+    override suspend fun setAlertsSectionEnabled(value: Boolean) {
+        enabledSections.value = enabledSections.value.copy(alerts = value)
+    }
+
+    override val defaultInboxFilter = MutableStateFlow<Category?>(null)
+
+    override suspend fun setDefaultInboxFilter(value: Category?) = Unit
+
+    override val defaultFinanceFilter = MutableStateFlow(FinanceTab.ACCOUNTS)
+
+    override suspend fun setDefaultFinanceFilter(value: FinanceTab) {
+        defaultFinanceFilter.value = value
+    }
+
+    override val financeCurrency = MutableStateFlow<String?>(null)
+
+    override suspend fun setFinanceCurrency(value: String?) {
+        financeCurrency.value = value
+    }
+
+    override val transactionNotifications = MutableStateFlow(true)
+
+    override suspend fun setTransactionNotifications(value: Boolean) = Unit
+
+    override val conversationShortcuts = MutableStateFlow(true)
+
+    override suspend fun setConversationShortcuts(value: Boolean) {
+        conversationShortcuts.value = value
+    }
+
+    override val directCall = MutableStateFlow(false)
+
+    override suspend fun setDirectCall(value: Boolean) {
+        directCall.value = value
+    }
+
+    override val logoBackground = MutableStateFlow(LogoBackground.WHITE)
+
+    override suspend fun setLogoBackground(value: LogoBackground) = Unit
+
+    override val messageTextSize = MutableStateFlow(MessageTextSize.DEFAULT)
+
+    override suspend fun setMessageTextSize(value: MessageTextSize) {
+        messageTextSize.value = value
+    }
+
+    override val timeFormat = MutableStateFlow(TimeFormat.SYSTEM)
+
+    override suspend fun setTimeFormat(value: TimeFormat) {
+        timeFormat.value = value
+    }
+
+    override val inboxPillOrder = MutableStateFlow(InboxPill.entries.toList())
+
+    override suspend fun setInboxPillOrder(value: List<InboxPill>) = Unit
+
+    override val inboxHiddenPills = MutableStateFlow(emptySet<InboxPill>())
+
+    override suspend fun setInboxHiddenPills(value: Set<InboxPill>) = Unit
+
+    override val inboxUnreadToggle = MutableStateFlow(true)
+
+    override suspend fun setInboxUnreadToggle(value: Boolean) = Unit
+
+    override val financePillOrder = MutableStateFlow(FinanceTab.entries.toList())
+
+    override suspend fun setFinancePillOrder(value: List<FinanceTab>) = Unit
+
+    override val financeHiddenPills = MutableStateFlow(emptySet<FinanceTab>())
+
+    override suspend fun setFinanceHiddenPills(value: Set<FinanceTab>) {
+        financeHiddenPills.value = value
+    }
+
+    override val alertsPillOrder = MutableStateFlow(AlertFilter.entries.toList())
+
+    override suspend fun setAlertsPillOrder(value: List<AlertFilter>) = Unit
+
+    override val alertsHiddenPills = MutableStateFlow(emptySet<AlertFilter>())
+
+    override suspend fun setAlertsHiddenPills(value: Set<AlertFilter>) {
+        alertsHiddenPills.value = value
+    }
+
+    override val messageSelectionActionOrder = MutableStateFlow(MessageSelectionAction.entries.toList())
+
+    override suspend fun setMessageSelectionActionOrder(value: List<MessageSelectionAction>) {
+        messageSelectionActionOrder.value = value
+    }
+
+    override val blockedKeywords = MutableStateFlow(emptySet<String>())
+
+    override suspend fun setBlockedKeywords(value: Set<String>) {
+        blockedKeywords.value = value
+    }
+
+    override val blockedSenders = MutableStateFlow(emptySet<String>())
+
+    override suspend fun setBlockedSenders(value: Set<String>) {
+        blockedSenders.value = value
+    }
+
+    override val mutedSenders = MutableStateFlow(emptySet<String>())
+
+    override suspend fun setMutedSenders(value: Set<String>) {
+        mutedSenders.value = value
+    }
+
+    override val handledOtpMessageId = MutableStateFlow(0L)
+
+    override suspend fun setHandledOtpMessageId(value: Long) {
+        handledOtpMessageId.value = value
+    }
+
+    override val lastSortedVersionCode = MutableStateFlow(0)
+
+    override suspend fun setLastSortedVersionCode(value: Int) {
+        lastSortedVersionCode.value = value
+    }
+}

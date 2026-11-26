@@ -45,6 +45,7 @@ import com.example.callguardian.model.MessageSource
 import com.example.callguardian.screening.HeuristicScanner
 import com.example.callguardian.screening.ScanInput
 import com.example.callguardian.subscriptions.SubscriptionPrefs
+import com.example.callguardian.subscriptions.SubscriptionStore
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.json.JsonElement
@@ -67,6 +68,7 @@ class UserMethodHandlers @Inject constructor(
     private val privacy: PrivacyStore,
     private val owned: OwnedStore,
     private val profiles: PhoneProfileDao,
+    private val subStore: SubscriptionStore,
 ) {
     private val json = MethodRegistry.json
     private fun <I> decode(s: KSerializer<I>, input: JsonObject): I = json.decodeFromJsonElement(s, input)
@@ -153,22 +155,24 @@ class UserMethodHandlers @Inject constructor(
             val queued = runCatching { sms.sendTextMessage(recipient, null, i.keyword.name, null, null) }.isSuccess
             GuardianSmsUnsubscribeV1Output.Result(recipient, queued)
         }
-        subs.markUnsubscribed(i.recipients.toList())
         val allQueued = results.all { it.queued }
         return HandlerOutcome(out(GuardianSmsUnsubscribeV1Output.serializer(), GuardianSmsUnsubscribeV1Output(
             i.service, i.recipients.toList(), results, GuardianSmsUnsubscribeV1Output.Keyword.valueOf(i.keyword.name), allQueued, now)),
-            notes = listOf("Sent \"${i.keyword.name}\" to ${i.service} (${results.size} number(s)) after your confirmation.") +
-                results.map { "${it.recipient}: ${if (it.queued) "queued" else "failed"}" })
+            notes = listOf("Sent \"${i.keyword.name}\" to ${i.service} (${results.size} number(s)) after your confirmation. Marked STOP_SENT until a confirmation text arrives.") +
+                results.map { "${it.recipient}: ${if (it.queued) "queued" else "failed"}" },
+            afterReceipt = { rid -> subStore.markStopSent(i.recipients.toList(), i.service, rid, i.keyword.name) })
     }
 
-    private fun manage(i: GuardianSmsManage_subscriptionV1Input): HandlerOutcome {
+    private suspend fun manage(i: GuardianSmsManage_subscriptionV1Input): HandlerOutcome {
         if (i.suspicious && !i.acknowledgeWarning) error("This link looks suspicious. Tick \"I understand the warning\" to open it anyway.")
         val uri = Uri.parse(i.url)
         require(uri.scheme == "https" || uri.scheme == "http") { "Only web links can be opened" }
         require(uri.host?.removePrefix("www.")?.equals(i.domain, true) == true) { "Link domain changed" }
         val intent = Intent(Intent.ACTION_VIEW, uri).addCategory(Intent.CATEGORY_BROWSABLE).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         return HandlerOutcome(out(GuardianSmsManage_subscriptionV1Output.serializer(), GuardianSmsManage_subscriptionV1Output(i.url, i.domain, true, System.currentTimeMillis())),
-            launch = intent, notes = listOf("Opened in the browser. You unsubscribe on the page yourself; nothing is automated.") + listOfNotNull(i.warning?.let { "Warning shown: $it" }))
+            launch = intent,
+            notes = listOf("Opened in the browser. You unsubscribe on the page yourself; nothing is automated. We'll ask if you canceled when you come back. Canceling does not remove an Owned account unless you choose to.") + listOfNotNull(i.warning?.let { "Warning shown: $it" }),
+            afterReceipt = { subStore.markManageOpened(i.sender, i.domain) })
     }
 
     private suspend fun markOwned(i: GuardianAccountsMark_ownedV1Input): HandlerOutcome {

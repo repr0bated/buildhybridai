@@ -1,0 +1,77 @@
+{
+  "version": "1.0",
+  "rules": [
+    {
+      "id": "train-pnr-status-01",
+      "name": "Railway PNR Status Notice",
+      "priority": 300,
+      "match": {
+        "sender_pattern": "(?i)IRSMSA",
+        "body_pattern": "(?i)\\bPNR[-: ]\\s*\\d{10}\\b[\\s\\S]{0,80}?\\b(?:Trn|Train)\\b"
+      },
+      "action": {
+        "category": "important",
+        "sub_category": "travel"
+      },
+      "contributed_by": "clearsms",
+      "created_at": "2026-07-28T00:00:00Z"
+    },
+    {
+      "id": "train-chart-prepared-01",
+      "name": "Railway Chart Prepared Notice",
+      "priority": 262,
+      "match": {
+        "body_pattern": "(?i)\\bchart\\s+prepared\\b"
+      },
+      "action": {
+        "category": "important",
+        "sub_category": "travel"
+      },
+      "contributed_by": "clearsms",
+      "created_at": "2026-07-28T00:00:00Z"
+    },
+    {
+      "id": "train-running-late-01",
+      "name": "Train Running Late Notice",
+      "priority": 261,
+      "match": {
+        "body_pattern": "(?i)\\btrain\\s+is\\s+running\\s+late\\s+by\\b"
+      },
+      "action": {
+        "category": "important",
+        "sub_category": "travel"
+      },
+      "contributed_by": "clearsms",
+      "created_at": "2026-07-28T00:00:00Z"
+    },
+    {
+      "id": "train-cancelled-01",
+      "name": "Train Cancelled Notice",
+      "priority": 260,
+      "match": {
+        "sender_pattern": "(?i)(?:IRSMSA|IRCTC)",
+        "body_pattern": "(?i)\\btr(?:ain|n)\\b[\\s\\S]{0,60}?\\bhas\\s+been\\s+cancelled\\s+due\\s+to\\s+unavoidable\\b"
+      },
+      "action": {
+        "category": "important",
+        "sub_category": "travel"
+      },
+      "contributed_by": "clearsms",
+      "created_at": "2026-07-28T00:00:00Z"
+    },
+    {
+      "id": "railmadad-ref-01",
+      "name": "RailMadad Complaint Reference",
+      "priority": 259,
+      "match": {
+        "body_pattern": "(?i)\\bRailMadad\\s+Reference\\s+N(?:o|umber)\\b"
+      },
+      "action": {
+        "category": "important",
+        "sub_category": "general"
+      },
+      "contributed_by": "clearsms",
+      "created_at": "2026-07-28T00:00:00Z"
+    }
+  ]
+}

@@ -243,7 +243,7 @@ fun ProcessAllButton(state: ProcessAllState, onStart: () -> Unit, onCancel: () -
             LinearProgressIndicator(progress = { state.fraction }, modifier = Modifier.fillMaxWidth(), color = Brand.Lime, trackColor = Brand.Line)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    "${state.current}/${state.total}" + (state.label?.let { " · $it" } ?: ""),
+                    state.progressLabel,
                     style = MaterialTheme.typography.labelMedium,
                     color = Brand.InkDim,
                     modifier = Modifier.weight(1f),

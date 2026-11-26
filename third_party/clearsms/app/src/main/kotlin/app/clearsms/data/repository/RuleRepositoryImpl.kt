@@ -1,0 +1,84 @@
+package app.clearsms.data.repository
+
+import app.clearsms.data.db.RuleDao
+import app.clearsms.data.db.RuleEntity
+import app.clearsms.data.rules.BundledRuleLoader
+import app.clearsms.data.rules.RuleDefinition
+import app.clearsms.data.rules.RuleExporter
+import app.clearsms.data.rules.RuleImporter
+import app.clearsms.data.rules.RuleSources
+import app.clearsms.data.rules.toEntity
+import kotlinx.coroutines.flow.Flow
+import kotlinx.serialization.json.Json
+
+/**
+ * Default [RuleRepository] backed by Room and the bundled rules asset.
+ *
+ * Every write here ends with a [app.clearsms.data.rules.RulesRevision] bump
+ * (the loader's shared instance): the classifier caches its decoded rule
+ * set, and a rule the user just saved must decide the very next message.
+ */
+class RuleRepositoryImpl(
+    private val ruleDao: RuleDao,
+    private val bundledRuleLoader: BundledRuleLoader,
+    private val ruleImporter: RuleImporter,
+    private val ruleExporter: RuleExporter,
+    private val json: Json,
+) : RuleRepository {
+    override fun observeRules(): Flow<List<RuleEntity>> = ruleDao.observeAll()
+
+    override val bundledRulesVersion: Flow<String?> = bundledRuleLoader.loadedVersionFlow
+
+    override suspend fun ensureBundledRulesLoaded() {
+        bundledRuleLoader.ensureLoaded()
+    }
+
+    override suspend fun addUserRule(definition: RuleDefinition) {
+        ruleDao.insert(definition.toEntity(json, RuleSources.USER))
+        rulesChanged()
+    }
+
+    override suspend fun deleteRule(id: String) {
+        ruleDao.deleteById(id)
+        rulesChanged()
+    }
+
+    override suspend fun restoreParkedRule(
+        definition: RuleDefinition,
+        source: String,
+        enabled: Boolean,
+    ) {
+        if (ruleDao.getById(definition.id) != null) return
+        // Only the sources the parking code ever wrote; anything else is a
+        // user rule (never a way to plant a "builtin" row from preferences).
+        val safeSource = if (source == RuleSources.BUILTIN) RuleSources.BUILTIN else RuleSources.USER
+        ruleDao.insert(definition.toEntity(json, safeSource).copy(enabled = enabled))
+        rulesChanged()
+    }
+
+    override suspend fun setRuleEnabled(
+        id: String,
+        enabled: Boolean,
+    ) {
+        ruleDao.setEnabled(id, enabled)
+        rulesChanged()
+    }
+
+    override suspend fun exportUserRules(): String = ruleExporter.export(ruleDao.getBySource(RuleSources.USER))
+
+    override suspend fun importRules(json: String) {
+        // Imported ids are namespaced into the user id space: builtin rule
+        // ids are public in the repository, so without the prefix a crafted
+        // document could pick a builtin's id and silently overwrite that row
+        // via the REPLACE insert strategy.
+        val entities =
+            ruleImporter.import(json).map { entity ->
+                entity.copy(id = RuleEntity.namespacedUserId(entity.id))
+            }
+        ruleDao.insertAll(entities)
+        rulesChanged()
+    }
+
+    /** After every write: the cached classifier snapshot is now stale. */
+    private fun rulesChanged() = bundledRuleLoader.rulesRevision.bump()
+}

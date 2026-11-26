@@ -1,0 +1,233 @@
+package app.clearsms.ui.navigation
+
+import androidx.compose.animation.core.TweenSpec
+import app.clearsms.domain.model.EnabledSections
+import app.clearsms.domain.model.StartDestination
+import com.google.common.truth.Truth.assertThat
+import org.junit.Test
+import java.io.File
+
+/**
+ * The bottom bar must arrive WITH the tab content - not before it and not
+ * after it. Both failure modes shipped once:
+ *
+ *  - issue #39: keyed on the current entry alone and composed at full
+ *    opacity, the bar flashed OVER the conversation the moment a pop
+ *    started (the entry flips to the tab route at pop time, a full
+ *    crossfade before the conversation leaves the glass);
+ *  - the follow-up: gating composition on NavController.visibleEntries made
+ *    the bar wait for the WHOLE exit fade (then 700 ms), so the settled
+ *    inbox sat bare for a beat - too late instead of too early.
+ *  - issue #115: that shared clock was navigation-compose's 700 ms default,
+ *    Material's extra-long tier, and every screen change in the app felt
+ *    slow. The length is now Material's medium band; the sync argument only
+ *    ever needed ONE number, not the library's.
+ *
+ * The pinned resolution: [BottomBarVisibility.isVisible] answers only WHO
+ * owns the bar (the transition's TARGET destination), and the shell answers
+ * WHEN by animating the bar's slot on the same spec as the NavHost's route
+ * crossfade ([BottomBarVisibility.contentTransitionSpec]). The timing lives
+ * in wiring, not in a boolean, so the wiring is source-pinned below.
+ */
+class BottomBarVisibilityTest {
+    private val allOn = EnabledSections()
+    private val tabs = Routes.topLevel.toList()
+
+    /** Every flag combination the settings can produce (all-off is healed by [EnabledSections.from]). */
+    private val allCombinations =
+        listOf(true, false)
+            .flatMap { i ->
+                listOf(true, false).flatMap { f ->
+                    listOf(true, false).map { a -> EnabledSections.from(inbox = i, finance = f, alerts = a) }
+                }
+            }.distinct()
+
+    // ------------------------------------------------------------------
+    // WHO owns the bar: pure target-keyed visibility.
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `settled on a top-level tab shows the bar`() {
+        tabs.forEach { tab ->
+            assertThat(BottomBarVisibility.isVisible(tab, allOn)).isTrue()
+        }
+    }
+
+    @Test
+    fun `settled on a non-tab screen hides the bar`() {
+        listOf(Routes.CONVERSATION, Routes.SETTINGS, Routes.SEARCH, Routes.COMPOSE, Routes.ACCOUNT_DETAIL).forEach { route ->
+            assertThat(BottomBarVisibility.isVisible(route, allOn)).isFalse()
+        }
+    }
+
+    @Test
+    fun `mid BACK transition the bar already belongs to the target tab`() {
+        // The pop has just started: the current entry is the tab while the
+        // conversation is still fading out. The bar must be COMPOSED now -
+        // its enter animation (not this boolean) synchronises the arrival.
+        // The visibleEntries gate returned false here; that is the reverted
+        // "too late" behaviour, and this is the test that fails on it.
+        tabs.forEach { tab ->
+            assertThat(BottomBarVisibility.isVisible(tab, allOn)).isTrue()
+        }
+    }
+
+    @Test
+    fun `mid FORWARD transition the bar leaves immediately with the outgoing tab`() {
+        // navigate(conversation): the current entry is already the
+        // conversation while the tab fades out - target-keyed visibility is
+        // false at once, and the shell's snap() exit removes the slot in the
+        // same frame (pinned below), so the bar never overlaps the
+        // conversation in either direction.
+        assertThat(BottomBarVisibility.isVisible(Routes.CONVERSATION, allOn)).isFalse()
+    }
+
+    @Test
+    fun `tab-to-tab switches keep the bar composed for the whole transition`() {
+        // Source and target are both bar routes, so visibility never flips
+        // mid-switch and the v0.17.2 saveState/restoreState contract sees an
+        // uninterrupted bar.
+        tabs.forEach { tab -> assertThat(BottomBarVisibility.isVisible(tab, allOn)).isTrue() }
+    }
+
+    @Test
+    fun `every flag combination - bar only with two or more sections, and for the resolved start`() {
+        allCombinations.forEach { sections ->
+            val start =
+                when (sections.resolveStart(StartDestination.INBOX)) {
+                    StartDestination.INBOX -> Routes.INBOX
+                    StartDestination.FINANCE -> Routes.FINANCE
+                    StartDestination.ALERTS -> Routes.ALERTS
+                }
+            assertThat(BottomBarVisibility.isVisible(start, sections))
+                .isEqualTo(sections.showBottomBar)
+            // A non-tab target never shows the bar, whatever the flags.
+            assertThat(BottomBarVisibility.isVisible(Routes.CONVERSATION, sections)).isFalse()
+        }
+    }
+
+    @Test
+    fun `first composition with no route yet shows no bar`() {
+        assertThat(BottomBarVisibility.isVisible(null, allOn)).isFalse()
+    }
+
+    // ------------------------------------------------------------------
+    // WHEN it arrives: the shell wiring, source-pinned. Reverting either
+    // half (the visibleEntries gate, or a hard if with no animation)
+    // fails here.
+    // ------------------------------------------------------------------
+
+    private val shell = File("src/main/kotlin/app/clearsms/ui/navigation/ClearSmsApp.kt").readText()
+
+    @Test
+    fun `the bar slot animates in - keyed on the target, on the shared content spec`() {
+        // AnimatedVisibility keyed on the pure decision...
+        assertThat(shell).contains("visible = BottomBarVisibility.isVisible(currentRoute, sections)")
+        // ...entering on the SAME spec as the route crossfade (fade so the
+        // bar's opacity tracks the incoming content, expand so the growing
+        // slot pushes the outgoing screen up - overlap impossible).
+        assertThat(shell).contains("fadeIn(BottomBarVisibility.contentTransitionSpec())")
+        assertThat(shell).contains("expandVertically(BottomBarVisibility.contentTransitionSpec())")
+        // ...and leaving instantly on forward navigation (chrome removed
+        // early overlaps nothing; both prior versions behaved this way).
+        assertThat(shell).contains("exit = shrinkVertically(snap()) + fadeOut(snap())")
+    }
+
+    @Test
+    fun `the NavHost route crossfade runs on the same shared spec`() {
+        // The synchronisation argument only holds if the content transition
+        // is the SAME clock - explicit, not an implicit library default that
+        // could drift apart from the bar's.
+        assertThat(shell).contains("enterTransition = { fadeIn(BottomBarVisibility.contentTransitionSpec()) }")
+        assertThat(shell).contains("exitTransition = { fadeOut(BottomBarVisibility.contentTransitionSpec()) }")
+    }
+
+    @Test
+    fun `the too-late visibleEntries gate stays out`() {
+        // NavController.visibleEntries keeps the outgoing entry until its
+        // exit animation COMPLETES - gating composition on it is exactly the
+        // "bar arrives a beat after the inbox" regression.
+        assertThat(shell).doesNotContain("visibleEntries")
+    }
+
+    // ------------------------------------------------------------------
+    // COLD START (issue #63): the enter animation synchronises the bar with
+    // an incoming tab over an OUTGOING screen. With nothing outgoing there
+    // is nothing to synchronise with, so the first appearance does not
+    // animate - the reporter's frame 2 "bar fading in" is gone - while
+    // every navigation keeps the #39/#47 behaviour above untouched.
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `first appearance with nothing on the glass does not animate`() {
+        // The very first frame has no route (see above), the next has the
+        // start tab: the bar appears with it, in place, no fade.
+        assertThat(BottomBarVisibility.animatesEnter(outgoingRoute = null)).isFalse()
+    }
+
+    @Test
+    fun `every navigation still animates the bar in - back from any non-tab screen`() {
+        listOf(Routes.CONVERSATION, Routes.SETTINGS, Routes.SEARCH, Routes.COMPOSE, Routes.ACCOUNT_DETAIL).forEach { outgoing ->
+            assertThat(BottomBarVisibility.animatesEnter(outgoingRoute = outgoing)).isTrue()
+        }
+        // A tab as the outgoing route is a tab-to-tab switch (bar never
+        // hidden) or a recomposition on a settled tab: animating is the
+        // harmless answer, and it never fires because visibility never flips.
+        tabs.forEach { tab -> assertThat(BottomBarVisibility.animatesEnter(outgoingRoute = tab)).isTrue() }
+    }
+
+    @Test
+    fun `the shell picks the enter transition from the outgoing route - none on a cold start`() {
+        // The decision is the pure function, fed the route composed last time.
+        assertThat(shell).contains("BottomBarVisibility.animatesEnter(outgoingRoute)")
+        assertThat(shell).contains("SideEffect { outgoingRoute = currentRoute }")
+        assertThat(shell).contains("remember { mutableStateOf<String?>(null) }")
+        // Both branches, in this order: the animated enter (pinned above) and
+        // the no-op for the cold start.
+        val animated = shell.indexOf("if (barEnterAnimated) {")
+        val none = shell.indexOf("EnterTransition.None")
+        assertThat(animated).isGreaterThan(-1)
+        assertThat(none).isGreaterThan(animated)
+        assertThat(shell.indexOf("fadeIn(BottomBarVisibility.contentTransitionSpec()) +")).isGreaterThan(animated)
+    }
+
+    @Test
+    fun `no timers or ad-hoc durations - the only clock is the named shared spec`() {
+        // The bar must not be "tuned" into sync: no delay() and no literal
+        // duration anywhere in the shell; the single number lives in
+        // BottomBarVisibility, where both animations read it.
+        assertThat(shell).doesNotContain("delay(")
+        assertThat(shell).doesNotContain("tween(")
+        assertThat(shell).doesNotContain("700")
+        assertThat(shell).doesNotContain("$CROSSFADE_MS")
+    }
+
+    // ------------------------------------------------------------------
+    // HOW LONG (issue #115, "the transition motion effect is too long").
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `the shared crossfade is a plain tween in Material's medium band, not the library's extra-long default`() {
+        val spec = BottomBarVisibility.contentTransitionSpec<Float>()
+        assertThat(spec).isInstanceOf(TweenSpec::class.java)
+        val duration = (spec as TweenSpec<Float>).durationMillis
+        // Material duration tokens: medium1..medium4 = 250..400 ms, the band
+        // for a transition of this size. navigation-compose's own 700 is
+        // extraLong1 - the regression this pins against. Both the NavHost
+        // and the bar read this one spec (pinned above), so one assertion
+        // covers both clocks.
+        assertThat(duration).isEqualTo(CROSSFADE_MS)
+        assertThat(duration).isAtLeast(250)
+        assertThat(duration).isAtMost(400)
+        // No start delay: the bar and the content must begin on the same frame.
+        assertThat(spec.delay).isEqualTo(0)
+    }
+
+    private companion object {
+        /**
+         * Material motionDurationMedium2, and Compose's own
+         * AnimationConstants.DefaultDurationMillis (the Crossfade default).
+         */
+        const val CROSSFADE_MS = 300
+    }
+}

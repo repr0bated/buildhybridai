@@ -102,4 +102,7 @@ data class ProcessAllState(
     val candidates: List<com.example.callguardian.accounts.OwnedCandidate> = emptyList(),
 ) {
     val fraction: Float get() = if (total <= 0) 0f else (current.coerceAtMost(total) / total.toFloat())
+    /** Progress copy for the Home/Activity button. Never includes a sender or other stray number. */
+    val progressLabel: String get() = "Analyzing $current of $total"
 }
+

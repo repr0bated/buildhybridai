@@ -1,0 +1,410 @@
+package app.clearsms.di
+
+import android.content.Context
+import android.util.Log
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.preferencesDataStore
+import androidx.room.Room
+import app.clearsms.BuildConfig
+import app.clearsms.data.backup.BackupManager
+import app.clearsms.data.backup.RoomUserRuleStore
+import app.clearsms.data.backup.SettingsBackupManager
+import app.clearsms.data.db.AccountDao
+import app.clearsms.data.db.AttachmentDao
+import app.clearsms.data.db.BackfillMessageDirections
+import app.clearsms.data.db.ClearSmsDatabase
+import app.clearsms.data.db.MessageDao
+import app.clearsms.data.db.RekeyThreads
+import app.clearsms.data.db.ReminderDao
+import app.clearsms.data.db.RuleDao
+import app.clearsms.data.db.TransactionDao
+import app.clearsms.data.prefs.DeviceCurrency
+import app.clearsms.data.prefs.SettingsRepository
+import app.clearsms.data.prefs.SettingsRepositoryImpl
+import app.clearsms.data.repository.FinanceRepository
+import app.clearsms.data.repository.FinanceRepositoryImpl
+import app.clearsms.data.repository.MessageRepository
+import app.clearsms.data.repository.MessageRepositoryImpl
+import app.clearsms.data.repository.RuleRepository
+import app.clearsms.data.repository.RuleRepositoryImpl
+import app.clearsms.data.repository.UndoManager
+import app.clearsms.data.rules.BundledRuleLoader
+import app.clearsms.data.rules.RuleEngine
+import app.clearsms.data.rules.RuleExporter
+import app.clearsms.data.rules.RuleImporter
+import app.clearsms.data.rules.RulesRevision
+import app.clearsms.data.senderid.SenderIdStore
+import app.clearsms.domain.categorizer.ContactLookup
+import app.clearsms.domain.categorizer.MessageCategorizer
+import app.clearsms.domain.categorizer.SenderIdLookup
+import app.clearsms.domain.parser.CurrencyContext
+import app.clearsms.domain.parser.TransactionParser
+import app.clearsms.mms.AttachmentStore
+import app.clearsms.notification.NotificationDismisser
+import app.clearsms.receiver.DefaultSendReportSideEffects
+import app.clearsms.receiver.SendReportSideEffects
+import app.clearsms.sms.ProviderSentTimeSource
+import app.clearsms.sms.ProviderSimSource
+import app.clearsms.sms.SenderRegion
+import app.clearsms.sms.SystemProviderSentTimeSource
+import app.clearsms.sms.SystemProviderSimSource
+import app.clearsms.sms.SystemProviderThreadSource
+import app.clearsms.sms.SystemSentSmsSource
+import app.clearsms.sms.TelephonyWriter
+import app.clearsms.work.BackupDocumentStore
+import app.clearsms.work.SafBackupDocumentStore
+import dagger.Binds
+import dagger.BindsOptionalOf
+import dagger.Module
+import dagger.Provides
+import dagger.hilt.InstallIn
+import dagger.hilt.android.qualifiers.ApplicationContext
+import dagger.hilt.components.SingletonComponent
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.serialization.json.Json
+import java.util.Optional
+import javax.inject.Qualifier
+import javax.inject.Singleton
+
+/** Qualifier for the IO dispatcher used by data-layer work. */
+@Qualifier
+@Retention(AnnotationRetention.BINARY)
+annotation class IoDispatcher
+
+/**
+ * Qualifier for the UI-preferences DataStore ("ui_settings") as opposed to
+ * the core settings DataStore. Injected so tests can substitute an isolated
+ * store - binding the process-wide delegate inside UiPrefs made Robolectric
+ * test classes poison each other through the cached static singleton.
+ */
+@Qualifier
+@Retention(AnnotationRetention.BINARY)
+annotation class UiSettingsDataStore
+
+private val Context.settingsDataStore: DataStore<Preferences> by preferencesDataStore(name = "settings")
+private val Context.uiPrefsDataStore: DataStore<Preferences> by preferencesDataStore(name = "ui_settings")
+
+/**
+ * Optional bindings satisfied by other layers.
+ *
+ * [ContactLookup] is implemented by the platform layer (contacts provider);
+ * until that binding exists the categorizer treats every sender as a
+ * non-contact.
+ */
+@Module
+@InstallIn(SingletonComponent::class)
+internal interface DataOptionalBindings {
+    @BindsOptionalOf
+    fun contactLookup(): ContactLookup
+}
+
+/** Interface bindings for the data layer. */
+@Module
+@InstallIn(SingletonComponent::class)
+internal interface DataBindings {
+    /** SAF-backed document access for the periodic backup worker. */
+    @Binds
+    fun backupDocumentStoreFactory(impl: SafBackupDocumentStore.Factory): BackupDocumentStore.Factory
+
+    /** Provider mirroring + failure notification for outgoing send reports. */
+    @Binds
+    fun sendReportSideEffects(impl: DefaultSendReportSideEffects): SendReportSideEffects
+
+    /** `content://sms` rows for the one-time SIM backfill. */
+    @Binds
+    fun providerSimSource(impl: SystemProviderSimSource): ProviderSimSource
+
+    /** `content://sms` inbox rows for the one-time sent-time backfill. */
+    @Binds
+    fun providerSentTimeSource(impl: SystemProviderSentTimeSource): ProviderSentTimeSource
+}
+
+/** Hilt wiring for the data and domain layers. */
+@Module
+@InstallIn(SingletonComponent::class)
+object DataModule {
+    @Provides
+    @IoDispatcher
+    fun provideIoDispatcher(): CoroutineDispatcher = Dispatchers.IO
+
+    @Provides
+    @Singleton
+    fun provideJson(): Json =
+        Json {
+            ignoreUnknownKeys = true
+            encodeDefaults = true
+            prettyPrint = false
+        }
+
+    @Provides
+    @Singleton
+    fun provideDatabase(
+        @ApplicationContext context: Context,
+    ): ClearSmsDatabase {
+        // The v6→v7 direction backfill reads the system SMS provider's sent
+        // box; hand it the source before the database can open and migrate.
+        BackfillMessageDirections.sentSmsSource = SystemSentSmsSource(context)
+        // The v21→v22 thread re-key reads the provider's thread ids and
+        // keys senders under the SIM's region: both installed before the
+        // database opens so the migration and every later insert agree.
+        RekeyThreads.providerThreadSource = SystemProviderThreadSource(context)
+        SenderRegion.install(context)
+        return Room
+            .databaseBuilder(context, ClearSmsDatabase::class.java, ClearSmsDatabase.NAME)
+            .build()
+    }
+
+    @Provides
+    fun provideMessageDao(db: ClearSmsDatabase): MessageDao = db.messageDao()
+
+    @Provides
+    fun provideAccountDao(db: ClearSmsDatabase): AccountDao = db.accountDao()
+
+    @Provides
+    fun provideTransactionDao(db: ClearSmsDatabase): TransactionDao = db.transactionDao()
+
+    @Provides
+    fun provideRuleDao(db: ClearSmsDatabase): RuleDao = db.ruleDao()
+
+    @Provides
+    fun provideReminderDao(db: ClearSmsDatabase): ReminderDao = db.reminderDao()
+
+    @Provides
+    fun provideAttachmentDao(db: ClearSmsDatabase): AttachmentDao = db.attachmentDao()
+
+    @Provides
+    @Singleton
+    fun provideSettingsDataStore(
+        @ApplicationContext context: Context,
+    ): DataStore<Preferences> = context.settingsDataStore
+
+    @Provides
+    @Singleton
+    @UiSettingsDataStore
+    fun provideUiSettingsDataStore(
+        @ApplicationContext context: Context,
+    ): DataStore<Preferences> = context.uiPrefsDataStore
+
+    /**
+     * The bundled sender directory, exposed ONLY as [SenderIdLookup]: every
+     * consumer (categorizer, ViewModels, notification resolver) needs just
+     * `lookup`, and binding the interface lets their unit tests pass a
+     * one-line fake instead of the asset-backed store. That matters
+     * because Robolectric serves a compressed asset by inflating ALL of it
+     * into one heap byte array - for the 44 MB `sender_ids.db` that is a
+     * humongous allocation per test on a fresh Application, which
+     * exhausted the 512 MB test heap on CI (see
+     * SenderIdStoreIsolationConventionTest).
+     */
+    @Provides
+    @Singleton
+    fun provideSenderIdLookup(
+        @ApplicationContext context: Context,
+    ): SenderIdLookup = SenderIdStore(context)
+
+    /**
+     * The ONE transaction parser, wired with the currency context (issue
+     * #65): the SIM/locale currency read once at startup as the fallback,
+     * and the Settings override as a hot state - the parser is synchronous
+     * and runs on every incoming SMS, so it reads a warm cache instead of
+     * suspending on the DataStore (same reasoning as [hotGate]).
+     */
+    @Provides
+    @Singleton
+    fun provideTransactionParser(
+        @ApplicationContext context: Context,
+        @ApplicationScope appScope: CoroutineScope,
+        settingsRepository: SettingsRepository,
+    ): TransactionParser {
+        val deviceCurrency = DeviceCurrency.detect(context)
+        val override = settingsRepository.financeCurrency.stateIn(appScope, SharingStarted.Eagerly, null)
+        return TransactionParser { CurrencyContext(deviceCurrency = deviceCurrency, override = override.value) }
+    }
+
+    @Provides
+    @Singleton
+    fun provideRuleEngine(transactionParser: TransactionParser): RuleEngine =
+        RuleEngine(
+            log = { Log.w("RuleEngine", it) },
+            // Amount extracts are typed under the body's currency, exactly
+            // like the parser's own amounts - one convention per message.
+            currencyOf = transactionParser::currencyOf,
+        )
+
+    /**
+     * ONE rules-changed signal for the process: every writer of the rules
+     * table and the classifier's snapshot cache must share it, or a saved
+     * rule would not reach the next message (see [RulesRevision]).
+     */
+    @Provides
+    @Singleton
+    fun provideRulesRevision(): RulesRevision = RulesRevision()
+
+    @Provides
+    @Singleton
+    fun provideBundledRuleLoader(
+        @ApplicationContext context: Context,
+        ruleDao: RuleDao,
+        json: Json,
+        dataStore: DataStore<Preferences>,
+        @UiSettingsDataStore uiDataStore: DataStore<Preferences>,
+        rulesRevision: RulesRevision,
+    ): BundledRuleLoader = BundledRuleLoader(context, ruleDao, json, dataStore, uiDataStore, rulesRevision)
+
+    @Provides
+    @Singleton
+    fun provideMessageCategorizer(
+        ruleEngine: RuleEngine,
+        senderIdLookup: SenderIdLookup,
+        contactLookup: Optional<ContactLookup>,
+        transactionParser: TransactionParser,
+    ): MessageCategorizer =
+        MessageCategorizer(
+            ruleEngine = ruleEngine,
+            senderIdLookup = senderIdLookup,
+            transactionParser = transactionParser,
+            contactLookup = ContactLookup { address -> contactLookup.map { it.isContact(address) }.orElse(false) },
+        )
+
+    @Provides
+    @Singleton
+    fun provideMessageRepositoryImpl(
+        @ApplicationScope appScope: CoroutineScope,
+        database: ClearSmsDatabase,
+        categorizer: MessageCategorizer,
+        bundledRuleLoader: BundledRuleLoader,
+        json: Json,
+        telephonyWriter: TelephonyWriter,
+        notificationDismisser: NotificationDismisser,
+        settingsRepository: SettingsRepository,
+        attachmentStore: AttachmentStore,
+        transactionParser: TransactionParser,
+    ): MessageRepositoryImpl =
+        MessageRepositoryImpl(
+            database = database,
+            categorizer = categorizer,
+            bundledRuleLoader = bundledRuleLoader,
+            json = json,
+            transactionParser = transactionParser,
+            systemSmsDeleter = telephonyWriter,
+            systemSmsReadWriter = telephonyWriter,
+            systemSmsReinserter = telephonyWriter,
+            readNotificationCanceler = notificationDismisser,
+            // HOT caches, one collector each attached for the app's lifetime.
+            // A cold `.first()` per incoming message races concurrent
+            // DataStore writes (upstream b/431787506: a NEW collector during
+            // updateData may never emit) - an SMS arriving while the user
+            // toggled any of these settings would suspend in ingest forever
+            // and silently drop the message (found live: unblock + arrival).
+            blockedKeywords = hotGate(appScope, settingsRepository.blockedKeywords, emptySet()),
+            blockedSenders = hotGate(appScope, settingsRepository.blockedSenders, emptySet()),
+            recycleBinEnabled = hotGate(appScope, settingsRepository.recycleBinEnabled, true),
+            attachmentFileCleaner = attachmentStore::deleteFor,
+        )
+
+    @Provides
+    @Singleton
+    fun provideMessageRepository(impl: MessageRepositoryImpl): MessageRepository = impl
+
+    @Provides
+    @Singleton
+    fun provideUndoManager(
+        repository: MessageRepository,
+        settings: SettingsRepository,
+        @ApplicationScope scope: CoroutineScope,
+    ): UndoManager =
+        UndoManager(
+            repository = repository,
+            scope = scope,
+            recycleBinEnabled = { settings.recycleBinEnabled.first() },
+        )
+
+    @Provides
+    @Singleton
+    fun provideFinanceRepository(
+        transactionDao: TransactionDao,
+        accountDao: AccountDao,
+        reminderDao: ReminderDao,
+    ): FinanceRepository = FinanceRepositoryImpl(transactionDao, accountDao, reminderDao)
+
+    @Provides
+    @Singleton
+    fun provideRuleRepository(
+        ruleDao: RuleDao,
+        bundledRuleLoader: BundledRuleLoader,
+        json: Json,
+    ): RuleRepository = RuleRepositoryImpl(ruleDao, bundledRuleLoader, RuleImporter(json), RuleExporter(json), json)
+
+    @Provides
+    @Singleton
+    fun provideSettingsRepository(dataStore: DataStore<Preferences>): SettingsRepository = SettingsRepositoryImpl(dataStore)
+
+    @Provides
+    @Singleton
+    fun provideBackupManager(
+        database: ClearSmsDatabase,
+        json: Json,
+        rulesRevision: RulesRevision,
+    ): BackupManager = BackupManager(database, json, rulesRevision)
+
+    @Provides
+    @Singleton
+    fun provideSettingsBackupManager(
+        dataStore: DataStore<Preferences>,
+        json: Json,
+        database: ClearSmsDatabase,
+        rulesRevision: RulesRevision,
+    ): SettingsBackupManager =
+        SettingsBackupManager(
+            dataStore,
+            json,
+            BuildConfig.VERSION_NAME,
+            RoomUserRuleStore(database, rulesRevision),
+            RuleImporter(json),
+        )
+
+    /** Test seam for [hotGate] - the contract is pinned by HotGateTest. */
+    @androidx.annotation.VisibleForTesting
+    fun <T> hotGateForTest(
+        scope: CoroutineScope,
+        source: Flow<T>,
+        initial: T,
+    ): suspend () -> T = hotGate(scope, source, initial)
+
+    /**
+     * Bridges a DataStore-backed settings flow to a suspend getter that can
+     * never hang ingest: ONE shared collector starts eagerly at app start and
+     * lives forever, so per-message reads consult a warm cache instead of
+     * opening a fresh cold collector. Cold per-read collectors race concurrent
+     * DataStore writes (upstream b/431787506 - a collector attaching during
+     * updateData may never emit), which suspended ingest forever and silently
+     * dropped the message. Reads await the first real emission briefly (the
+     * eager collect at quiet app start makes this near-instant), then fall
+     * back to [initial] rather than ever blocking a message.
+     */
+    private fun <T> hotGate(
+        scope: CoroutineScope,
+        source: Flow<T>,
+        initial: T,
+    ): suspend () -> T {
+        val ready = CompletableDeferred<Unit>()
+        val state =
+            source
+                .onEach { if (!ready.isCompleted) ready.complete(Unit) }
+                .stateIn(scope, SharingStarted.Eagerly, initial)
+        return {
+            withTimeoutOrNull(2_000) { ready.await() }
+            state.value
+        }
+    }
+}

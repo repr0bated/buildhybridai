@@ -1,0 +1,125 @@
+package app.clearsms.ui.conversation
+
+import app.clearsms.data.db.DeliveryStatus
+import com.google.common.truth.Truth.assertThat
+import org.junit.Test
+import java.time.ZoneId
+import java.util.Locale
+
+/** Tap-to-reveal metadata: timestamp formatting and the single-expansion toggle. */
+class MessageMetadataTest {
+    private val zone = ZoneId.of("Asia/Kolkata")
+
+    // 2026-07-26 16:59 IST
+    private val afternoon = 1_785_065_340_000L
+
+    @Test
+    fun `24-hour devices get a 24-hour timestamp`() {
+        assertThat(MessageMetadata.timestampLabel(afternoon, is24Hour = true, zone = zone, locale = Locale.ENGLISH))
+            .isEqualTo("26 Jul 2026, 16:59")
+    }
+
+    @Test
+    fun `12-hour devices get an am-pm timestamp`() {
+        assertThat(MessageMetadata.timestampLabel(afternoon, is24Hour = false, zone = zone, locale = Locale.ENGLISH))
+            .isEqualTo("26 Jul 2026, 4:59 pm")
+    }
+
+    @Test
+    fun `precise labels carry seconds in both clock styles - the details view's format`() {
+        val withSeconds = afternoon + 7_000L // 16:59:07 IST
+        assertThat(MessageMetadata.preciseTimestampLabel(withSeconds, is24Hour = true, zone = zone, locale = Locale.ENGLISH))
+            .isEqualTo("26 Jul 2026, 16:59:07")
+        assertThat(MessageMetadata.preciseTimestampLabel(withSeconds, is24Hour = false, zone = zone, locale = Locale.ENGLISH))
+            .isEqualTo("26 Jul 2026, 4:59:07 pm")
+    }
+
+    @Test
+    fun `morning times keep the am marker and no leading zero`() {
+        val morning = afternoon - 8 * 60 * 60 * 1000 // 08:59 IST
+        assertThat(MessageMetadata.timestampLabel(morning, is24Hour = false, zone = zone, locale = Locale.ENGLISH))
+            .isEqualTo("26 Jul 2026, 8:59 am")
+        assertThat(MessageMetadata.timestampLabel(morning, is24Hour = true, zone = zone, locale = Locale.ENGLISH))
+            .isEqualTo("26 Jul 2026, 08:59")
+    }
+
+    @Test
+    fun `tapping a collapsed message expands it`() {
+        assertThat(MessageMetadata.onTap(expandedId = null, tappedId = 7L, selectionActive = false))
+            .isEqualTo(7L)
+    }
+
+    @Test
+    fun `tapping the expanded message collapses it`() {
+        assertThat(MessageMetadata.onTap(expandedId = 7L, tappedId = 7L, selectionActive = false))
+            .isNull()
+    }
+
+    @Test
+    fun `tapping another message moves the single expansion`() {
+        assertThat(MessageMetadata.onTap(expandedId = 7L, tappedId = 9L, selectionActive = false))
+            .isEqualTo(9L)
+    }
+
+    @Test
+    fun `taps in selection mode leave the expansion untouched`() {
+        assertThat(MessageMetadata.onTap(expandedId = 7L, tappedId = 9L, selectionActive = true))
+            .isEqualTo(7L)
+        assertThat(MessageMetadata.onTap(expandedId = null, tappedId = 9L, selectionActive = true))
+            .isNull()
+    }
+
+    @Test
+    fun `tapping a failed outgoing bubble offers retry`() {
+        assertThat(
+            MessageMetadata.tapAction(selectionActive = false, outgoing = true, deliveryStatus = DeliveryStatus.FAILED),
+        ).isEqualTo(MessageMetadata.TapAction.OFFER_RETRY)
+    }
+
+    @Test
+    fun `selection mode wins over the failed bubble - tap keeps toggling selection`() {
+        assertThat(
+            MessageMetadata.tapAction(selectionActive = true, outgoing = true, deliveryStatus = DeliveryStatus.FAILED),
+        ).isEqualTo(MessageMetadata.TapAction.TOGGLE_SELECTION)
+    }
+
+    @Test
+    fun `non-failed outgoing bubbles keep the details toggle`() {
+        for (status in listOf(DeliveryStatus.SENDING, DeliveryStatus.SENT, DeliveryStatus.DELIVERED, null)) {
+            assertThat(
+                MessageMetadata.tapAction(selectionActive = false, outgoing = true, deliveryStatus = status),
+            ).isEqualTo(MessageMetadata.TapAction.TOGGLE_DETAILS)
+        }
+    }
+
+    @Test
+    fun `incoming bubbles never offer retry`() {
+        assertThat(
+            MessageMetadata.tapAction(selectionActive = false, outgoing = false, deliveryStatus = DeliveryStatus.FAILED),
+        ).isEqualTo(MessageMetadata.TapAction.TOGGLE_DETAILS)
+    }
+
+    @Test
+    fun `tapping a failed MMS download offers its retry dialog`() {
+        assertThat(
+            MessageMetadata.tapAction(
+                selectionActive = false,
+                outgoing = false,
+                deliveryStatus = null,
+                mmsDownloadFailed = true,
+            ),
+        ).isEqualTo(MessageMetadata.TapAction.OFFER_MMS_RETRY)
+    }
+
+    @Test
+    fun `selection mode wins over a failed MMS download`() {
+        assertThat(
+            MessageMetadata.tapAction(
+                selectionActive = true,
+                outgoing = false,
+                deliveryStatus = null,
+                mmsDownloadFailed = true,
+            ),
+        ).isEqualTo(MessageMetadata.TapAction.TOGGLE_SELECTION)
+    }
+}

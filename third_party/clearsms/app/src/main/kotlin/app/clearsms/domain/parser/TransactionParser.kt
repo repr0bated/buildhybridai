@@ -1,0 +1,1014 @@
+package app.clearsms.domain.parser
+
+import app.clearsms.domain.model.AccountType
+import app.clearsms.domain.model.CurrencyCatalog
+import app.clearsms.domain.model.CurrencyInfo
+import app.clearsms.domain.model.MerchantCategory
+import app.clearsms.domain.model.ParsedTransaction
+import app.clearsms.domain.model.TransactionType
+
+/**
+ * Extracts debit/credit transactions from bank SMS bodies.
+ *
+ * A message is treated as a transaction only when it contains BOTH a currency
+ * amount (₹ / Rs / INR, an ISO code, or a currency symbol) and a debit or
+ * credit keyword; this keeps OTPs and promotional messages ("50% off up to
+ * Rs.100") from producing transactions.
+ *
+ * Amounts are read in the CURRENCY the message is denominated in (see
+ * [CurrencyDetector] and [AmountParser]), never under a fixed "`,` groups,
+ * `.` is the decimal" assumption: a Chilean `$1.000` is one thousand pesos.
+ * [currencyContext] supplies the device/SIM fallback and the Settings
+ * override for messages that name no currency.
+ */
+class TransactionParser(
+    private val currencyContext: () -> CurrencyContext = { CurrencyContext.INDIA },
+) {
+    fun parse(
+        sender: String,
+        body: String,
+    ): ParsedTransaction? {
+        // A FAILED payment moved no money. Its narration routinely carries
+        // completed-tense verbs ("done", "if debited") that satisfy the
+        // debit heuristics, so failure language rejects the whole message
+        // up front - no transaction row, ever. Refund credits arrive as
+        // their own later message and parse on their own.
+        if (isFailedPayment(body)) return null
+        // A collect / payment REQUEST ("You've received an IPO request from
+        // X for up to Rs.Y", "A has requested Rs.B from your account") and a
+        // mandate lifecycle notice quote an amount that is only being ASKED
+        // for - "received ... request" otherwise satisfies the credit
+        // heuristics, so the whole notice is rejected up front. The approved
+        // request's execution arrives as its own "debited" message and
+        // parses then.
+        if (isPaymentRequestNotice(body)) return null
+        // A refund/payout that was only INITIATED - or a card CREDIT-BALANCE
+        // refund whose money lands in a different (bank) account - has not
+        // landed: "Refund" is itself a credit keyword, so without this veto
+        // the lifecycle notice would fabricate a credit that the receiving
+        // bank's own SMS later records again - a double count. A merchant
+        // refund "processed to your account" stays out of the veto and
+        // parses as the credit the repo's precedent records it as.
+        if (isPayoutInFlight(body)) return null
+        // A statement / bill notice ("Statement is sent...", "E-statement of
+        // ... has been mailed") reports money OWED, not money moved. Its
+        // verbs ("sent", "generated") and its "Total of Rs X ... is due"
+        // amounts satisfy the transaction heuristics, so the notice phrases
+        // are scrubbed BEFORE parsing: what remains carries no completed
+        // debit/credit verb and the message stays a reminder only.
+        // A per-unit pitch amount ("earn 3 pts on every Rs 100 spent") is a
+        // hypothetical rate, not money that moved: the same scrub removes
+        // the amount AND its trailing spend verb, so a rewards pitch can
+        // never fabricate a debit.
+        val effectiveBody =
+            GuardLibrary.scrub(
+                GuardId.HYPOTHETICAL_AMOUNT,
+                GuardLibrary.scrub(GuardId.STATEMENT_NOTICE, body),
+            )
+        // "Payment of INR X ... is due (on <date>)" announces a FUTURE
+        // obligation - a bill reminder, never a completed debit. The trailing
+        // "Ignore if paid" advisory carries a completed-tense verb ("paid")
+        // that satisfies the debit heuristics, so the whole notice is
+        // rejected up front; the reminder pipeline extracts the total /
+        // minimum due and due date instead.
+        if (GuardLibrary.matches(GuardId.BILL_DUE_NOTICE, effectiveBody)) return null
+        val type = detectType(effectiveBody) ?: return null
+
+        // Balance and limit phrases are INR-anchored ("Avl Bal: Rs ..."), so
+        // their figures are read under the rupee convention.
+        val balanceMatch = BALANCE_REGEX.find(effectiveBody)
+        val balance = balanceMatch?.groupValues?.get(1)?.toAmount(CurrencyCatalog.INR)
+
+        // Amounts inside the balance or an "Avl Limit/Lmt" phrase are state,
+        // not the transaction; excluding them keeps "Avl Limit: INR 286368.5"
+        // from becoming the amount of a foreign-currency card spend.
+        val availableLimitMatch = AVAILABLE_LIMIT_REGEX.findAll(effectiveBody).toList()
+        val availableLimit =
+            availableLimitMatch
+                .firstOrNull()
+                ?.groupValues
+                ?.get(1)
+                ?.toAmount(CurrencyCatalog.INR)
+        val excluded =
+            listOfNotNull(balanceMatch?.range) + availableLimitMatch.map { it.range }
+        // Three tiers, first hit wins: (1) the rupee-marked amount, (2) a
+        // verb-anchored foreign spend ("Spent USD 40.95"), (3) any other
+        // currency-MARKED amount (a `$`, `€`, ISO code...). Every tier
+        // requires a currency marker - a bare number is never an amount, so
+        // reference numbers, card tails and dates cannot become one. The
+        // figure is read under the currency ITS OWN marker names (a "Rs"
+        // amount is rupees even when the body mentions "USD 10" earlier),
+        // and that currency is what gets stored with it.
+        val context = currencyContext()
+        val notExcluded: (MatchResult) -> Boolean = { match -> excluded.none { match.range.first in it } }
+        val figure =
+            AMOUNT_REGEX.findAll(effectiveBody).firstOrNull(notExcluded)?.let { match ->
+                markedFigure(match.value, match.groupValues[1], context)
+            }
+                ?: FOREIGN_AMOUNT_REGEX.find(effectiveBody)?.let { match ->
+                    Figure.of(match.groupValues[2], CurrencyCatalog.of(match.groupValues[1]))
+                }
+                ?: MARKED_AMOUNT_REGEX.findAll(effectiveBody).firstOrNull(notExcluded)?.let { match ->
+                    markedFigure(match.value, match.groupValues[1].ifEmpty { match.groupValues[2] }, context)
+                }
+                ?: return null
+        val amount = figure.amount
+        val currency = figure.currency.code
+
+        val merchant = extractMerchant(effectiveBody)
+        val resolvedBank = SenderNameResolver.bankNameFor(sender, body)
+        // The issuer comes from the sender / card-account phrase, NEVER from
+        // the "at <merchant>" clause; a resolved name that is not a plausible
+        // issuer (CRED, Flipkart, ...) is demoted to the merchant slot so it
+        // can never spawn an account (see SenderNameResolver.isPlausibleIssuer).
+        val bankIsIssuer = SenderNameResolver.isPlausibleIssuer(resolvedBank, body)
+        // Title priority: a real merchant, then a demoted non-issuer brand,
+        // then the transaction's stated PURPOSE ("for NEFT transaction",
+        // a "for <narration>" descriptor), then the COUNTERPARTY (who the
+        // money went to / came from). WHY beats WHO; both beat a row that
+        // names only the user's own bank. When none exists the title stays
+        // null - never a fabricated placeholder.
+        val title =
+            merchant
+                ?: resolvedBank?.takeIf { !bankIsIssuer }
+                ?: extractPurpose(effectiveBody)
+                ?: extractCounterparty(effectiveBody, type)
+        return ParsedTransaction(
+            amount = amount,
+            currency = currency,
+            type = type,
+            merchantName = title,
+            accountLast4 = extractAccountLast4(effectiveBody),
+            bankName = resolvedBank?.takeIf { bankIsIssuer },
+            balance = balance,
+            availableLimit = availableLimit,
+            referenceNumber =
+                REFERENCE_REGEX.find(effectiveBody)?.let { match ->
+                    match.groupValues[1].ifEmpty { match.groupValues[2] }.ifEmpty { null }
+                },
+            merchantCategory = categorize(title, effectiveBody),
+            accountType = detectAccountType(effectiveBody),
+        )
+    }
+
+    /**
+     * Parses a standalone balance statement ("Available Bal in HDFC Bank
+     * A/c XX8709 as on yesterday:27-JUL-26 is INR 40,194.56") - state
+     * reported, no money moved. Returns null whenever the body carries a
+     * real transaction: there the balance is a secondary field of the
+     * transaction, never a balance-only update. The bank survives only when
+     * it is a plausible issuer (the merchants-never-become-accounts
+     * guardrail), so a balance mention can never spawn a merchant account.
+     */
+    fun parseBalanceStatement(
+        sender: String,
+        body: String,
+    ): BalanceStatement? {
+        if (parse(sender, body) != null) return null
+        val balance =
+            STATEMENT_BALANCE_REGEX
+                .find(body)
+                ?.groupValues
+                ?.get(1)
+                ?.toAmount(CurrencyCatalog.INR) ?: return null
+        val resolvedBank = SenderNameResolver.bankNameFor(sender, body)
+        return BalanceStatement(
+            balance = balance,
+            accountLast4 = extractAccountLast4(body),
+            bankName = resolvedBank?.takeIf { SenderNameResolver.isPlausibleIssuer(it, body) },
+            accountType = detectAccountType(body),
+        )
+    }
+
+    /**
+     * Parses a TOTAL credit-limit statement - the issuer confirming what the
+     * card's overall limit now is ("The credit limit for your ... Credit
+     * Card 1234X5678 has been changed from INR 100000 to INR 150000",
+     * "Credit Limit Increased! ... Your new limit is ₹150000", "Total
+     * Credit Limit: Rs.150000"). Only CONFIRMED statements qualify: limit
+     * increase OFFERS ("eligible for", "pre-approved", "can be increased
+     * to") describe money the user does not have yet and are rejected, as
+     * are loan/telecom "limit" messages (the body must mention a card).
+     */
+    fun parseTotalLimit(
+        sender: String,
+        body: String,
+    ): TotalLimitStatement? {
+        if (!CARD_CONTEXT_REGEX.containsMatchIn(body)) return null
+        if (GuardLibrary.matches(GuardId.LIMIT_OFFER, body)) return null
+        val limit =
+            TOTAL_LIMIT_CHANGED_REGEX
+                .find(body)
+                ?.groupValues
+                ?.get(1)
+                ?: TOTAL_LIMIT_NEW_REGEX
+                    .find(body)
+                    ?.takeIf { !LAKH_SUFFIX_REGEX.containsMatchIn(body.substring(it.range.last + 1)) }
+                    ?.groupValues
+                    ?.get(1)
+                ?: TOTAL_LIMIT_STATED_REGEX
+                    .find(body)
+                    ?.groupValues
+                    ?.get(1)
+        val amount = limit?.toAmount(CurrencyCatalog.INR) ?: return null
+        if (amount <= 0.0) return null
+        val resolvedBank = SenderNameResolver.bankNameFor(sender, body)
+        return TotalLimitStatement(
+            totalLimit = amount,
+            accountLast4 = extractCardTail(body),
+            bankName = resolvedBank?.takeIf { SenderNameResolver.isPlausibleIssuer(it, body) },
+        )
+    }
+
+    /**
+     * Masked-card tail for limit statements. The inline-masked shape
+     * "Credit Card 4375X9012" (BIN, mask char, tail - no separators) must
+     * yield the LAST digit group; the generic account regex would capture
+     * the BIN. Falls back to the shared tail extraction otherwise.
+     */
+    private fun extractCardTail(body: String): String? =
+        INLINE_MASKED_CARD_REGEX.find(body)?.groupValues?.get(1)
+            ?: extractAccountLast4(body)
+
+    /**
+     * True for statement / bill notices ("Statement is sent to ...",
+     * "E-statement ... has been mailed", "Statement is generated") and for
+     * bill-due notices ("Payment of INR X ... is due on <date>") - these
+     * report money OWED, not money moved, so they must never yield a
+     * transaction, from the parser OR from rule extracts.
+     */
+    fun isStatementNotice(body: String): Boolean =
+        GuardLibrary.matches(GuardId.STATEMENT_NOTICE, body) || GuardLibrary.matches(GuardId.BILL_DUE_NOTICE, body)
+
+    /**
+     * True when the body reports a FAILED / declined / unsuccessful payment.
+     * No money moved, so such a message must never yield a transaction -
+     * from the parser OR from rule extracts. (If the amount was provisionally
+     * debited, the refund arrives as its own message and parses then.)
+     */
+    fun isFailedPayment(body: String): Boolean = GuardLibrary.matches(GuardId.FAILED_PAYMENT, body)
+
+    /**
+     * True for refund/payout lifecycle notices whose money has NOT landed
+     * yet: "refund ... initiated" (nothing processed), and a card
+     * CREDIT-BALANCE refund initiated/processed - the quoted tail is the
+     * CARD's while the money lands in a different (bank) account. Such a
+     * notice must never yield a transaction - from the parser OR from rule
+     * extracts - because the receiving bank's own credit SMS records the
+     * money when it lands, and a second row here would double-count it
+     * (and misattribute it to the card). A merchant refund "processed to
+     * your account" deliberately stays OUT of the veto.
+     */
+    fun isPayoutInFlight(body: String): Boolean = GuardLibrary.matches(GuardId.PAYOUT_IN_FLIGHT, body)
+
+    /**
+     * True for UPI collect / payment-request notices ("You've received an
+     * IPO request from ...", "X has requested Rs.Y from your account",
+     * "approve to pay") and IPO mandate funds-blocked confirmations. Money
+     * is only being ASKED for - nothing moved.
+     */
+    fun isCollectRequest(body: String): Boolean = GuardLibrary.matches(GuardId.COLLECT_REQUEST, body)
+
+    /**
+     * The unified payment-request veto: a collect/payment request OR a UPI
+     * mandate lifecycle notice ([GuardId.MANDATE_NOTICE]). Both quote an
+     * amount while moving no money, so neither may ever yield a transaction -
+     * from the parser ([parse] consults this up front) OR from rule extracts
+     * (the ingestion pipeline consults it before deriving from extracts).
+     */
+    fun isPaymentRequestNotice(body: String): Boolean = isCollectRequest(body) || GuardLibrary.matches(GuardId.MANDATE_NOTICE, body)
+
+    /**
+     * True for a retirement units-credited confirmation ("Your contribution
+     * of Rs.X has been credited to your NPS Tier-I a/c ... valuation ... is
+     * Rs.Y"). The SAME contribution was already announced - and recorded as
+     * the credit - by the PRAN-tailed fund-confirmation SMS, so a second
+     * credit here would double-count the money. The message must never
+     * yield a transaction; its valuation refreshes the scheme account's
+     * balance instead (see the ingestion pipeline's balance path).
+     */
+    fun isRetirementUnitsEcho(body: String): Boolean = GuardLibrary.matches(GuardId.RETIREMENT_UNITS_ECHO, body)
+
+    /**
+     * The amount a collect/payment request is asking for ("for up to
+     * Rs.14807"), or null when the body is not a collect request or quotes
+     * no amount. Informational only: it renders unsigned (blue), never as a
+     * signed debit/credit, and never derives a transaction.
+     */
+    fun requestedAmount(body: String): Double? {
+        if (!isCollectRequest(body)) return null
+        return AMOUNT_REGEX
+            .find(body)
+            ?.groupValues
+            ?.get(1)
+            ?.toAmount(CurrencyCatalog.INR)
+    }
+
+    /**
+     * ISO code of the currency the amounts in [body] are written in - the
+     * currency the message NAMES (a `₹`/`Rs`/`INR`, an ISO code, a symbol),
+     * else the device/SIM or Settings-override fallback from
+     * [currencyContext]. Callers persist this alongside the amount so a USD
+     * spend is never silently summed as INR, and the rule engine types its
+     * amount extracts with it so a rule-captured "1.000" reads as a thousand
+     * pesos for a Chilean user. See [CurrencyDetector] for the precedence.
+     */
+    fun currencyOf(body: String): String = CurrencyDetector.detect(body, currencyContext())
+
+    /**
+     * Picks the earlier of the first debit / first credit keyword occurrence.
+     * Future / conditional phrasings ("will be deducted", "shall be
+     * charged") describe money that has NOT moved yet - an upcoming premium
+     * or standing instruction is a reminder, never a transaction - so those
+     * matches are skipped entirely.
+     */
+    private fun detectType(body: String): TransactionType? {
+        val debitAt = firstCompletedMatch(body, DEBIT_KEYWORDS)
+        val creditAt = firstCompletedMatch(body, CREDIT_KEYWORDS)
+        if (debitAt == null && creditAt == null) return verblessDebit(body)
+        return when {
+            debitAt == null -> TransactionType.CREDIT
+            creditAt == null -> TransactionType.DEBIT
+            debitAt <= creditAt -> TransactionType.DEBIT
+            else -> TransactionType.CREDIT
+        }
+    }
+
+    /**
+     * Two real notification shapes carry NO debit/credit verb at all:
+     *
+     * 1. The card-network template "Txn Rs.X / On <Bank> Card <n> / At
+     *    <merchant/VPA>". Issuers only send this shape for OUTGOING
+     *    authorizations - incoming money always announces itself with an
+     *    explicit verb ("credited", "refund", "payment received") - so a
+     *    verbless card Txn at a merchant is money out: DEBIT.
+     * 2. A biller confirming "payment of Rs.X ... successful/done/completed":
+     *    the user paid out. (Payments RECEIVED say "received", an explicit
+     *    credit verb, and never reach here.)
+     */
+    private fun verblessDebit(body: String): TransactionType? =
+        when {
+            CARD_TXN_HEADER_REGEX.containsMatchIn(body) &&
+                CREDIT_CARD_REGEX.containsMatchIn(body) &&
+                TXN_AT_MERCHANT_REGEX.containsMatchIn(body) -> TransactionType.DEBIT
+
+            PAYMENT_DONE_REGEX.containsMatchIn(body) -> TransactionType.DEBIT
+
+            else -> null
+        }
+
+    /** First keyword match not preceded by future-tense "will/shall/would be". */
+    private fun firstCompletedMatch(
+        body: String,
+        keywords: Regex,
+    ): Int? =
+        keywords
+            .findAll(body)
+            .firstOrNull { match ->
+                val start = maxOf(0, match.range.first - FUTURE_LOOKBEHIND)
+                !GuardLibrary.matches(GuardId.FUTURE_TENSE, body.substring(start, match.range.first))
+            }?.range
+            ?.first
+
+    /**
+     * Account type implied by the body's own wording ("credit card",
+     * "wallet") - shared with rule-derived transactions, so a rule that
+     * matches a card spend the parser's verbs miss still lands on the
+     * card, not on a phantom savings account.
+     */
+    fun accountTypeOf(body: String): AccountType = detectAccountType(body)
+
+    private fun detectAccountType(body: String): AccountType =
+        when {
+            // Money spent FROM a wallet ("from Reimbursement Wallet linked to
+            // your Pluxee Card") is a wallet transaction even though a card
+            // number is quoted - the card is just the wallet's plastic.
+            WALLET_SOURCE_REGEX.containsMatchIn(body) -> AccountType.WALLET
+
+            CREDIT_CARD_REGEX.containsMatchIn(body) -> AccountType.CREDIT_CARD
+
+            WALLET_REGEX.containsMatchIn(body) -> AccountType.WALLET
+
+            else -> AccountType.SAVINGS
+        }
+
+    /**
+     * Masked-card tail. Grouped formats ("4315-81XX-XXXX-4001") must yield
+     * the LAST group - the generic account regex would capture the first
+     * four digits (the BIN), attributing the payment to a card that does
+     * not exist.
+     */
+    private fun extractAccountLast4(body: String): String? =
+        GROUPED_CARD_REGEX.find(body)?.groupValues?.get(1)
+            ?: ACCOUNT_REGEX.find(body)?.groupValues?.get(1)
+            ?: BANK_MASKED_REGEX.find(body)?.groupValues?.get(1)
+
+    private fun extractMerchant(body: String): String? {
+        for (match in MERCHANT_REGEX.findAll(body)) {
+            var candidate = match.groupValues[1].trim()
+            // Never capture from a URL: "pay in advance now at https://..."
+            // is a link, not a merchant.
+            if (URL_START_REGEX.containsMatchIn(candidate)) continue
+            // "Click <url> to know the transaction status": a "to"/"at" that
+            // directly follows a link introduces an instruction, never a
+            // merchant. Guard both ways - a URL right before the preposition,
+            // and a candidate that starts with an instruction verb.
+            val precedingWindow = body.substring(maxOf(0, match.range.first - URL_LOOKBEHIND), match.range.first)
+            if (PRECEDING_URL_REGEX.containsMatchIn(precedingWindow)) continue
+            // "Cheque deposits in A/C are subject to clearing": a "to" led by
+            // a condition word ("subject to", "due to", "refer to") opens a
+            // condition or reason, never a payee. Without this the cheque
+            // boilerplate HDFC appends to every deposit alert captured
+            // "clearing" as the merchant - and a merchant beats the real
+            // "for <descriptor>" purpose clause in the title order.
+            if (GuardLibrary.matches(GuardId.CONDITIONAL_LEAD, precedingWindow)) continue
+            if (GuardLibrary.matches(GuardId.INSTRUCTION_START, candidate)) continue
+            candidate = candidate.removePrefix("VPA ").removePrefix("vpa ").trim()
+            // A capture cut short by a "/" ended inside an "A/c"-shaped
+            // token: "to a/c **0121" captures "a", "to HDFC Bank A/c ..."
+            // captures "HDFC Bank A". That phrase is an ACCOUNT destination,
+            // never a merchant - drop the truncated letter, and when what
+            // remains is empty or the account's own bank name, reject the
+            // candidate entirely (the counterparty fallback handles the
+            // transfer target instead).
+            if (body.length > match.range.last + 1 && body[match.range.last + 1] == '/') {
+                val tokens = candidate.split(' ')
+                if (tokens.last().length == 1) {
+                    candidate = tokens.dropLast(1).joinToString(" ").trim()
+                    if (candidate.isEmpty() || candidate.endsWith("bank", ignoreCase = true)) continue
+                }
+            }
+            // Cut trailing narration like "on 12-07-26", "Ref 12345" or "via UPI".
+            candidate =
+                MERCHANT_STOP_REGEX
+                    .split(candidate)
+                    .first()
+                    .trim()
+                    .trimEnd('.', ',', ':', ';', '-')
+            if (candidate.isEmpty()) continue
+            // "to your a/c XX1234" is an account transfer, not a merchant name.
+            if (NON_MERCHANT_START_REGEX.containsMatchIn(candidate)) continue
+            return candidate
+        }
+        return standaloneMerchantLine(body) ?: infoDescriptor(body)
+    }
+
+    /**
+     * Merchant from its own segment in the multi-line card-spend shape:
+     * "Spent <CUR> <amt> / <Bank> Card no. XX#### / <timestamp> /
+     * <MERCHANT>" - no preposition ever precedes the merchant there.
+     * Segments are separated by newlines OR by a "/" adjacent to whitespace
+     * (both delivery formats exist in the wild); a slash embedded in a date
+     * or phone number ("12/07/26", "18002586161/SMS") never splits.
+     */
+    private fun standaloneMerchantLine(body: String): String? {
+        val lines =
+            body
+                .lines()
+                .flatMap { it.split(SEGMENT_SPLIT_REGEX) }
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+        if (lines.size < 3) return null
+        if (lines.none { SPENT_LINE_REGEX.containsMatchIn(it) }) return null
+        if (lines.none { CARD_LINE_REGEX.containsMatchIn(it) }) return null
+        val candidate =
+            lines.firstOrNull { line ->
+                !SPENT_LINE_REGEX.containsMatchIn(line) &&
+                    !CARD_LINE_REGEX.containsMatchIn(line) &&
+                    !TIMESTAMP_LINE_REGEX.containsMatchIn(line) &&
+                    !STATE_LINE_REGEX.containsMatchIn(line) &&
+                    line.any { it.isLetter() }
+            } ?: return null
+        return cleanCardNetworkNoise(candidate)
+    }
+
+    /**
+     * Cleans a card-network merchant line. The "*" separates the payment
+     * aggregator/processor prefix from what follows:
+     *
+     * - "PTM*ZOMATO" / "RAZ*Zomato": a REAL merchant follows the star. The
+     *   token is kept WHOLE, verbatim - the star is a separator, never a
+     *   truncation boundary. (The part after the star is the meaningful
+     *   merchant; the whole token is kept because it is what the statement
+     *   shows and what the user asked to see.)
+     * - "UBER * PEND": a STATUS tail (PEND/PENDING/POS/ECOM) follows the
+     *   star - noise, stripped; the merchant is the part before it,
+     *   normalized from SHOUTING-CASE ("UBER * PEND" -> "Uber").
+     */
+    private fun cleanCardNetworkNoise(line: String): String? {
+        val trimmed = TRAILING_STATUS_REGEX.replace(line.trim(), "").trim().trimEnd('.', ',', '-')
+        val star = trimmed.indexOf('*')
+        if (star >= 0) {
+            val after = trimmed.substring(star + 1).trim()
+            if (after.any { it.isLetter() } && !STATUS_TOKEN_REGEX.matches(after)) {
+                return trimmed
+            }
+        }
+        var name = trimmed.substringBefore('*').trim()
+        name = TRAILING_STATUS_REGEX.replace(name, "").trim().trimEnd('.', ',', '-')
+        if (name.isEmpty() || name.none { it.isLetter() }) return null
+        return if (name == name.uppercase()) {
+            name
+                .lowercase()
+                .split(' ')
+                .joinToString(" ") { word -> word.replaceFirstChar { it.uppercase() } }
+        } else {
+            name
+        }
+    }
+
+    /**
+     * Human descriptor from an "Info:" narration field - "Info:
+     * XXXXXXXXXX6894- RD Installment-Jul 2026" -> "RD Installment". Used
+     * only when no real merchant exists: a deposit installment titled "RD
+     * Installment" beats a title showing the bank's own name.
+     */
+    private fun infoDescriptor(body: String): String? {
+        val raw =
+            INFO_REGEX
+                .find(body)
+                ?.groupValues
+                ?.get(1)
+                ?.trim() ?: return null
+        return normalizeMerchantCandidate(raw)
+    }
+
+    /**
+     * Normalizes a raw merchant/narration capture into a human title, or
+     * null when nothing presentable remains. Applied to EVERY rule-supplied
+     * merchant extract as well as the parser's own "Info:" narration, so a
+     * raw capture like "XXXXXXXXXX6894- RD Installment-Jul 2026" always
+     * becomes "RD Installment" - regardless of whether a bundled rule or the
+     * parser produced it. Clean names ("Uber", "HDFC Flexi Cap Fund") pass
+     * through unchanged.
+     */
+    fun normalizeMerchantCandidate(raw: String): String? {
+        var descriptor = LEADING_REFERENCE_REGEX.replace(raw.trim(), "").trim()
+        descriptor =
+            TRAILING_MONTH_YEAR_REGEX
+                .replace(descriptor, "")
+                .trim()
+                .trimEnd('-', ',', ':', ';')
+                .trim()
+        if (descriptor.length < 2 || !descriptor.first().isLetter()) return null
+        // A leftover long digit run means the field was a reference, not a
+        // description - never surface that as a title.
+        if (LONG_DIGIT_RUN_REGEX.containsMatchIn(descriptor)) return null
+        return descriptor
+    }
+
+    /**
+     * The transaction's stated PURPOSE: the "for <descriptor>" clause
+     * anchored to the account phrase - "A/c XX1234 for NEFT transaction via
+     * ...", "A/c XX1234 on 05-SEP-26 for XXXX-TPT-<label>-<name>". Consulted
+     * only when no merchant exists. The capture is trimmed like a merchant
+     * (trailing "via/on/ref/avl" narration cut), normalized like an "Info:"
+     * field (leading masked reference stripped), and a leading transfer-rail
+     * code (TPT/NEFT/IMPS/...) hyphenated onto a longer descriptor is
+     * dropped - the rail says HOW the money moved; the payer-typed label and
+     * name say WHY, which is the part worth a row title (and the part a
+     * sender rule should match on, so "TPT-" never has to be typed into a
+     * rule). A bare rail purpose ("for NEFT transaction") survives whole: it
+     * is all the message offers. "ACH C- SAL-<employer>" is NOT a bare rail
+     * prefix (the "C" sits between the rail and its hyphen), so that
+     * descriptor stays whole too - see [LEADING_RAIL_CODE_REGEX].
+     */
+    private fun extractPurpose(body: String): String? {
+        var raw =
+            PURPOSE_REGEX
+                .find(body)
+                ?.groupValues
+                ?.get(1)
+                ?.trim() ?: return null
+        if (GuardLibrary.matches(GuardId.INSTRUCTION_START, raw)) return null
+        raw =
+            MERCHANT_STOP_REGEX
+                .split(raw)
+                .first()
+                .trim()
+                .trimEnd('.', ',', ':', ';', '-')
+        if (PURPOSE_NOISE_REGEX.containsMatchIn(raw)) return null
+        val descriptor = normalizeMerchantCandidate(raw) ?: return null
+        val trimmed = LEADING_RAIL_CODE_REGEX.replace(descriptor, "").trim()
+        return trimmed.takeIf { it.length >= 2 && it.first().isLetter() } ?: descriptor
+    }
+
+    /**
+     * The OTHER party of a transfer, direction-aware; consulted only when
+     * neither a merchant nor a purpose exists. For a DEBIT the counterparty
+     * is the RECEIVER - the "to a/c <tail>" account; the "from a/c" is the
+     * user's OWN account, and surfacing it would label the user as their own
+     * payee, which is worse than showing nothing. For a CREDIT it is the
+     * SENDER - the "from VPA <handle>" / "from a/c <tail>" party; there the
+     * "to a/c" is the user's own receiving account. "your" is rejected in
+     * both directions so "to your a/c" / "from your a/c" can never surface.
+     */
+    private fun extractCounterparty(
+        body: String,
+        type: TransactionType,
+    ): String? =
+        when (type) {
+            TransactionType.DEBIT -> {
+                DEBIT_RECEIVER_REGEX
+                    .find(body)
+                    ?.groupValues
+                    ?.get(1)
+                    ?.let { "A/c $it" }
+            }
+
+            TransactionType.CREDIT -> {
+                CREDIT_SENDER_VPA_REGEX.find(body)?.groupValues?.get(1)
+                    ?: CREDIT_SENDER_ACCOUNT_REGEX
+                        .find(body)
+                        ?.groupValues
+                        ?.get(1)
+                        ?.let { "A/c $it" }
+            }
+        }
+
+    private fun categorize(
+        merchant: String?,
+        body: String,
+    ): MerchantCategory {
+        val haystack = "${merchant.orEmpty()} $body".lowercase()
+        for ((regex, category) in ParserTables.merchantCategories) {
+            if (regex.containsMatchIn(haystack)) return category
+        }
+        val looksLikeP2p = merchant?.contains('@') == true || Regex("(?i)\\b(?:upi|vpa)\\b").containsMatchIn(body)
+        return if (looksLikeP2p) MerchantCategory.TRANSFER else MerchantCategory.OTHER
+    }
+
+    /** Reads a captured figure under [currency]'s separator convention (see [AmountParser]). */
+    private fun String.toAmount(currency: CurrencyInfo): Double? = AmountParser.parse(this, currency)
+
+    /** A transaction figure together with the currency it was read in. */
+    private data class Figure(
+        val amount: Double,
+        val currency: CurrencyInfo,
+    ) {
+        companion object {
+            fun of(
+                raw: String,
+                currency: CurrencyInfo,
+            ): Figure? = AmountParser.parse(raw, currency)?.let { Figure(it, currency) }
+        }
+    }
+
+    /**
+     * A currency-marked capture ("Rs.830.00", "$1.000", "EUR 1.000,50", "1.000
+     * CLP") read under the currency its OWN marker names - resolved through
+     * [CurrencyDetector] on the marked span alone, so a "Rs" amount is rupees
+     * even when the body mentions "USD 10" earlier, and a bare `$` still
+     * defers to the device / override fallback.
+     */
+    private fun markedFigure(
+        markedSpan: String,
+        raw: String,
+        context: CurrencyContext,
+    ): Figure? = Figure.of(raw, CurrencyCatalog.of(CurrencyDetector.detect(markedSpan, context)))
+
+    private companion object {
+        val AMOUNT_REGEX = Regex("(?i)(?:INR|Rs\\.?|\\u20b9)\\s*([\\d,]+(?:\\.\\d{1,2})?)")
+
+        /**
+         * Foreign-currency spend ("Spent USD 40.95"). Only consulted when no
+         * domestic amount exists outside balance/limit phrases, so an INR
+         * body can never be re-denominated.
+         */
+        val FOREIGN_AMOUNT_REGEX =
+            Regex("(?i)\\b(?:spent|paid|debited)\\s+(USD|EUR|GBP|AED|SGD|AUD|CAD|CHF|JPY|NZD|HKD)\\s*([\\d,]+(?:\\.\\d{1,2})?)")
+
+        /**
+         * Third-tier amount: a figure carrying ANY catalog currency marker -
+         * a symbol (`$1.000`, `€1.000,50`, `£40`) or an upper-case ISO code
+         * on either side (`CLP 1.000`, `1.000 CLP`, `USD40.95`). The figure
+         * itself may use either separator in any arrangement; [AmountParser]
+         * decides what they mean from the currency. A marker is REQUIRED on
+         * every tier: a bare digit run (a reference number, a card tail, a
+         * date) can never become an amount, and the rupee regexes above are
+         * untouched, so the Indian corpus reads exactly as before.
+         */
+        val MARKED_AMOUNT_REGEX: Regex =
+            run {
+                val codes = CurrencyCatalog.codes.sorted().joinToString("|")
+                val symbols =
+                    "(?:US|CLP|CL|NZ|HK|MX|AR|COL|[ARCS])?\\$|\\u20ac|\\u00a3|\\u00a5|\\u20a9|\\u20ba|\\u20bd|\\u20a6|\\u20b1|\\u0e3f"
+                val figure = "\\d(?:[\\d.,]*\\d)?"
+                // A symbol-prefixed figure keeps a trailing ISO code inside its
+                // marked span ("$1.000.500 CLP"), so the unambiguous code -
+                // not the family `$` - names the currency it is read under.
+                Regex(
+                    "(?:(?<![A-Za-z])(?:$symbols)|(?<![A-Za-z])(?:$codes)(?![A-Za-z]))\\s*($figure)(?![\\d.,]*\\d)" +
+                        "(?:\\s*(?<![A-Za-z])(?:$codes)(?![A-Za-z]))?" +
+                        "|(?<![\\d.,])($figure)\\s*(?<![A-Za-z])(?:$codes)(?![A-Za-z])",
+                )
+            }
+
+        /**
+         * "Avl Limit: INR 286368.5" / "Avl Lmt INR 98,701.00" / "Available
+         * Credit Limit is Rs.40,000" - credit headroom, not an amount. The
+         * captured figure feeds [ParsedTransaction.availableLimit]; the
+         * matched span is also excluded from amount detection. Phrasings per
+         * the audited device corpora: avl/avbl/available, optional "credit",
+         * limit/lmt, optional ":"/"is".
+         */
+        val AVAILABLE_LIMIT_REGEX =
+            Regex(
+                "(?i)av(?:l|bl|ailable)?\\.?\\s*(?:credit\\s+)?(?:lmt|limit)\\s*:?\\s*(?:is\\s+)?" +
+                    "(?:INR|Rs\\.?|\\u20b9)\\s*([\\d,]+(?:\\.\\d{1,2})?)",
+            )
+
+        // region total credit limit statements
+
+        /** Total-limit statements only make sense for cards, never loans/telecom. */
+        val CARD_CONTEXT_REGEX = Regex("(?i)\\bcard\\b")
+
+        /**
+         * "credit limit for your ... Card ... has been changed from INR X to
+         * INR Y" - the NEW total is the second amount (after "to").
+         */
+        val TOTAL_LIMIT_CHANGED_REGEX =
+            Regex(
+                "(?i)credit\\s+limit\\b[^\\n]{0,80}?\\bchanged\\s+from\\s+" +
+                    "(?:INR|Rs\\.?|\\u20b9)\\s*[\\d,]+(?:\\.\\d{1,2})?\\s+to\\s+" +
+                    "(?:INR|Rs\\.?|\\u20b9)\\s*([\\d,]+(?:\\.\\d{1,2})?)",
+            )
+
+        /**
+         * "Your new limit is ₹150000" after a processed enhancement. The
+         * currency marker tolerates "?" - a common mojibake of "₹" in real
+         * issuer SMS ("Your new limit is ?1500000").
+         */
+        val TOTAL_LIMIT_NEW_REGEX =
+            Regex("(?i)\\b(?:your\\s+)?new\\s+(?:credit\\s+)?limit\\s+is\\s*(?:INR|Rs\\.?|\\u20b9|\\?)\\s*([\\d,]+(?:\\.\\d{1,2})?)")
+
+        /**
+         * Direct statements of the total: "Total Credit Limit: Rs.150000",
+         * "Total Limit is INR 150000", "Sanctioned Limit of Rs 150000",
+         * "your limit of INR 150000".
+         */
+        val TOTAL_LIMIT_STATED_REGEX =
+            Regex(
+                "(?i)\\b(?:total\\s+(?:credit\\s+)?limit|sanctioned\\s+limit|your\\s+limit)\\s*" +
+                    "(?:is|:|of)?\\s*(?:INR|Rs\\.?|\\u20b9)\\s*([\\d,]+(?:\\.\\d{1,2})?)",
+            )
+
+        /** "Rs. XX lacs/lakhs" - a rounded marketing figure, never a card total. */
+        val LAKH_SUFFIX_REGEX = Regex("(?i)^\\s*(?:lacs?|lakhs?)\\b")
+
+        /**
+         * Inline-masked card number "4375X9012" / "437500XX9012": digits,
+         * mask characters, then the real 3-4 digit tail.
+         */
+        val INLINE_MASKED_CARD_REGEX = Regex("(?<!\\d)\\d{2,6}[Xx*]+(\\d{3,4})(?![\\dXx*])")
+
+        // endregion
+
+        val DEBIT_KEYWORDS = Regex("(?i)\\b(?:debited|spent|paid|withdrawn|deducted|purchase(?:d)?|sent)\\b")
+        val CREDIT_KEYWORDS = Regex("(?i)\\b(?:credited|received|deposited|refund(?:ed)?)\\b")
+
+        /**
+         * "Txn Rs.55.00" header of the verbless card-network template - the
+         * word "Txn" immediately followed by a currency amount at the start
+         * of the message or a line. "txn of Rs X" (OTP narration) has "of"
+         * in between and never matches.
+         */
+        val CARD_TXN_HEADER_REGEX = Regex("(?i)(?:^|\\n)\\s*txn\\s+(?:INR|Rs\\.?|\\u20b9)\\s*[\\d,]")
+
+        /** "At <merchant/VPA>" clause of the card-network Txn template. */
+        val TXN_AT_MERCHANT_REGEX = Regex("(?i)\\bat\\s+\\S")
+
+        /**
+         * "payment of Rs.X ... successful/done/completed": a biller
+         * confirming the user's outgoing payment. Bounded gap; failure
+         * language is rejected before this is ever consulted.
+         */
+        val PAYMENT_DONE_REGEX =
+            Regex(
+                "(?i)\\bpayment\\s+of\\s+(?:INR|Rs\\.?|\\u20b9)\\s*[\\d,]+(?:\\.\\d{1,2})?" +
+                    "[^\\n]{0,80}?\\b(?:successful|completed|done)\\b",
+            )
+
+        /** How far back to look for the future-tense phrase ("will be auto-"). */
+        const val FUTURE_LOOKBEHIND = 20
+
+        val ACCOUNT_REGEX =
+            Regex(
+                "(?i)(?:a/c|a\\\\c|acct|account|card)\\s*(?:no\\.?|number)?\\s*(?:ending\\s*)?(?:in\\s+|with\\s+)?" +
+                    // Masked tail: "XX1234", "**1234", and the ellipsis mask
+                    // "...1234" (BOB ATM withdrawals). The ellipsis needs 2-3
+                    // dots so a sentence period can never start a tail.
+                    "(?:\\.{2,3})?[Xx*]*(\\d{3,4})(?!\\d)",
+            )
+
+        /**
+         * Grouped masked card number "4315-81XX-XXXX-4001": the LAST group is
+         * the card's tail; the first is the BIN.
+         */
+        val GROUPED_CARD_REGEX =
+            Regex("(?<!\\d)\\d{4}[- ][\\dXx*]{2,4}[- ][\\dXx*]{2,4}[- ][Xx*]*(\\d{4})(?!\\d)")
+
+        /**
+         * "debited from HDFC Bank XX8709" - a masked tail right after the
+         * bank name, with no a/c or card keyword. Lowest-priority fallback.
+         */
+        val BANK_MASKED_REGEX = Regex("(?i)\\bbank\\s+[Xx*]{2,}(\\d{3,4})(?!\\d)")
+
+        val BALANCE_REGEX =
+            Regex(
+                "(?i)(?:avl|avbl|avail(?:able)?)\\.?\\s*bal(?:ance)?\\.?" +
+                    // BOB ATM withdrawals write the balance as "Avlbal
+                    // Amt:Rs.X" - an "Amt" token between "bal" and the figure.
+                    "(?:\\s*amt\\.?)?" +
+                    "(?:\\s+(?:in|for)\\s+(?:your\\s+)?a/c\\s*(?:no\\.?)?\\s*[Xx*]*\\d+)?" +
+                    // Separator before the figure: "is"/":"/"=" - and "-", which
+                    // some BOB ATM templates use ("Avlbal Amt-Rs.X").
+                    "\\s*(?:is|:|=|-)?\\s*(?:INR|Rs\\.?|\\u20b9)\\s*([\\d,]+(?:\\.\\d{1,2})?)",
+            )
+
+        /**
+         * Balance-statement shapes for balance-ONLY messages (consulted only
+         * when no transaction parses): "Available Bal in <Bank> A/c XX####
+         * as on yesterday:<date> is INR <amt>", "Avl Bal: Rs X", "Available
+         * Balance is Rs X", "A/C Bal is INR X", "Bal as on <date>: Rs X" and
+         * "Yesterday's bal:INR X" (low-balance alerts). The bounded 60-char
+         * span absorbs an intervening bank name, masked account and date
+         * without unbounded scanning.
+         */
+        val STATEMENT_BALANCE_REGEX =
+            Regex(
+                "(?i)\\b(?:(?:avl|avbl|avail(?:able)?)\\.?\\s*bal(?:ance)?|" +
+                    "(?:a/c|acct|account)\\s+bal(?:ance)?|" +
+                    "bal(?:ance)?\\s+as\\s+on|" +
+                    "yesterday'?s\\s+bal(?:ance)?)\\b" +
+                    "[\\s\\S]{0,60}?" +
+                    "(?:INR|Rs\\.?|\\u20b9)\\s*([\\d,]+(?:\\.\\d{1,2})?)",
+            )
+
+        val REFERENCE_REGEX =
+            Regex(
+                "(?i)\\bref(?:erence)?\\s*(?:no|num|number|id)?\\.?\\s*[:.]?\\s*((?=[A-Za-z0-9]*\\d)[A-Za-z0-9]{6,22})|" +
+                    "\\b(?:txn|utr|upi)\\s*(?:id|no|ref)?\\.?\\s*[:.]?\\s*((?=[A-Za-z0-9]*\\d)[A-Za-z0-9]{6,22})",
+            )
+
+        val MERCHANT_REGEX = Regex("(?i)\\b(?:to|at|towards)\\s+((?:[A-Za-z][A-Za-z0-9@._&'*-]*)(?:\\s+[A-Za-z0-9@._&'*-]+){0,3})")
+
+        /** A candidate that is (the start of) a URL - never a merchant. */
+        val URL_START_REGEX = Regex("(?i)^(?:https?\\b|www\\.)")
+
+        /** Words that end a merchant name and start trailing narration. */
+        val MERCHANT_STOP_REGEX = Regex("(?i)\\s+(?:on|via|using|from|by|ref|refno|txn|utr|avl|avbl|info|not\\b|dt|is|was)\\b.*")
+
+        /** Candidates starting with these are account transfers, not merchants. */
+        val NON_MERCHANT_START_REGEX = Regex("(?i)^(?:your|ur|the|a/c|ac\\b|acct|account|bank|no\\b)")
+
+        /** A URL directly before the merchant preposition ("Click <url> to ..."). */
+        val PRECEDING_URL_REGEX = Regex("(?i)(?:https?://\\S+|www\\.\\S+|\\b[a-z0-9][a-z0-9.-]*\\.[a-z]{2,6}/\\S*)\\s*$")
+
+        /** Chars of context inspected for [PRECEDING_URL_REGEX]. */
+        const val URL_LOOKBEHIND = 80
+
+        // region standalone merchant line (multi-line card-spend shape)
+
+        /** "Spent USD 40.95" / "Spent Rs. 1,299.00" header line. */
+        val SPENT_LINE_REGEX = Regex("(?i)^spent\\s+(?:[A-Z]{3}|Rs\\.?|INR|\\u20b9)\\s*[\\d,]")
+
+        /** "<Bank> Card no. XX5106" line. */
+        val CARD_LINE_REGEX = Regex("(?i)card\\s+no\\.?\\s*[Xx*]*\\d")
+
+        /** "20-07-26 07:40:29 IST" timestamp line. */
+        val TIMESTAMP_LINE_REGEX = Regex("^\\d{1,2}[-/]\\d{1,2}[-/]\\d{2,4}\\b")
+
+        /** Balance / limit / advisory lines, never the merchant. */
+        val STATE_LINE_REGEX = Regex("(?i)^(?:avl|avbl|available|bal|limit|not\\s+you|sms\\s+block|call\\b|dial\\b)")
+
+        /** Trailing card-network status tokens on a merchant line. */
+        val TRAILING_STATUS_REGEX = Regex("(?i)\\s+(?:PEND(?:ING)?|POS|ECOM)\\s*$")
+
+        /** A bare status token - noise after "*", never a merchant. */
+        val STATUS_TOKEN_REGEX = Regex("(?i)^(?:PEND(?:ING)?|POS|ECOM|AUTH|RATE)$")
+
+        /**
+         * Segment separator of the card-spend template: a "/" with
+         * whitespace on at least one side. Dates ("12/07/26") and helpline
+         * fragments ("18002586161/SMS") keep their slashes.
+         */
+        val SEGMENT_SPLIT_REGEX = Regex("\\s+/\\s*|\\s*/\\s+")
+
+        // endregion
+
+        /** "Info: <narration>" field (HDFC-style), up to the sentence end. */
+        val INFO_REGEX = Regex("(?i)\\bInfo\\s*[:.]\\s*([^\\n.]{2,80})")
+
+        // region purpose / counterparty title fallbacks
+
+        /**
+         * "A/c XX1234 for <purpose>" - the "for" clause anchored to the
+         * account-tail phrase (with an optional " on <date>" between), so a
+         * free-floating "for details" / "for Rs.X" elsewhere in the body can
+         * never become a title. Periods end the capture ("<name>.Avl bal").
+         */
+        val PURPOSE_REGEX =
+            Regex(
+                "(?i)\\b(?:a/c|a\\\\c|acct|account)\\s*(?:no\\.?)?\\s*[Xx*]*\\d{3,4}(?!\\d)" +
+                    "(?:\\s+on\\s+\\S{1,12})?" +
+                    "\\s+for\\s+([A-Za-z][^\\n.]{1,79})",
+            )
+
+        /** A purpose capture that is an amount / account / help phrase - noise. */
+        val PURPOSE_NOISE_REGEX =
+            Regex("(?i)^(?:rs\\.?|inr|\\u20b9)\\s*\\d|^(?:a/c|acct|account|details?|dispute|help|assistance|quer(?:y|ies))\\b")
+
+        /**
+         * A transfer-rail code hyphenated onto a longer narration
+         * ("TPT-MonthlyRent-<name>") - the rail is channel, not purpose.
+         * Only strips when a descriptor follows, so a bare "NEFT transaction"
+         * purpose survives whole; and only a rail DIRECTLY followed by its
+         * hyphen, so "ACH C- SAL-<employer>" (rail, then a "C", then the
+         * hyphen) is not a rail prefix and stays whole.
+         */
+        val LEADING_RAIL_CODE_REGEX = Regex("(?i)^(?:tpt|neft|imps|rtgs|upi|ach|ecs|nach)\\s*-\\s*(?=[A-Za-z])")
+
+        /** DEBIT receiver: "to a/c **0121" - never "to your a/c" (the user's own). */
+        val DEBIT_RECEIVER_REGEX =
+            Regex("(?i)\\bto\\s+(?!your\\b)(?:a/c|a\\\\c|acct|account)\\s*(?:no\\.?)?\\s*([Xx*]*\\d{3,4})(?!\\d)")
+
+        /** CREDIT sender VPA: "from VPA name@bank" / "from name@bank". */
+        val CREDIT_SENDER_VPA_REGEX =
+            Regex("(?i)\\bfrom\\s+(?:vpa\\s+)?([A-Za-z0-9][A-Za-z0-9._-]{1,60}@[A-Za-z][A-Za-z0-9.]{1,30})")
+
+        /** CREDIT sender account: "from a/c *1234" - never "from your a/c". */
+        val CREDIT_SENDER_ACCOUNT_REGEX =
+            Regex("(?i)\\bfrom\\s+(?!your\\b)(?:a/c|a\\\\c|acct|account)\\s*(?:no\\.?)?\\s*([Xx*]*\\d{3,4})(?!\\d)")
+
+        // endregion
+
+        /** Leading masked reference in an Info narration ("XXXXXXXXXX6894- "). */
+        val LEADING_REFERENCE_REGEX = Regex("^[Xx*]*\\d+\\s*-\\s*")
+
+        /** Trailing "-Jul 2026" style period suffix on an Info descriptor. */
+        val TRAILING_MONTH_YEAR_REGEX =
+            Regex("(?i)[-\\s]+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]{0,6}\\.?\\s*\\d{2,4}\\s*$")
+
+        /** Digit runs long enough to be a reference, not a description. */
+        val LONG_DIGIT_RUN_REGEX = Regex("\\d{5,}")
+
+        /**
+         * The body reads as a CREDIT CARD: "credit card", or a "card" token
+         * followed by a number cue ("card no.", "card ending 1234", "card
+         * **1234"). The "card" token may carry a brand prefix glued onto it -
+         * Indian issuers brand the product as ONE word ("your BOBCARD ending
+         * 1234", "SBICARD **1234", "ONECARD") - the same one-word shape the
+         * reminder evidence table (`rules/tables/reminder_evidence.json`,
+         * CREDIT_CARD row `statement for ... [A-Za-z]{0,10}card`) already
+         * relies on, so no brand list is kept here or there. The number cue
+         * that must follow keeps a bare brand mention ("Apply for BOBCARD
+         * today") from typing a bank-account debit as a card.
+         *
+         * Vietnamese issuers write "the tin dung" (thẻ tín dụng, credit card)
+         * or its abbreviation "The TD", followed by the masked number -
+         * "The TD 4512****1234", "THE TIN DUNG SO 4512****1234". The same
+         * number cue is demanded here, for the same reason: this regex runs
+         * for every locale, and a bare `the\\s+td` with no boundary and no
+         * digits would type an English "transferred to the TD account
+         * ending 1234" (TD Bank) - or "bathe td" - as a credit-card spend.
+         */
+        val CREDIT_CARD_REGEX =
+            Regex(
+                "(?i)credit\\s*card" +
+                    "|\\bthe\\s+(?:tin\\s+dung|td)\\s+(?:so\\s+)?[\\d*Xx]{4,}" +
+                    "|\\b[A-Za-z]{0,10}card\\s+(?:no\\.?|number|ending|[Xx*]*\\d{3,4})",
+            )
+        val WALLET_REGEX = Regex("(?i)\\bwallet\\b")
+
+        /** Money moving FROM a wallet, or a wallet that merely fronts a card. */
+        val WALLET_SOURCE_REGEX = Regex("(?i)\\bfrom\\b[^\\n]{0,40}?\\bwallet\\b|\\bwallet\\s+linked\\b")
+    }
+}
+
+/**
+ * A standalone account-balance statement: the reported balance plus the
+ * account it belongs to. Deliberately NOT a [ParsedTransaction] - no money
+ * moved, so it must never create a transaction row; it only refreshes the
+ * account's last known balance.
+ */
+data class BalanceStatement(
+    val balance: Double,
+    val accountLast4: String?,
+    /** Plausible-issuer names only; null when the sender is not an issuer. */
+    val bankName: String?,
+    val accountType: AccountType,
+)
+
+/**
+ * An issuer's confirmed statement of a card's TOTAL credit limit ("changed
+ * from INR X to INR Y", "Your new limit is ₹Y"). State, not movement: it
+ * must never create a transaction, only refresh the card's total limit so
+ * outstanding and utilization stay derivable.
+ */
+data class TotalLimitStatement(
+    val totalLimit: Double,
+    val accountLast4: String?,
+    /** Plausible-issuer names only; null when the sender is not an issuer. */
+    val bankName: String?,
+)

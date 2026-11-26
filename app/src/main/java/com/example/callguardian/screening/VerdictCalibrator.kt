@@ -2,6 +2,7 @@ package com.example.callguardian.screening
 
 import com.example.callguardian.accounts.SenderIds
 import com.example.callguardian.model.GuardianMethod
+import com.example.callguardian.model.ModelVerdict
 import com.example.callguardian.model.RiskLevel
 import com.example.callguardian.model.ScamCategory
 
@@ -116,6 +117,24 @@ object VerdictCalibrator {
         )
     }
 
+
+    data class ModelSignals(
+        val risk: RiskLevel,
+        val category: ScamCategory,
+        val method: GuardianMethod,
+        val advice: String?,
+    )
+
+    /** Map a registry ScamVerdict (verdict / confidence / reasons) onto the fields fuse already consumes. */
+    fun modelSignals(v: com.example.callguardian.ai.ScamVerdict): ModelSignals = when (v.verdict) {
+        ModelVerdict.SCAM -> ModelSignals(RiskLevel.HIGH, ScamCategory.OTHER, GuardianMethod.QUARANTINE_SMS, "Don't tap links or share codes. Use official channels.")
+        ModelVerdict.SUSPICIOUS -> ModelSignals(RiskLevel.MEDIUM, ScamCategory.OTHER, GuardianMethod.NONE, "Be careful until this is settled.")
+        ModelVerdict.CLEAR -> ModelSignals(RiskLevel.SAFE, ScamCategory.NONE, GuardianMethod.NONE, null)
+        ModelVerdict.SUBSCRIPTION -> ModelSignals(RiskLevel.LOW, ScamCategory.NONE, GuardianMethod.NONE, "You can text STOP after confirming, or manage the subscription if a link is present.")
+        ModelVerdict.CODE -> ModelSignals(RiskLevel.SAFE, ScamCategory.NONE, GuardianMethod.NONE, "No action needed. Don't share this code with anyone.")
+        ModelVerdict.OWNED -> ModelSignals(RiskLevel.SAFE, ScamCategory.NONE, GuardianMethod.NONE, "This looks like a message from an account you own.")
+    }
+
     fun fuse(
         rules: RuleScan,
         features: Features,
@@ -125,10 +144,11 @@ object VerdictCalibrator {
         modelMethod: GuardianMethod? = null,
         modelReasons: List<String> = emptyList(),
         modelAdvice: String? = null,
+        modelVerdict: ModelVerdict? = null,
         lookupSpamScore: Int? = null,
         channel: com.example.callguardian.model.Channel,
     ): Decision {
-        if (features.clearCode) {
+        if (features.clearCode || (modelVerdict == ModelVerdict.CODE && !features.lookalike && !features.codeShareRequest)) {
             val why = buildList {
                 add("CLEAR (Code): verification or login code, no link and no request to share or reply.")
                 if (features.isShortCode || features.shortCodeHistory) add("Came from a short code.")
@@ -164,6 +184,20 @@ object VerdictCalibrator {
                 confidence = 20,
                 method = GuardianMethod.NONE,
                 reasons = listOf("Owned account: $service (sender and official domain match)."),
+                advice = "This looks like a message from $service, which you marked as an account you own.",
+                ownedLabel = service,
+            )
+        }
+        if (modelVerdict == ModelVerdict.OWNED && !features.lookalike) {
+            val service = features.ownedService ?: "owned account"
+            return Decision(
+                score = 0.08,
+                band = Band.CLEAR,
+                risk = RiskLevel.SAFE,
+                category = ScamCategory.NONE,
+                confidence = 20,
+                method = GuardianMethod.NONE,
+                reasons = listOf("Owned account: $service."),
                 advice = "This looks like a message from $service, which you marked as an account you own.",
                 ownedLabel = service,
             )

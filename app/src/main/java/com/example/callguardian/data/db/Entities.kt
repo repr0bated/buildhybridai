@@ -172,3 +172,41 @@ data class OwnedAccountEntity(
     @ColumnInfo(name = "created_at") val createdAt: Long = 0,
     @ColumnInfo(name = "updated_at") val updatedAt: Long = 0,
 )
+
+
+/** Lifecycle of one subscription sender. Status is only advanced by user action or a confirmation text. */
+@Entity(tableName = "subscriptions", indices = [Index("sender"), Index("status")])
+data class SubscriptionEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val sender: String,
+    val service: String = "",
+    val source: String = "sms",
+    val keyword: String? = null,
+    @ColumnInfo(name = "link_url") val linkUrl: String? = null,
+    @ColumnInfo(name = "link_domain") val linkDomain: String? = null,
+    @ColumnInfo(name = "link_kind") val linkKind: String? = null,
+    val status: String = "ACTIVE",
+    @ColumnInfo(name = "created_at") val createdAt: Long = 0,
+    @ColumnInfo(name = "updated_at") val updatedAt: Long = 0,
+    @ColumnInfo(name = "stop_sent_at") val stopSentAt: Long? = null,
+    @ColumnInfo(name = "unsubscribed_at") val unsubscribedAt: Long? = null,
+    @ColumnInfo(name = "canceled_at") val canceledAt: Long? = null,
+    @ColumnInfo(name = "stop_receipt_id") val stopReceiptId: Long? = null,
+    @ColumnInfo(name = "unsubscribed_event_id") val unsubscribedEventId: Long? = null,
+    @ColumnInfo(name = "unsubscribed_receipt_id") val unsubscribedReceiptId: Long? = null,
+    @ColumnInfo(name = "canceled_receipt_id") val canceledReceiptId: Long? = null,
+    @ColumnInfo(name = "pending_cancel_ask") val pendingCancelAsk: Boolean = false,
+    val muted: Boolean = false,
+)
+
+@Entity(tableName = "subscription_status_history", indices = [Index("subscription_id")])
+data class SubscriptionStatusHistoryEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    @ColumnInfo(name = "subscription_id") val subscriptionId: Long,
+    @ColumnInfo(name = "from_status") val fromStatus: String,
+    @ColumnInfo(name = "to_status") val toStatus: String,
+    val at: Long,
+    val reason: String = "",
+    @ColumnInfo(name = "receipt_id") val receiptId: Long? = null,
+    @ColumnInfo(name = "event_id") val eventId: Long? = null,
+)

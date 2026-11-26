@@ -1,0 +1,245 @@
+{
+  "version": "1.0",
+  "rules": [
+    {
+      "id": "axis-debit-01",
+      "name": "Axis Bank Debit",
+      "priority": 300,
+      "match": {
+        "sender_pattern": "(?i)AXIS",
+        "body_pattern": "(?i)(?:INR|Rs\\.?|\\u20b9)\\s*([\\d,]+(?:\\.\\d{1,2})?)\\s+debited\\s+from\\s+a/c\\s+(?:no\\.?\\s*)?[Xx*]*(\\d{3,4})",
+        "guards_none": [
+          "otp_mention"
+        ]
+      },
+      "action": {
+        "category": "important",
+        "sub_category": "transaction",
+        "extract": {
+          "amount": "$1",
+          "account_last4": "$2",
+          "type": "debit",
+          "bank": "Axis Bank"
+        }
+      },
+      "contributed_by": "clearsms",
+      "created_at": "2026-07-27T00:00:00Z"
+    },
+    {
+      "id": "axis-credit-01",
+      "name": "Axis Bank Credit Transaction",
+      "priority": 300,
+      "match": {
+        "sender_pattern": "(?i)AXIS",
+        "body_pattern": "(?i)(?:INR|Rs\\.?|\\u20b9)\\s*([\\d,]+(?:\\.\\d{1,2})?)\\s+credited\\s+to\\s+a/c\\s+(?:no\\.?\\s*)?[Xx*]*(\\d{3,4})",
+        "guards_none": [
+          "otp_mention"
+        ]
+      },
+      "action": {
+        "category": "important",
+        "sub_category": "transaction",
+        "extract": {
+          "amount": "$1",
+          "account_last4": "$2",
+          "type": "credit",
+          "bank": "Axis Bank"
+        }
+      },
+      "contributed_by": "clearsms",
+      "created_at": "2026-07-27T00:00:00Z"
+    },
+    {
+      "id": "axis-balance-01",
+      "name": "Axis Bank Balance Alert",
+      "priority": 280,
+      "match": {
+        "sender_pattern": "(?i)AXIS",
+        "body_pattern": "(?i)(?:avl|available)\\s+bal(?:ance)?\\s+(?:in|for)\\s+(?:your\\s+)?a/c\\s+(?:no\\.?\\s*)?[Xx*]*(\\d{3,4})[\\s\\S]{0,60}?is\\s+(?:INR|Rs\\.?|\\u20b9)\\s*([\\d,]+(?:\\.\\d{1,2})?)",
+        "guards_none": [
+          "otp_mention"
+        ]
+      },
+      "action": {
+        "category": "important",
+        "sub_category": "bank_alert",
+        "extract": {
+          "account_last4": "$1",
+          "balance": "$2",
+          "bank": "Axis Bank"
+        }
+      },
+      "contributed_by": "clearsms",
+      "created_at": "2026-07-27T00:00:00Z"
+    },
+    {
+      "id": "axis-card-bill-01",
+      "name": "Axis Bank Credit Card Bill Reminder",
+      "priority": 260,
+      "match": {
+        "sender_pattern": "(?i)AXIS",
+        "body_pattern": "(?i)(?:credit\\s+)?card\\s+(?:no\\.?\\s*)?(?:ending\\s+)?[Xx*]*(\\d{4})[\\s\\S]{0,100}?total\\s+(?:amt|amount)?\\s*due[\\s:]*(?:INR|Rs\\.?|\\u20b9)\\s*([\\d,]+(?:\\.\\d{1,2})?)[\\s\\S]{0,80}?min(?:imum)?\\s+(?:amt|amount)?\\s*due[\\s:]*(?:INR|Rs\\.?|\\u20b9)\\s*([\\d,]+(?:\\.\\d{1,2})?)[\\s\\S]{0,80}?(?:due\\s+by|pay\\s+by|by)\\s+(\\d{1,2}[-/\\s](?:[A-Za-z]{3}|\\d{1,2})[-/\\s]\\d{2,4})"
+      },
+      "action": {
+        "category": "important",
+        "sub_category": "bill",
+        "extract": {
+          "account_last4": "$1",
+          "total_due": "$2",
+          "min_due": "$3",
+          "due_date": "$4",
+          "bank": "Axis Bank"
+        }
+      },
+      "contributed_by": "clearsms",
+      "created_at": "2026-07-27T00:00:00Z"
+    },
+    {
+      "id": "axis-emi-01",
+      "name": "Axis Bank EMI Reminder",
+      "priority": 250,
+      "match": {
+        "sender_pattern": "(?i)AXIS",
+        "body_pattern": "(?i)EMI\\s+of\\s+(?:INR|Rs\\.?|\\u20b9)\\s*([\\d,]+(?:\\.\\d{1,2})?)[\\s\\S]{0,80}?due\\s+on\\s+(\\d{1,2}[-/\\s](?:[A-Za-z]{3}|\\d{1,2})[-/\\s]\\d{2,4})"
+      },
+      "action": {
+        "category": "important",
+        "sub_category": "bill",
+        "extract": {
+          "amount": "$1",
+          "due_date": "$2",
+          "bank": "Axis Bank"
+        }
+      },
+      "contributed_by": "clearsms",
+      "created_at": "2026-07-27T00:00:00Z"
+    },
+    {
+      "id": "axis-cashback-01",
+      "name": "Axis Bank Credit Card Cashback",
+      "priority": 318,
+      "match": {
+        "sender_pattern": "(?i)AXIS",
+        "body_pattern": "(?i)cashback\\s+of\\s+(?:INR|Rs\\.?|\\u20b9)\\s*([\\d,]+(?:\\.\\d{1,2})?)\\s+has\\s+been\\s+credited\\s+to\\s+your\\s+[A-Za-z ]{0,30}credit\\s+card\\s+[Xx*]*(\\d{2,4})",
+        "guards_none": [
+          "otp_mention"
+        ]
+      },
+      "action": {
+        "category": "important",
+        "sub_category": "transaction",
+        "extract": {
+          "amount": "$1",
+          "account_last4": "$2",
+          "type": "credit",
+          "bank": "Axis Bank"
+        }
+      },
+      "contributed_by": "clearsms",
+      "created_at": "2026-07-27T00:00:00Z"
+    },
+    {
+      "id": "axis-cc-payment-01",
+      "name": "Axis Bank Credit Card Payment Received",
+      "priority": 315,
+      "match": {
+        "sender_pattern": "(?i)AXIS",
+        "body_pattern": "(?i)payment\\s+of\\s+(?:INR|Rs\\.?|\\u20b9)\\s*([\\d,]+(?:\\.\\d{1,2})?)\\s+has\\s+been\\s+received\\s+towards\\s+your\\s+Axis\\s+Bank\\s+Credit\\s+Card\\s+[Xx*]*(\\d{2,4})",
+        "guards_none": [
+          "otp_mention"
+        ]
+      },
+      "action": {
+        "category": "important",
+        "sub_category": "transaction",
+        "extract": {
+          "amount": "$1",
+          "account_last4": "$2",
+          "type": "credit",
+          "bank": "Axis Bank"
+        }
+      },
+      "contributed_by": "clearsms",
+      "created_at": "2026-07-27T00:00:00Z"
+    },
+    {
+      "id": "axis-estatement-01",
+      "name": "Axis Bank Credit Card E-Statement",
+      "priority": 310,
+      "match": {
+        "sender_pattern": "(?i)AXIS",
+        "body_pattern": "(?i)e-statement\\s+of\\s+your\\s+Axis\\s+Bank\\s+Credit\\s+Card\\s+no\\.?\\s*[Xx*]*(\\d{2,4})\\s+has\\s+been\\s+generated\\.?\\s*total\\s+amount\\s+due\\s+(?:INR|Rs\\.?|\\u20b9)\\s*([\\d,]+(?:\\.\\d{1,2})?),?\\s*minimum\\s+amount\\s+due\\s+(?:INR|Rs\\.?|\\u20b9)\\s*([\\d,]+(?:\\.\\d{1,2})?),?\\s*due\\s+date\\s+([0-9A-Za-z-]{6,12})"
+      },
+      "action": {
+        "category": "important",
+        "sub_category": "bill",
+        "extract": {
+          "account_last4": "$1",
+          "total_due": "$2",
+          "min_due": "$3",
+          "due_date": "$4",
+          "bank": "Axis Bank"
+        }
+      },
+      "contributed_by": "clearsms",
+      "created_at": "2026-07-27T00:00:00Z"
+    },
+    {
+      "id": "axis-cc-due-01",
+      "name": "Axis Bank Credit Card Payment Due",
+      "priority": 308,
+      "match": {
+        "sender_pattern": "(?i)AXIS",
+        "body_pattern": "(?i)your\\s+credit\\s+card\\s+[Xx*]*(\\d{2,4})\\s+payment\\s+of\\s+(?:INR|Rs\\.?|\\u20b9)\\s*([\\d,]+(?:\\.\\d{1,2})?)\\s+is\\s+due\\s+on\\s+([0-9A-Za-z-]{6,12})\\.?\\s*min\\s+due\\s+payment\\s+of\\s+(?:INR|Rs\\.?|\\u20b9)\\s*([\\d,]+(?:\\.\\d{1,2})?)"
+      },
+      "action": {
+        "category": "important",
+        "sub_category": "bill",
+        "extract": {
+          "account_last4": "$1",
+          "total_due": "$2",
+          "due_date": "$3",
+          "min_due": "$4",
+          "bank": "Axis Bank"
+        }
+      },
+      "contributed_by": "clearsms",
+      "created_at": "2026-07-27T00:00:00Z"
+    },
+    {
+      "id": "axis-otp-txn-01",
+      "name": "Axis Bank Card Transaction OTP",
+      "priority": 330,
+      "match": {
+        "sender_pattern": "(?i)AXIS",
+        "body_pattern": "(?i)(\\d{4,8})\\s+is\\s+SECRET\\s+OTP\\s+for\\s+txn\\s+of\\s+(?:INR|Rs\\.?|\\u20b9)\\s*([\\d,]+(?:\\.\\d{1,2})?)\\s+on\\s+Axis\\s+Bank\\s+card"
+      },
+      "action": {
+        "category": "otp",
+        "sub_category": "otp",
+        "extract": {
+          "otp_code": "$1",
+          "amount": "$2"
+        },
+        "notification": "otp_popup"
+      },
+      "contributed_by": "clearsms",
+      "created_at": "2026-08-12T00:00:00Z"
+    },
+    {
+      "id": "axis-card-approved-01",
+      "name": "Axis Credit Card Application Approved",
+      "priority": 309,
+      "match": {
+        "sender_pattern": "(?i)AXIS",
+        "body_pattern": "(?i)Credit\\s+Card\\s+application\\s+ref\\s+no\\.?[^\\n]{0,20}?\\bis\\s+approved"
+      },
+      "action": {
+        "category": "important",
+        "sub_category": "general"
+      },
+      "contributed_by": "clearsms",
+      "created_at": "2026-08-12T00:00:00Z"
+    }
+  ]
+}

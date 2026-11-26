@@ -1,0 +1,921 @@
+package app.clearsms.ui.composemsg
+
+import android.app.AlarmManager
+import android.content.Context
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.emptyPreferences
+import androidx.lifecycle.SavedStateHandle
+import androidx.room.Room
+import androidx.test.core.app.ApplicationProvider
+import app.clearsms.data.db.ClearSmsDatabase
+import app.clearsms.data.db.DeliveryStatus
+import app.clearsms.data.db.MessageDao
+import app.clearsms.data.db.MessageEntity
+import app.clearsms.domain.model.Category
+import app.clearsms.mms.AttachmentStore
+import app.clearsms.mms.FakeCarrierMmsLimits
+import app.clearsms.mms.MmsCapability
+import app.clearsms.mms.MmsGateway
+import app.clearsms.mms.MmsRadioConditionsProbe
+import app.clearsms.mms.MmsSender
+import app.clearsms.mms.OutgoingAttachmentStager
+import app.clearsms.sms.ContactsSource
+import app.clearsms.sms.ExistingThreadResolver
+import app.clearsms.sms.OutgoingSendDispatcher
+import app.clearsms.sms.ProviderThreadLookup
+import app.clearsms.sms.SimChoiceStore
+import app.clearsms.sms.SimInfo
+import app.clearsms.sms.SmsSender
+import app.clearsms.sms.SubscriptionSource
+import app.clearsms.sms.TelephonyWriter
+import app.clearsms.testing.FakeSettingsRepository
+import app.clearsms.testing.FakeSmsGateway
+import app.clearsms.testing.InMemoryPreferencesDataStore
+import app.clearsms.testing.ViewModelDatabaseFixture
+import app.clearsms.ui.common.ComposerHandOffs
+import app.clearsms.ui.common.ScheduleTipGate
+import app.clearsms.ui.common.UiPrefs
+import app.clearsms.ui.navigation.Routes
+import app.clearsms.work.MessageScheduler
+import app.clearsms.work.ScheduledSendAlarms
+import com.google.common.truth.Truth.assertThat
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
+import org.junit.After
+import org.junit.Before
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.Robolectric
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows.shadowOf
+import java.io.File
+
+/**
+ * New-conversation send parity: scheduling routes through the SAME
+ * [MessageScheduler] the conversation screen uses (durable SCHEDULED row +
+ * armed alarm, no forked send path), and the SIM default follows the same
+ * per-recipient memory once a recipient is chosen.
+ */
+@RunWith(RobolectricTestRunner::class)
+class ComposeMessageViewModelTest {
+    private lateinit var context: Context
+    private lateinit var db: ClearSmsDatabase
+    private val fixture = ViewModelDatabaseFixture()
+    private lateinit var dao: MessageDao
+    private lateinit var simChoiceStore: SimChoiceStore
+    private lateinit var subscriptions: FakeSubscriptionSource
+
+    private val future = System.currentTimeMillis() + 300_000L
+
+    private class FakeSubscriptionSource : SubscriptionSource {
+        var sims: List<SimInfo> = emptyList()
+        var defaultSub: Int? = null
+
+        override fun activeSims(): List<SimInfo> = sims
+
+        override fun defaultSmsSubscriptionId(): Int? = defaultSub
+
+        override fun defaultDataSubscriptionId(): Int? = null
+    }
+
+    /** Polls [condition] (VM work crosses real DataStore/Room IO threads). */
+    private suspend fun awaitUntil(
+        timeoutMs: Long = 5_000,
+        condition: suspend () -> Boolean,
+    ) {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (!condition()) {
+            check(System.currentTimeMillis() < deadline) { "condition not met within ${timeoutMs}ms" }
+            kotlinx.coroutines.delay(10)
+        }
+    }
+
+    @Before
+    fun setUp() {
+        context = ApplicationProvider.getApplicationContext()
+        db =
+            fixture
+                .onDatabase(Room.inMemoryDatabaseBuilder(context, ClearSmsDatabase::class.java))
+                .allowMainThreadQueries()
+                .build()
+        dao = db.messageDao()
+        // In-memory, per the testing convention: a temp-file DataStore runs
+        // its actor off the test scheduler and carries the upstream 1.1.x
+        // collector race (b/431787506) that only bites on 2-vCPU CI.
+        simChoiceStore = SimChoiceStore(InMemoryPreferencesDataStore())
+        subscriptions = FakeSubscriptionSource()
+    }
+
+    @After
+    fun tearDown() {
+        fixture.close(db)
+    }
+
+    private class FakeMmsGateway : MmsGateway {
+        var sends = 0
+
+        override fun sendMultimediaMessage(
+            messageId: Long,
+            subscriptionId: Int?,
+            pduFile: File,
+            sentIntent: android.app.PendingIntent,
+        ) {
+            sends++
+        }
+    }
+
+    /** A DataStore whose reads park until [gate] completes (race harness). */
+    private class GatedPreferencesDataStore(
+        private val gate: CompletableDeferred<Unit>,
+    ) : DataStore<Preferences> {
+        private val state = MutableStateFlow(emptyPreferences())
+
+        override val data: Flow<Preferences> =
+            flow {
+                gate.await()
+                emitAll(state)
+            }
+
+        override suspend fun updateData(transform: suspend (t: Preferences) -> Preferences): Preferences {
+            val next = transform(state.value).toPreferences()
+            state.value = next
+            return next
+        }
+    }
+
+    /** The composer's hand-offs to the conversation it routes into (issue #119). */
+    private val handOffs = ComposerHandOffs()
+
+    /** What the platform says the recipient's provider thread is; null = cannot say. */
+    private var providerThreads: ProviderThreadLookup = ProviderThreadLookup { null }
+
+    private fun viewModel(
+        savedStateHandle: SavedStateHandle = SavedStateHandle(),
+        smsDao: MessageDao = dao,
+        simChoiceStore: SimChoiceStore = this.simChoiceStore,
+        settings: FakeSettingsRepository = FakeSettingsRepository(),
+        gateway: FakeSmsGateway = FakeSmsGateway(),
+    ): ComposeMessageViewModel {
+        val uiPrefs = UiPrefs(InMemoryPreferencesDataStore())
+        val smsSender = SmsSender(context, smsDao, TelephonyWriter(context), uiPrefs, Dispatchers.Unconfined, gateway)
+        val mmsSender =
+            MmsSender(
+                context,
+                dao,
+                db.attachmentDao(),
+                AttachmentStore(context),
+                OutgoingAttachmentStager(context, FakeCarrierMmsLimits()),
+                FakeMmsGateway(),
+                MmsRadioConditionsProbe(context, FakeSubscriptionSource()),
+                FakeCarrierMmsLimits(),
+                Dispatchers.Unconfined,
+            )
+        val scheduler = MessageScheduler(dao, smsSender, ScheduledSendAlarms(context), uiPrefs, Dispatchers.Unconfined)
+        val vm =
+            ComposeMessageViewModel(
+                savedStateHandle = savedStateHandle,
+                sendDispatcher = OutgoingSendDispatcher(settings, scheduler, smsSender, mmsSender, dao),
+                mmsSender = mmsSender,
+                attachmentStager = OutgoingAttachmentStager(context, FakeCarrierMmsLimits()),
+                messageDao = dao,
+                settings = settings,
+                existingThreads = ExistingThreadResolver(dao, providerThreads, Dispatchers.Unconfined),
+                composerHandOffs = handOffs,
+                contactSuggestions = ContactSuggestions(context),
+                contactsSource = ContactsSource(context),
+                subscriptionSource = subscriptions,
+                simChoiceStore = simChoiceStore,
+                mmsCapability = MmsCapability(context),
+                messageScheduler = scheduler,
+                scheduleTipGate = ScheduleTipGate(FakeSettingsRepository()),
+                ioDispatcher = Dispatchers.Unconfined,
+            )
+        return fixture.own(vm)
+    }
+
+    @Test
+    fun `schedule creates the thread through the scheduler - durable row and armed alarm`() =
+        runBlocking<Unit> {
+            val vm = viewModel()
+            vm.onRecipientChange("+15551234567")
+            vm.onBodyChange("see you at nine")
+
+            vm.schedule(future)
+
+            val threadId = withTimeout(5_000) { vm.openThreadFlow.first() }
+            val rows = dao.observeThread(requireNotNull(dao.threadIdFor("5551234567"))).first()
+            assertThat(rows).hasSize(1)
+            assertThat(rows.single().threadId).isEqualTo(threadId)
+            assertThat(rows.single().deliveryStatus).isEqualTo(DeliveryStatus.SCHEDULED)
+            assertThat(rows.single().scheduledAt).isEqualTo(future)
+            val alarms = shadowOf(requireNotNull(context.getSystemService(AlarmManager::class.java)))
+            assertThat(requireNotNull(alarms.peekNextScheduledAlarm()).triggerAtMs).isEqualTo(future)
+        }
+
+    @Test
+    fun `confirming a schedule clears the compose box immediately and navigates into the thread`() =
+        runBlocking<Unit> {
+            val vm = viewModel()
+            vm.onRecipientChange("+15554443333")
+            vm.onBodyChange("see you later")
+
+            vm.schedule(future)
+
+            // Optimistic consume, exactly like send: the field is empty the
+            // moment the picker is confirmed, not when the row lands.
+            assertThat(vm.uiState.value.body).isEmpty()
+            val threadId = withTimeout(5_000) { vm.openThreadFlow.first() }
+            assertThat(threadId).isEqualTo(dao.threadIdFor("5554443333"))
+        }
+
+    @Test
+    fun `double-confirming a schedule creates exactly ONE scheduled row`() =
+        runBlocking<Unit> {
+            val vm = viewModel()
+            vm.onRecipientChange("+15554445555")
+            vm.onBodyChange("only one bubble")
+
+            vm.schedule(future)
+            vm.schedule(future)
+
+            withTimeout(5_000) { vm.openThreadFlow.first() }
+            val rows = dao.observeThread(requireNotNull(dao.threadIdFor("5554445555"))).first()
+            assertThat(rows).hasSize(1)
+            assertThat(rows.single().deliveryStatus).isEqualTo(DeliveryStatus.SCHEDULED)
+        }
+
+    @Test
+    fun `cycleSim returns the post-switch state the indicator shows - both directions`() =
+        runBlocking<Unit> {
+            // The tap toast is built from this return value: it must name the
+            // NEWLY selected subscription and agree with the long-press hint.
+            subscriptions.sims =
+                listOf(
+                    SimInfo(subscriptionId = 10, slotIndex = 0, displayName = "Airtel"),
+                    SimInfo(subscriptionId = 20, slotIndex = 1, displayName = "Jio"),
+                )
+            subscriptions.defaultSub = 10
+            val vm = viewModel()
+            awaitUntil { vm.simState.value.slot == 1 }
+
+            val toSlot2 = requireNotNull(vm.cycleSim())
+            assertThat(toSlot2.tapLabel).isEqualTo("SIM 2 - Jio")
+            assertThat(toSlot2).isEqualTo(vm.simState.value)
+            assertThat(vm.simState.value.hintLabel).isEqualTo("Sends with ${toSlot2.tapLabel}")
+
+            val wrapped = requireNotNull(vm.cycleSim())
+            assertThat(wrapped.tapLabel).isEqualTo("SIM 1 - Airtel")
+            assertThat(wrapped).isEqualTo(vm.simState.value)
+        }
+
+    @Test
+    fun `sim default follows the per-recipient memory once a recipient is chosen`() =
+        runBlocking<Unit> {
+            subscriptions.sims =
+                listOf(
+                    SimInfo(subscriptionId = 10, slotIndex = 0, displayName = "Airtel"),
+                    SimInfo(subscriptionId = 20, slotIndex = 1, displayName = "Jio"),
+                )
+            subscriptions.defaultSub = 10
+            simChoiceStore.remember("+15551234567", 20)
+
+            val vm = viewModel()
+            // No recipient yet: the system default SIM (slot 1) is chosen.
+            awaitUntil { vm.simState.value.slot == 1 }
+            assertThat(vm.simState.value.visible).isTrue()
+
+            vm.onRecipientChange("+15551234567")
+            // The remembered per-recipient choice (sub 20, slot 2) takes over.
+            awaitUntil { vm.simState.value.slot == 2 }
+        }
+
+    @Test
+    fun `cycling the sim remembers the choice for the recipient`() =
+        runBlocking<Unit> {
+            subscriptions.sims =
+                listOf(
+                    SimInfo(subscriptionId = 10, slotIndex = 0, displayName = "Airtel"),
+                    SimInfo(subscriptionId = 20, slotIndex = 1, displayName = "Jio"),
+                )
+            subscriptions.defaultSub = 10
+
+            val vm = viewModel()
+            vm.onRecipientChange("+15559876543")
+            awaitUntil { vm.simState.value.slot == 1 }
+            vm.cycleSim()
+
+            awaitUntil { simChoiceStore.rememberedFor("+15559876543") == 20 }
+            // The store write and the UI update are separate hops off the main
+            // thread, so the choice is asserted as it settles rather than
+            // instantaneously (which raced on 2-vCPU CI runners).
+            awaitUntil { vm.simState.value.slot == 2 }
+        }
+
+    @Test
+    fun `send carries the chosen sim like a conversation reply`() =
+        runBlocking<Unit> {
+            subscriptions.sims =
+                listOf(
+                    SimInfo(subscriptionId = 10, slotIndex = 0, displayName = "Airtel"),
+                    SimInfo(subscriptionId = 20, slotIndex = 1, displayName = "Jio"),
+                )
+            subscriptions.defaultSub = 20
+
+            val vm = viewModel()
+            vm.onRecipientChange("+15551112222")
+            awaitUntil { vm.simState.value.slot == 2 }
+            vm.onBodyChange("hello")
+            vm.send()
+
+            awaitUntil { dao.threadIdFor("5551112222") != null }
+            val rows = dao.observeThread(requireNotNull(dao.threadIdFor("5551112222"))).first()
+            assertThat(rows.single().subscriptionId).isEqualTo(20)
+        }
+    // --- inbound image share ----------------------------------------------
+
+    @Test
+    fun `shared image is staged as a chip with text prefilled - and NEVER auto-sent`() =
+        runBlocking<Unit> {
+            val image = File(context.cacheDir, "shared.bin")
+            image.writeBytes(ByteArray(256) { 5 })
+            val vm =
+                viewModel(
+                    SavedStateHandle(
+                        mapOf(
+                            "body" to "look at this",
+                            "imageUri" to
+                                android.net.Uri
+                                    .fromFile(image)
+                                    .toString(),
+                        ),
+                    ),
+                )
+
+            awaitUntil { vm.attachments.value.isNotEmpty() }
+
+            assertThat(vm.attachments.value).hasSize(1)
+            assertThat(vm.uiState.value.body).isEqualTo("look at this")
+            // Never auto-sent: no send attempt was made and nothing exists.
+            assertThat(vm.uiState.value.sendStatus).isNull()
+            assertThat(dao.getById(1L)).isNull()
+        }
+
+    @Test
+    fun `send with a staged attachment goes out as MMS on one row - chips clear and it navigates`() =
+        runBlocking<Unit> {
+            val image = File(context.cacheDir, "shared2.bin")
+            image.writeBytes(ByteArray(64) { 2 })
+            val vm =
+                viewModel(
+                    SavedStateHandle(
+                        mapOf(
+                            "imageUri" to
+                                android.net.Uri
+                                    .fromFile(image)
+                                    .toString(),
+                        ),
+                    ),
+                )
+            awaitUntil { vm.attachments.value.isNotEmpty() }
+            vm.onRecipientChange("+15551230000")
+            vm.onBodyChange("here")
+
+            vm.send()
+            val threadId = withTimeout(5_000) { vm.openThreadFlow.first() }
+
+            val row = dao.getById(1L)
+            assertThat(row).isNotNull()
+            assertThat(row!!.threadId).isEqualTo(threadId)
+            assertThat(row.attachmentKinds).isNotNull()
+            assertThat(db.attachmentDao().forMessage(1L)).hasSize(1)
+            // Chips AND text were consumed optimistically by the send.
+            assertThat(vm.attachments.value).isEmpty()
+            assertThat(vm.uiState.value.body).isEmpty()
+        }
+
+    // --- optimistic clear + navigate-into-thread on send --------------------
+
+    @Test
+    fun `send clears the compose box immediately and navigates into the created thread`() =
+        runBlocking<Unit> {
+            val vm = viewModel()
+            vm.onRecipientChange("+15550001111")
+            vm.onBodyChange("hello there")
+
+            vm.send()
+
+            // Optimistic consume: the field is empty the moment Send is
+            // tapped, not when the radio reports back.
+            assertThat(vm.uiState.value.body).isEmpty()
+            val threadId = withTimeout(5_000) { vm.openThreadFlow.first() }
+            assertThat(threadId).isEqualTo(dao.threadIdFor("5550001111"))
+        }
+
+    @Test
+    fun `double-tapping send dispatches exactly ONE message`() =
+        runBlocking<Unit> {
+            val vm = viewModel()
+            vm.onRecipientChange("+15550002222")
+            vm.onBodyChange("only once")
+
+            vm.send()
+            vm.send()
+
+            withTimeout(5_000) { vm.openThreadFlow.first() }
+            val rows = dao.observeThread(requireNotNull(dao.threadIdFor("5550002222"))).first()
+            assertThat(rows).hasSize(1)
+        }
+
+    @Test
+    fun `dispatch failure restores the body and reports FAILED so Retry has text to retry`() =
+        runBlocking<Unit> {
+            // Persisting the outgoing row is the first step of a dispatch:
+            // a throwing insert is the nothing-was-persisted failure shape.
+            val failingDao =
+                object : MessageDao by dao {
+                    override suspend fun insert(message: app.clearsms.data.db.MessageEntity): Long =
+                        throw IllegalStateException("disk full")
+                }
+            val vm = viewModel(smsDao = failingDao)
+            vm.onRecipientChange("+15550003333")
+            vm.onBodyChange("please arrive")
+
+            vm.send()
+
+            awaitUntil { vm.uiState.value.sendStatus == app.clearsms.ui.conversation.SendStatus.FAILED }
+            assertThat(vm.uiState.value.body).isEqualTo("please arrive")
+        }
+
+    @Test
+    fun `a parked recipient lookup cannot undo an explicit sim tap`() =
+        runBlocking<Unit> {
+            // A tap while a per-recipient lookup is still parked in the memory
+            // read must win: when the lookup finally resumes it must not move
+            // the indicator. NOTE: this covers the cancel-while-suspended case
+            // only. The narrower race - cancellation arriving after the read
+            // resumed but before the assignment, which the generation guard in
+            // the view model also closes - cannot be forced from a test without
+            // a production test hook, so it is not pinned here.
+            val gate = CompletableDeferred<Unit>()
+            val gated = GatedPreferencesDataStore(gate)
+            subscriptions.sims =
+                listOf(
+                    SimInfo(subscriptionId = 10, slotIndex = 0, displayName = "Airtel"),
+                    SimInfo(subscriptionId = 20, slotIndex = 1, displayName = "Jio"),
+                )
+            subscriptions.defaultSub = 10
+
+            val vm = viewModel(simChoiceStore = SimChoiceStore(gated))
+            vm.onRecipientChange("+15557778888")
+            // The lookup is now parked inside the memory read.
+            vm.cycleSim()
+            assertThat(vm.simState.value.slot).isEqualTo(2)
+
+            gate.complete(Unit) // the parked lookup resumes and finishes
+            repeat(20) { kotlinx.coroutines.delay(10) }
+
+            assertThat(vm.simState.value.slot).isEqualTo(2)
+        }
+
+    @Test
+    fun `retyping the recipient after a tap still re-primes from memory`() =
+        runBlocking<Unit> {
+            // The generation guard must not freeze the SIM: a later recipient
+            // edit is a NEW generation and legitimately decides again.
+            subscriptions.sims =
+                listOf(
+                    SimInfo(subscriptionId = 10, slotIndex = 0, displayName = "Airtel"),
+                    SimInfo(subscriptionId = 20, slotIndex = 1, displayName = "Jio"),
+                )
+            subscriptions.defaultSub = 10
+            simChoiceStore.remember("+15551110000", 20)
+
+            val vm = viewModel()
+            vm.onRecipientChange("+15559990000")
+            awaitUntil { vm.simState.value.slot == 1 }
+            vm.cycleSim()
+            awaitUntil { vm.simState.value.slot == 2 }
+
+            // A different recipient with its own remembered SIM.
+            vm.onRecipientChange("+15551110000")
+
+            awaitUntil { vm.simState.value.slot == 2 }
+            assertThat(simChoiceStore.rememberedFor("+15551110000")).isEqualTo(20)
+        }
+
+    @Test
+    fun `the digit shown matches the subscription that sends - even after a stale lookup resolves late`() =
+        runBlocking<Unit> {
+            // GitHub #7 round 2, requirement 3: the icon must show the slot
+            // that will actually SEND. Same carrier on both SIMs (the
+            // reporter's setup), a recipient lookup parked in flight, an
+            // explicit tap, THEN the lookup resolving late - after all of
+            // it, the slot digit on screen and the subscription persisted on
+            // the outgoing row must agree.
+            val gate = CompletableDeferred<Unit>()
+            val gated = GatedPreferencesDataStore(gate)
+            subscriptions.sims =
+                listOf(
+                    SimInfo(subscriptionId = 10, slotIndex = 0, displayName = "Vodafone"),
+                    SimInfo(subscriptionId = 20, slotIndex = 1, displayName = "Vodafone"),
+                )
+            subscriptions.defaultSub = 10
+
+            val vm = viewModel(simChoiceStore = SimChoiceStore(gated))
+            vm.onRecipientChange("+15552224444")
+            // The lookup is parked in the memory read; the user taps to SIM 2.
+            vm.cycleSim()
+            assertThat(vm.simState.value.slot).isEqualTo(2)
+
+            gate.complete(Unit) // the stale lookup resumes and finishes
+            repeat(20) { kotlinx.coroutines.delay(10) }
+
+            val shownSlot = vm.simState.value.slot
+            vm.onBodyChange("hello")
+            vm.send()
+
+            awaitUntil { dao.threadIdFor("5552224444") != null }
+            val row = dao.observeThread(requireNotNull(dao.threadIdFor("5552224444"))).first().single()
+            // The digit and the sender agree: what the icon said is what sent.
+            assertThat(shownSlot).isEqualTo(2)
+            assertThat(row.subscriptionId).isEqualTo(20)
+            assertThat(vm.simState.value.slot).isEqualTo(shownSlot)
+        }
+
+    // --- Direct Share: the chosen conversation becomes the recipient ------
+
+    @Test
+    fun `a direct share thread id prefills the thread's address as the recipient and keeps the shared text`() =
+        runBlocking<Unit> {
+            dao.insert(
+                MessageEntity(
+                    threadId = 42L,
+                    sender = "+91 98765 43210",
+                    normalizedSender = "9876543210",
+                    body = "earlier",
+                    timestamp = 1_000L,
+                    category = Category.PERSONAL,
+                ),
+            )
+            val vm = viewModel(SavedStateHandle(mapOf("threadId" to 42L, "body" to "see you at nine")))
+
+            awaitUntil {
+                vm.uiState.value.recipient
+                    .isNotBlank()
+            }
+            // The thread's own address, through the same selection path a
+            // picked suggestion takes - the SIM memory re-primes for it.
+            assertThat(vm.uiState.value.recipient).isEqualTo("+91 98765 43210")
+            assertThat(vm.uiState.value.body).isEqualTo("see you at nine")
+            assertThat(vm.uiState.value.sendStatus).isNull() // never auto-sent
+        }
+
+    @Test
+    fun `a direct share thread whose address is a saved contact shows the name, as a picked suggestion would`() =
+        runBlocking<Unit> {
+            // The conversation header's own lookup (PhoneLookup) knows the
+            // number; the composer must show what picking that contact from
+            // the suggestions shows - name, number beneath, change affordance
+            // - and still SEND to the thread's exact address.
+            shadowOf(context as android.app.Application).grantPermissions(android.Manifest.permission.READ_CONTACTS)
+            FakePhoneLookupProvider.contacts["+91 98765 43210"] = "Asha Rao" to "content://com.android.contacts/display_photo/7"
+            Robolectric.setupContentProvider(FakePhoneLookupProvider::class.java, android.provider.ContactsContract.AUTHORITY)
+            dao.insert(
+                MessageEntity(
+                    threadId = 42L,
+                    sender = "+91 98765 43210",
+                    normalizedSender = "9876543210",
+                    body = "earlier",
+                    timestamp = 1_000L,
+                    category = Category.PERSONAL,
+                ),
+            )
+            val vm = viewModel(SavedStateHandle(mapOf("threadId" to 42L, "body" to "see you at nine")))
+
+            awaitUntil {
+                vm.uiState.value.recipient
+                    .isNotBlank()
+            }
+            val picked = vm.uiState.value.picked
+            assertThat(picked).isNotNull()
+            assertThat(picked!!.name).isEqualTo("Asha Rao")
+            assertThat(picked.number).isEqualTo("+91 98765 43210")
+            assertThat(picked.photoUri).isEqualTo("content://com.android.contacts/display_photo/7")
+            // The destination is still the thread's address, untouched.
+            assertThat(vm.uiState.value.recipient).isEqualTo("+91 98765 43210")
+            assertThat(vm.uiState.value.body).isEqualTo("see you at nine")
+            // Clearing the pick returns to manual entry exactly as for a suggestion.
+            vm.clearPicked()
+            assertThat(vm.uiState.value.picked).isNull()
+            assertThat(vm.uiState.value.recipient).isEmpty()
+        }
+
+    @Test
+    fun `a direct share thread whose address is not a saved contact stays a plain number`() =
+        runBlocking<Unit> {
+            shadowOf(context as android.app.Application).grantPermissions(android.Manifest.permission.READ_CONTACTS)
+            FakePhoneLookupProvider.contacts.clear()
+            Robolectric.setupContentProvider(FakePhoneLookupProvider::class.java, android.provider.ContactsContract.AUTHORITY)
+            dao.insert(
+                MessageEntity(
+                    threadId = 42L,
+                    sender = "+91 98765 43210",
+                    normalizedSender = "9876543210",
+                    body = "earlier",
+                    timestamp = 1_000L,
+                    category = Category.PERSONAL,
+                ),
+            )
+            val vm = viewModel(SavedStateHandle(mapOf("threadId" to 42L, "body" to "hi")))
+
+            awaitUntil {
+                vm.uiState.value.recipient
+                    .isNotBlank()
+            }
+            assertThat(vm.uiState.value.recipient).isEqualTo("+91 98765 43210")
+            assertThat(vm.uiState.value.picked).isNull()
+        }
+
+    /** Minimal `PhoneLookup` stand-in: answers the filter uri's number from [contacts]. */
+    class FakePhoneLookupProvider : android.content.ContentProvider() {
+        override fun onCreate(): Boolean = true
+
+        override fun query(
+            uri: android.net.Uri,
+            projection: Array<out String>?,
+            selection: String?,
+            selectionArgs: Array<out String>?,
+            sortOrder: String?,
+        ): android.database.Cursor {
+            val cursor = android.database.MatrixCursor(projection ?: emptyArray())
+            val number = uri.lastPathSegment?.let(android.net.Uri::decode) ?: return cursor
+            val (name, photo) = contacts[number] ?: return cursor
+            cursor.addRow(
+                projection!!.map { column ->
+                    when (column) {
+                        android.provider.ContactsContract.PhoneLookup.DISPLAY_NAME -> name
+                        android.provider.ContactsContract.PhoneLookup.PHOTO_THUMBNAIL_URI -> photo
+                        android.provider.ContactsContract.PhoneLookup._ID -> 1L
+                        android.provider.ContactsContract.PhoneLookup.LOOKUP_KEY -> "key"
+                        android.provider.ContactsContract.PhoneLookup.NUMBER -> number
+                        else -> null
+                    }
+                },
+            )
+            return cursor
+        }
+
+        override fun getType(uri: android.net.Uri): String? = null
+
+        override fun insert(
+            uri: android.net.Uri,
+            values: android.content.ContentValues?,
+        ): android.net.Uri? = null
+
+        override fun delete(
+            uri: android.net.Uri,
+            selection: String?,
+            selectionArgs: Array<out String>?,
+        ): Int = 0
+
+        override fun update(
+            uri: android.net.Uri,
+            values: android.content.ContentValues?,
+            selection: String?,
+            selectionArgs: Array<out String>?,
+        ): Int = 0
+
+        companion object {
+            /** number -> (name, photo uri). */
+            val contacts = mutableMapOf<String, Pair<String, String?>>()
+        }
+    }
+
+    @Test
+    fun `an explicit recipient wins over the thread id and an unknown thread leaves the recipient empty`() =
+        runBlocking<Unit> {
+            dao.insert(
+                MessageEntity(
+                    threadId = 42L,
+                    sender = "+91 98765 43210",
+                    normalizedSender = "9876543210",
+                    body = "earlier",
+                    timestamp = 1_000L,
+                    category = Category.PERSONAL,
+                ),
+            )
+            val explicit = viewModel(SavedStateHandle(mapOf("threadId" to 42L, "recipient" to "12345")))
+            repeat(20) { kotlinx.coroutines.delay(10) }
+            assertThat(explicit.uiState.value.recipient).isEqualTo("12345")
+
+            // The thread vanished (binned) between the share sheet and here:
+            // the composer still opens with the content, no recipient, no error.
+            val gone = viewModel(SavedStateHandle(mapOf("threadId" to 999L, "body" to "hi")))
+            repeat(20) { kotlinx.coroutines.delay(10) }
+            assertThat(gone.uiState.value.recipient).isEmpty()
+            assertThat(gone.uiState.value.body).isEqualTo("hi")
+
+            // The route's "no thread" value is simply ignored.
+            val none = viewModel(SavedStateHandle(mapOf("threadId" to Routes.COMPOSE_NO_THREAD, "body" to "hi")))
+            repeat(20) { kotlinx.coroutines.delay(10) }
+            assertThat(none.uiState.value.recipient).isEmpty()
+        }
+
+    // --- delayed sending from the standalone composer (issue #119) -----------
+
+    private suspend fun seedHistory(
+        sender: String,
+        threadId: Long,
+        providerThreadId: Long? = null,
+        deletedAt: Long? = null,
+    ): Long =
+        dao.insert(
+            MessageEntity(
+                threadId = threadId,
+                sender = sender,
+                normalizedSender =
+                    app.clearsms.data.repository.SenderNormalizer
+                        .normalize(sender),
+                body = "earlier",
+                timestamp = 1_000L,
+                isRead = true,
+                category = Category.PERSONAL,
+                providerThreadId = providerThreadId,
+                deletedAt = deletedAt,
+            ),
+        )
+
+    @Test
+    fun `delayed sending ON - a plain compose send becomes a pending SCHEDULED row, nothing on the radio, Cancel handed to the thread`() =
+        runBlocking<Unit> {
+            val settings = FakeSettingsRepository().apply { delayedSendEnabled.value = true }
+            val gateway = FakeSmsGateway()
+            val vm = viewModel(settings = settings, gateway = gateway)
+            vm.onRecipientChange("+15550003333")
+            vm.onBodyChange("oops typo")
+            val before = System.currentTimeMillis()
+
+            vm.send()
+
+            val threadId = withTimeout(5_000) { vm.openThreadFlow.first() }
+            val row = dao.scheduledMessages().single()
+            assertThat(row.threadId).isEqualTo(threadId)
+            assertThat(row.deliveryStatus).isEqualTo(DeliveryStatus.SCHEDULED)
+            assertThat(row.scheduledAt).isAtLeast(before + settings.delayedSendDelay.value.millis)
+            assertThat(gateway.sends).isEmpty()
+            // The conversation the screen navigates into inherits the pending
+            // send, so ITS Cancel bar is the one the user sees.
+            assertThat(handOffs.take(threadId)?.delayedMessageId).isEqualTo(row.id)
+        }
+
+    @Test
+    fun `delayed sending ON - an attachment still goes out as MMS at once, never a schedule`() =
+        runBlocking<Unit> {
+            val settings = FakeSettingsRepository().apply { delayedSendEnabled.value = true }
+            val image = File(context.cacheDir, "delayed-mms.bin")
+            image.writeBytes(ByteArray(64) { 3 })
+            val vm =
+                viewModel(
+                    SavedStateHandle(
+                        mapOf(
+                            "imageUri" to
+                                android.net.Uri
+                                    .fromFile(image)
+                                    .toString(),
+                        ),
+                    ),
+                    settings = settings,
+                )
+            awaitUntil { vm.attachments.value.isNotEmpty() }
+            vm.onRecipientChange("+15550004444")
+            vm.onBodyChange("picture")
+
+            vm.send()
+
+            val threadId = withTimeout(5_000) { vm.openThreadFlow.first() }
+            assertThat(dao.scheduledMessages()).isEmpty()
+            val row = dao.observeThread(threadId).first().single()
+            assertThat(row.deliveryStatus).isNotEqualTo(DeliveryStatus.SCHEDULED)
+            assertThat(db.attachmentDao().forMessage(row.id)).hasSize(1)
+            assertThat(handOffs.take(threadId)).isNull()
+        }
+
+    // --- a picked recipient with history opens their conversation (#119) ----
+
+    @Test
+    fun `picking a contact with history pushes their thread and carries the typed draft - composer kept intact for Back`() =
+        runBlocking<Unit> {
+            seedHistory("+15550005555", threadId = 42L)
+            val vm = viewModel()
+            vm.onBodyChange("typed before picking")
+
+            vm.pickSuggestion(ContactSuggestion(name = "Ada", number = "+15550005555"))
+
+            val threadId = withTimeout(5_000) { vm.showThreadFlow.first() }
+            assertThat(threadId).isEqualTo(42L)
+            // The draft rides along...
+            assertThat(handOffs.take(42L)?.draft).isEqualTo("typed before picking")
+            // ...and the composer beneath still has everything: Back after a
+            // mis-tap lands on the same text and the same picked contact.
+            assertThat(vm.uiState.value.body).isEqualTo("typed before picking")
+            assertThat(
+                vm.uiState.value.picked
+                    ?.number,
+            ).isEqualTo("+15550005555")
+            // Nothing was sent or scheduled by merely picking.
+            assertThat(dao.observeThread(42L).first()).hasSize(1)
+        }
+
+    @Test
+    fun `picking a contact resolves the thread through the PLATFORM anchor, not a raw number match`() =
+        runBlocking<Unit> {
+            // The person's thread holds a dialling variant whose sender key
+            // ("601234567") differs from the picked trunk-prefixed form
+            // ("0601234567"); only the provider's canonical thread (#42)
+            // ties them together.
+            seedHistory("+48601234567", threadId = 9L, providerThreadId = 77L)
+            assertThat(dao.threadIdFor("0601234567")).isNull()
+            providerThreads = ProviderThreadLookup { 77L }
+            val vm = viewModel()
+
+            vm.pickSuggestion(ContactSuggestion(name = "Ola", number = "0601234567"))
+
+            assertThat(withTimeout(5_000) { vm.showThreadFlow.first() }).isEqualTo(9L)
+        }
+
+    @Test
+    fun `without the platform anchor the same variant is NOT matched - the raw number is never the identity`() =
+        runBlocking<Unit> {
+            seedHistory("+48601234567", threadId = 9L, providerThreadId = 77L)
+            providerThreads = ProviderThreadLookup { null }
+            val vm = viewModel()
+
+            vm.pickSuggestion(ContactSuggestion(name = "Ola", number = "0601234567"))
+
+            assertThat(kotlinx.coroutines.withTimeoutOrNull(300) { vm.showThreadFlow.first() }).isNull()
+        }
+
+    @Test
+    fun `picking a contact with NO history stays on the composer exactly as today`() =
+        runBlocking<Unit> {
+            val vm = viewModel()
+            vm.onBodyChange("hello stranger")
+
+            vm.pickSuggestion(ContactSuggestion(name = "New", number = "+15550006666"))
+
+            assertThat(kotlinx.coroutines.withTimeoutOrNull(300) { vm.showThreadFlow.first() }).isNull()
+            assertThat(kotlinx.coroutines.withTimeoutOrNull(100) { vm.openThreadFlow.first() }).isNull()
+            assertThat(vm.uiState.value.body).isEqualTo("hello stranger")
+            assertThat(vm.uiState.value.recipient).isEqualTo("+15550006666")
+        }
+
+    @Test
+    fun `a thread binned whole is not history - the composer stays put`() =
+        runBlocking<Unit> {
+            seedHistory("+15550007777", threadId = 5L, deletedAt = 123L)
+            val vm = viewModel()
+
+            vm.pickSuggestion(ContactSuggestion(name = "Gone", number = "+15550007777"))
+
+            assertThat(kotlinx.coroutines.withTimeoutOrNull(300) { vm.showThreadFlow.first() }).isNull()
+        }
+
+    @Test
+    fun `typing a number with history does NOT yank the screen - only a pick does`() =
+        runBlocking<Unit> {
+            seedHistory("+15550008888", threadId = 11L)
+            val vm = viewModel()
+
+            vm.onRecipientChange("+15550008888")
+
+            assertThat(kotlinx.coroutines.withTimeoutOrNull(300) { vm.showThreadFlow.first() }).isNull()
+        }
+
+    @Test
+    fun `opened WITH a recipient who has history - the sms link case - replaces the composer with their thread`() =
+        runBlocking<Unit> {
+            seedHistory("+15550009999", threadId = 13L)
+            val vm = viewModel(SavedStateHandle(mapOf("recipient" to "+15550009999", "body" to "from the link")))
+
+            // Replaced, not pushed: there is no choice here for Back to undo.
+            assertThat(withTimeout(5_000) { vm.openThreadFlow.first() }).isEqualTo(13L)
+            assertThat(handOffs.take(13L)?.draft).isEqualTo("from the link")
+        }
+
+    @Test
+    fun `opened WITH a recipient who has no history stays on the composer`() =
+        runBlocking<Unit> {
+            val vm = viewModel(SavedStateHandle(mapOf("recipient" to "+15550001010")))
+
+            assertThat(kotlinx.coroutines.withTimeoutOrNull(300) { vm.openThreadFlow.first() }).isNull()
+            assertThat(vm.uiState.value.recipient).isEqualTo("+15550001010")
+        }
+}

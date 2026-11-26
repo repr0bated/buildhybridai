@@ -8,6 +8,19 @@ The model never touches your phone directly. It can only **propose one typed met
 
 Personal project by Jeremy Hobson ([@repr0bated](https://github.com/repr0bated)). Licensed Apache-2.0. Built for #BuildHybridAI 2026 (Android track).
 
+### Credits and messaging
+
+The in-app messaging client is based on [Clear SMS](https://github.com/itsluminous/ClearSMS)
+(Apache-2.0, copyright the Clear SMS contributors). A vendored snapshot, including
+its `LICENSE` and `NOTICE`, lives in [`third_party/clearsms`](third_party/clearsms).
+Call Guardian itself stays Apache-2.0, copyright Jeremy Hobson.
+
+**RCS is not available to third-party Android apps.** Google does not offer a
+public RCS API to default SMS apps, so Call Guardian sends and receives SMS and
+MMS only. Becoming the default SMS app is opt-in in Settings; the app never
+takes that role by itself.
+
+
 ---
 
 ## Headline: typed methods, schemas and receipts

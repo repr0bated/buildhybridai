@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://github.com/repr0bated/callguardian-android/schemas/sync/sync_subscription.schema.json",
   "title": "SyncSubscription",
-  "description": "One subscription sender (grouped texts) and what was done about it. No message text.",
+  "description": "One subscription sender and its lifecycle (ACTIVE, STOP_SENT, UNSUBSCRIBED, CANCELED) with timestamps and history. No message text. Canceling does not remove an Owned account.",
   "x-firestore": "users/{uid}/subscriptions/{key}",
   "type": "object",
   "additionalProperties": false,
@@ -100,10 +100,13 @@
       "enum": [
         "ACTIVE",
         "STOP_SENT",
+        "UNSUBSCRIBED",
+        "CANCELED",
         "MANAGE_OPENED",
         "MUTED",
         "DISMISSED"
-      ]
+      ],
+      "description": "Lifecycle: ACTIVE, STOP_SENT (STOP was texted), UNSUBSCRIBED (confirmation text received), CANCELED (user confirmed after Manage subscription). MUTED, DISMISSED, and MANAGE_OPENED are retained for older documents."
     },
     "origin": {
       "type": "string",
@@ -131,6 +134,98 @@
       "type": "boolean",
       "title": "Deleted",
       "description": "Tombstone: the item was removed. Documents are kept so every device learns about the delete."
+    },
+    "stopSentAt": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 0,
+      "format": "epoch-millis"
+    },
+    "unsubscribedAt": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 0,
+      "format": "epoch-millis"
+    },
+    "canceledAt": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 0,
+      "format": "epoch-millis"
+    },
+    "stopReceiptId": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 0
+    },
+    "unsubscribedEventId": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 0
+    },
+    "unsubscribedReceiptId": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 0
+    },
+    "history": {
+      "type": "array",
+      "description": "Status transitions, oldest first.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "from",
+          "to",
+          "at"
+        ],
+        "properties": {
+          "from": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          },
+          "at": {
+            "type": "integer",
+            "minimum": 0,
+            "format": "epoch-millis"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 200
+          },
+          "receiptId": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "eventId": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          }
+        }
+      }
     }
   }
 }

@@ -102,3 +102,30 @@ interface OwnedAccountDao {
     @Query("DELETE FROM owned_accounts WHERE id = :id")
     suspend fun delete(id: Long)
 }
+
+
+@Dao
+interface SubscriptionDao {
+    @Query("SELECT * FROM subscriptions ORDER BY updated_at DESC")
+    fun observeAll(): Flow<List<SubscriptionEntity>>
+    @Query("SELECT * FROM subscriptions ORDER BY updated_at DESC")
+    suspend fun all(): List<SubscriptionEntity>
+    @Query("SELECT * FROM subscriptions WHERE id = :id")
+    suspend fun get(id: Long): SubscriptionEntity?
+    @Query("SELECT * FROM subscriptions WHERE sender = :sender LIMIT 1")
+    suspend fun bySender(sender: String): SubscriptionEntity?
+    @Query("SELECT * FROM subscriptions WHERE pending_cancel_ask = 1")
+    suspend fun pendingCancelAsks(): List<SubscriptionEntity>
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(row: SubscriptionEntity): Long
+    @Update
+    suspend fun update(row: SubscriptionEntity)
+}
+
+@Dao
+interface SubscriptionHistoryDao {
+    @Query("SELECT * FROM subscription_status_history WHERE subscription_id = :id ORDER BY at DESC")
+    suspend fun forSubscription(id: Long): List<SubscriptionStatusHistoryEntity>
+    @Insert
+    suspend fun insert(row: SubscriptionStatusHistoryEntity): Long
+}

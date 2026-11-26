@@ -1,0 +1,116 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Notification channels -->
+    <string name="channel_otp">OTP codes</string>
+    <string name="channel_otp_desc">Heads-up notifications for one-time passwords</string>
+    <string name="channel_messages">Messages</string>
+    <string name="channel_messages_desc">Incoming personal and important messages</string>
+    <string name="channel_promotions">Promotions</string>
+    <string name="channel_promotions_desc">Offers and marketing messages. Off by default - turn this category on to receive them.</string>
+    <string name="channel_unknown">Unknown senders</string>
+    <string name="channel_unknown_desc">Messages from senders the app could not categorize - often a real person texting from a number not in your contacts</string>
+    <string name="channel_spam">Spam</string>
+    <string name="channel_spam_desc">Messages sorted as spam by the rules. Off by default - turn this category on to be notified about them.</string>
+    <string name="channel_security">Security warnings</string>
+    <string name="channel_security_desc">Warnings about likely scam or fraud messages</string>
+    <string name="channel_summary">Reminders</string>
+    <string name="channel_summary_desc">Bill payment reminders</string>
+    <string name="channel_transactions">Transactions</string>
+    <string name="channel_transactions_desc">Parsed debit, credit and balance updates from bank messages</string>
+    <string name="channel_sync">Message import</string>
+    <string name="channel_sync_desc">Progress while importing existing messages</string>
+
+    <!-- OTP notification -->
+    <string name="otp_from">OTP from %1$s</string>
+    <string name="otp_public_title">New OTP from %1$s</string>
+    <string name="action_copy">Copy</string>
+    <string name="action_share">Share</string>
+    <string name="action_delete">Delete</string>
+    <string name="notification_action_mark_read">Mark read</string>
+    <string name="notification_reply_label">Reply</string>
+    <string name="otp_clip_label">OTP</string>
+    <string name="otp_share_title">Share OTP</string>
+
+    <!-- Transaction notifications -->
+    <string name="transaction_balance_update">Balance update</string>
+    <string name="transaction_account_short">A/c %1$s</string>
+    <string name="transaction_bill_due">Due %1$s</string>
+    <string name="transaction_bill_min_due">Min due %1$s</string>
+    <string name="transaction_payment_request">Payment request</string>
+
+    <!-- Message notifications -->
+    <string name="notification_me">Me</string>
+    <string name="scam_warning_title">Possible scam message</string>
+    <string name="scam_warning_text">Suspicious message from %1$s - be careful with links and requests</string>
+    <string name="send_failed_title">Message not sent</string>
+    <string name="send_failed_text">Could not send your message to %1$s</string>
+
+    <!-- MMS receive -->
+    <string name="mms_downloading">Downloading MMS…</string>
+    <string name="mms_download_failed">MMS could not be downloaded</string>
+    <string name="mms_failed_tap_retry">Tap to retry</string>
+    <string name="mms_snippet_photo">📷 Photo</string>
+    <string name="mms_snippet_attachment">📎 Attachment</string>
+    <string name="mms_image_content_description">MMS photo</string>
+    <string name="mms_viewer_share">Share photo</string>
+    <string name="mms_viewer_save">Save photo</string>
+    <string name="mms_viewer_close">Close</string>
+    <string name="mms_open_attachment_failed">No app can open this attachment</string>
+    <!-- Snackbars after the folder picker (issue #151); a cancelled picker shows neither. -->
+    <string name="mms_attachment_saved">Saved</string>
+    <string name="mms_attachment_save_failed">Could not save attachment</string>
+
+    <!-- MMS send: compose-bar attachments -->
+    <string name="compose_attach">Add to message</string>
+    <string name="compose_expand">Expand compose box</string>
+    <string name="compose_collapse">Shrink compose box</string>
+    <string name="compose_attach_photo">Photo</string>
+    <string name="compose_attach_camera">Camera</string>
+    <string name="compose_attach_file">Any file</string>
+    <!-- Insert a contact as text (GitHub #150): name then number, reorderable by translators -->
+    <string name="compose_attach_contact">Contact</string>
+    <string name="compose_attach_contact_hint">Name and number, inserted as text</string>
+    <string name="compose_contact_text">%1$s: %2$s</string>
+    <string name="compose_contact_picker_missing">No contacts app available</string>
+    <string name="compose_contact_unreadable">That contact could not be read</string>
+    <string name="compose_attachment_remove">Remove attachment</string>
+    <string name="compose_attachment_too_large">Too large to send, even after compression (limit %1$s)</string>
+    <string name="compose_attachment_unreadable">That file could not be read</string>
+    <string name="compose_attachment_size">%1$s of %2$s</string>
+    <string name="compose_attachment_schedule_sms_only">Scheduling is SMS-only - remove attachments to schedule</string>
+    <string name="compose_camera_missing">No camera app available</string>
+    <string name="share_only_images">Only images can be shared into Clear SMS</string>
+    <string name="conversation_mms_failed_dialog_title">Download failed</string>
+    <string name="conversation_mms_failed_dialog_message">This multimedia message could not be downloaded. Retry the download or delete the message.</string>
+
+
+    <!-- Bill reminders -->
+    <string name="bill_due_title">Bill due tomorrow</string>
+    <string name="bill_due_account">ending %1$s</string>
+    <string name="bill_due_text">%1$s payment is due tomorrow</string>
+    <string name="bill_due_text_amount">%1$s - ₹%2$.2f due tomorrow</string>
+
+    <!-- Initial sync -->
+    <string name="sync_title">Importing your messages</string>
+    <string name="sync_progress">%1$d of %2$d messages</string>
+    <plurals name="catch_up_summary_title">
+        <item quantity="one">%d new message</item>
+        <item quantity="other">%d new messages</item>
+    </plurals>
+    <string name="catch_up_summary_text">Received while Clear SMS was catching up</string>
+
+    <!-- Manual re-sort -->
+    <string name="resort_title">Sorting your inbox</string>
+    <string name="inbox_sorting_banner">Sorting your messages again after the update…</string>
+
+    <!-- Launcher shortcuts (long-press the app icon, issue #81) -->
+    <string name="shortcut_compose_short">New message</string>
+    <string name="shortcut_compose_long">Write a new message</string>
+    <string name="shortcut_compose_disabled">Clear SMS is not available</string>
+    <!-- Shown by the launcher when a conversation shortcut the user pinned to the
+         home screen was disabled because its thread was blocked, binned, muted or
+         sorted as spam. -->
+    <string name="shortcut_disabled_unavailable">This conversation is no longer available in Clear SMS</string>
+    <!-- Shown when the user turned conversation shortcuts off in Settings. -->
+    <string name="shortcut_disabled_setting_off">Conversation shortcuts are turned off in Clear SMS settings</string>
+</resources>

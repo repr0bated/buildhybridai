@@ -77,3 +77,15 @@ fun GuardianMethod.label(): String = when (this) {
 }
 
 fun RiskLevel.label(): String = name.lowercase().replaceFirstChar { it.uppercase() }
+
+/**
+ * Model-facing triage verdict in assets/schemas/scam_verdict.schema.json.
+ * Kept as a top-level enum with no companion so on-device JSON stays simple.
+ */
+@Serializable
+enum class ModelVerdict {
+    SCAM, SUSPICIOUS, CLEAR, SUBSCRIPTION, CODE, OWNED;
+}
+
+fun modelVerdictFrom(raw: String?): ModelVerdict? =
+    raw?.let { runCatching { ModelVerdict.valueOf(it.trim().uppercase()) }.getOrNull() }

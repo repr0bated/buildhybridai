@@ -97,6 +97,7 @@ class MethodDispatcher @Inject constructor(
             return DispatchResult(id, DispatchResult.STATUS_INVALID_OUTPUT, outcome.output, error = outReport.errors.joinToString("; "))
         }
         val id = receipt(DispatchResult.STATUS_OK, outText, outcome.notes)
+        outcome.afterReceipt?.invoke(id)
         return DispatchResult(id, DispatchResult.STATUS_OK, outcome.output, outcome.launch)
     }
 

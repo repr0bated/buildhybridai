@@ -40,7 +40,7 @@ import javax.inject.Singleton
 
 data class HandlerExtras(val respondedWithinMs: Long = 0)
 
-data class HandlerOutcome(val output: JsonElement, val launch: Intent? = null, val notes: List<String> = emptyList())
+data class HandlerOutcome(val output: JsonElement, val launch: Intent? = null, val notes: List<String> = emptyList(), val afterReceipt: (suspend (Long) -> Unit)? = null)
 
 /**
  * Method bodies. Each one takes the *generated* input type and returns the *generated* output type

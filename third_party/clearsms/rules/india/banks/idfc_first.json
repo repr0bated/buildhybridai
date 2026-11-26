@@ -1,0 +1,260 @@
+{
+  "version": "1.0",
+  "rules": [
+    {
+      "id": "idfc-first-debit-01",
+      "name": "IDFC FIRST Bank Debit",
+      "priority": 300,
+      "match": {
+        "sender_pattern": "(?i)(?:IDFCFB|IDFCBK|IDFC)",
+        "body_pattern": "(?i)(?:INR|Rs\\.?|\\u20b9)\\s*([\\d,]+(?:\\.\\d{1,2})?)\\s+debited\\s+from\\s+(?:your\\s+)?a/c\\s+[Xx*]*(\\d{3,4})",
+        "guards_none": [
+          "otp_mention"
+        ]
+      },
+      "action": {
+        "category": "important",
+        "sub_category": "transaction",
+        "extract": {
+          "amount": "$1",
+          "account_last4": "$2",
+          "type": "debit",
+          "bank": "IDFC FIRST Bank"
+        }
+      },
+      "contributed_by": "clearsms",
+      "created_at": "2026-07-27T00:00:00Z"
+    },
+    {
+      "id": "idfc-first-credit-01",
+      "name": "IDFC FIRST Bank Credit Transaction",
+      "priority": 300,
+      "match": {
+        "sender_pattern": "(?i)(?:IDFCFB|IDFCBK|IDFC)",
+        "body_pattern": "(?i)(?:INR|Rs\\.?|\\u20b9)\\s*([\\d,]+(?:\\.\\d{1,2})?)\\s+credited\\s+(?:to|in)\\s+(?:your\\s+)?a/c\\s+[Xx*]*(\\d{3,4})",
+        "guards_none": [
+          "otp_mention"
+        ]
+      },
+      "action": {
+        "category": "important",
+        "sub_category": "transaction",
+        "extract": {
+          "amount": "$1",
+          "account_last4": "$2",
+          "type": "credit",
+          "bank": "IDFC FIRST Bank"
+        }
+      },
+      "contributed_by": "clearsms",
+      "created_at": "2026-07-27T00:00:00Z"
+    },
+    {
+      "id": "idfc-first-balance-01",
+      "name": "IDFC FIRST Bank Balance Alert",
+      "priority": 280,
+      "match": {
+        "sender_pattern": "(?i)(?:IDFCFB|IDFCBK|IDFC)",
+        "body_pattern": "(?i)(?:avl|available)\\s+bal(?:ance)?\\s+(?:in|for)\\s+(?:your\\s+)?a/c\\s+(?:no\\.?\\s*)?[Xx*]*(\\d{3,4})[\\s\\S]{0,60}?is\\s+(?:INR|Rs\\.?|\\u20b9)\\s*([\\d,]+(?:\\.\\d{1,2})?)",
+        "guards_none": [
+          "otp_mention"
+        ]
+      },
+      "action": {
+        "category": "important",
+        "sub_category": "bank_alert",
+        "extract": {
+          "account_last4": "$1",
+          "balance": "$2",
+          "bank": "IDFC FIRST Bank"
+        }
+      },
+      "contributed_by": "clearsms",
+      "created_at": "2026-07-27T00:00:00Z"
+    },
+    {
+      "id": "idfc-first-card-bill-01",
+      "name": "IDFC FIRST Bank Credit Card Bill Reminder",
+      "priority": 260,
+      "match": {
+        "sender_pattern": "(?i)(?:IDFCFB|IDFCBK|IDFC)",
+        "body_pattern": "(?i)(?:credit\\s+)?card\\s+(?:no\\.?\\s*)?(?:ending\\s+)?[Xx*]*(\\d{4})[\\s\\S]{0,100}?total\\s+(?:amt|amount)?\\s*due[\\s:]*(?:INR|Rs\\.?|\\u20b9)\\s*([\\d,]+(?:\\.\\d{1,2})?)[\\s\\S]{0,80}?min(?:imum)?\\s+(?:amt|amount)?\\s*due[\\s:]*(?:INR|Rs\\.?|\\u20b9)\\s*([\\d,]+(?:\\.\\d{1,2})?)[\\s\\S]{0,80}?(?:due\\s+by|pay\\s+by|by)\\s+(\\d{1,2}[-/\\s](?:[A-Za-z]{3}|\\d{1,2})[-/\\s]\\d{2,4})"
+      },
+      "action": {
+        "category": "important",
+        "sub_category": "bill",
+        "extract": {
+          "account_last4": "$1",
+          "total_due": "$2",
+          "min_due": "$3",
+          "due_date": "$4",
+          "bank": "IDFC FIRST Bank"
+        }
+      },
+      "contributed_by": "clearsms",
+      "created_at": "2026-07-27T00:00:00Z"
+    },
+    {
+      "id": "idfc-first-emi-01",
+      "name": "IDFC FIRST Bank EMI Reminder",
+      "priority": 250,
+      "match": {
+        "sender_pattern": "(?i)(?:IDFCFB|IDFCBK|IDFC)",
+        "body_pattern": "(?i)EMI\\s+of\\s+(?:INR|Rs\\.?|\\u20b9)\\s*([\\d,]+(?:\\.\\d{1,2})?)[\\s\\S]{0,80}?due\\s+on\\s+(\\d{1,2}[-/\\s](?:[A-Za-z]{3}|\\d{1,2})[-/\\s]\\d{2,4})"
+      },
+      "action": {
+        "category": "important",
+        "sub_category": "bill",
+        "extract": {
+          "amount": "$1",
+          "due_date": "$2",
+          "bank": "IDFC FIRST Bank"
+        }
+      },
+      "contributed_by": "clearsms",
+      "created_at": "2026-07-27T00:00:00Z"
+    },
+    {
+      "id": "idfc-first-card-spent-01",
+      "name": "IDFC FIRST Bank Card Spend At Merchant",
+      "priority": 322,
+      "match": {
+        "sender_pattern": "(?i)(?:IDFCFB|IDFCBK|IDFC)",
+        "body_pattern": "(?i)(?:INR|Rs\\.?|\\u20b9)\\s*([\\d,]+(?:\\.\\d{1,2})?)\\s+spent\\s+on\\s+your\\s+IDFC\\s+FIRST\\s+Bank\\s+Credit\\s+Card\\s+ending\\s+[Xx*]*(\\d{2,4})\\s+at\\s+([^\\n]{1,40}?)\\s+(?:on|at)\\s+\\d",
+        "guards_none": [
+          "otp_mention"
+        ]
+      },
+      "action": {
+        "category": "important",
+        "sub_category": "transaction",
+        "extract": {
+          "amount": "$1",
+          "account_last4": "$2",
+          "merchant": "$3",
+          "type": "debit",
+          "bank": "IDFC FIRST Bank"
+        }
+      },
+      "contributed_by": "clearsms",
+      "created_at": "2026-07-27T00:00:00Z"
+    },
+    {
+      "id": "idfc-first-cc-refund-01",
+      "name": "IDFC FIRST Bank Credit Card Refund",
+      "priority": 330,
+      "match": {
+        "sender_pattern": "(?i)(?:IDFCFB|IDFCBK|IDFC)",
+        "body_pattern": "(?i)(?:INR|Rs\\.?|\\u20b9)\\s*([\\d,]+(?:\\.\\d{1,2})?)\\s*refund\\s+received\\s+on\\s+your\\s+IDFC\\s+FIRST\\s+Bank\\s+Credit\\s+Card\\s+ending\\s+[Xx*]*(\\d{2,4})"
+      },
+      "action": {
+        "category": "important",
+        "sub_category": "transaction",
+        "extract": {
+          "amount": "$1",
+          "account_last4": "$2",
+          "type": "credit",
+          "bank": "IDFC FIRST Bank"
+        }
+      },
+      "contributed_by": "clearsms",
+      "created_at": "2026-07-27T00:00:00Z"
+    },
+    {
+      "id": "idfc-first-cc-payment-01",
+      "name": "IDFC FIRST Bank Credit Card Payment Received",
+      "priority": 315,
+      "match": {
+        "sender_pattern": "(?i)(?:IDFCFB|IDFCBK|IDFC)",
+        "body_pattern": "(?i)(?:INR|Rs\\.?|\\u20b9)\\s*([\\d,]+(?:\\.\\d{1,2})?)\\s+was\\s+received\\s+for\\s+your\\s+IDFC\\s+FIRST\\s+Bank\\s+Credit\\s+Card\\s+ending\\s+[Xx*]*(\\d{2,4})",
+        "guards_none": [
+          "otp_mention"
+        ]
+      },
+      "action": {
+        "category": "important",
+        "sub_category": "transaction",
+        "extract": {
+          "amount": "$1",
+          "account_last4": "$2",
+          "type": "credit",
+          "bank": "IDFC FIRST Bank"
+        }
+      },
+      "contributed_by": "clearsms",
+      "created_at": "2026-07-27T00:00:00Z"
+    },
+    {
+      "id": "idfc-first-estatement-01",
+      "name": "IDFC FIRST Bank Credit Card Statement",
+      "priority": 310,
+      "match": {
+        "sender_pattern": "(?i)(?:IDFCFB|IDFCBK|IDFC)",
+        "body_pattern": "(?i)Credit\\s+Card\\s+[Xx*]*(\\d{2,4})\\s*(?:bill\\s+due\\s+by|is\\s+here\\.?\\s*Due\\s+by)\\s+([0-9A-Za-z, -]{6,20}?)\\s*Total\\s+Due:\\s*(?:INR|Rs\\.?|\\u20b9)\\s*([\\d,]+(?:\\.\\d{1,2})?)\\s+Min\\s+Due:\\s*(?:INR|Rs\\.?|\\u20b9)\\s*([\\d,]+(?:\\.\\d{1,2})?)"
+      },
+      "action": {
+        "category": "important",
+        "sub_category": "bill",
+        "extract": {
+          "account_last4": "$1",
+          "due_date": "$2",
+          "total_due": "$3",
+          "min_due": "$4",
+          "bank": "IDFC FIRST Bank"
+        }
+      },
+      "contributed_by": "clearsms",
+      "created_at": "2026-07-27T00:00:00Z"
+    },
+    {
+      "id": "idfc-first-estatement-02",
+      "name": "IDFC FIRST Card eStatement (dues inline)",
+      "priority": 309,
+      "match": {
+        "sender_pattern": "(?i)(?:IDFCFB|IDFCBK|IDFC)",
+        "body_pattern": "(?i)eStatement\\s+for\\s+your\\s+FIRST\\b[^\\n]{0,40}?\\bCredit\\s+Card\\s+is\\s+here[^\\n]{0,20}?Total\\s+Amt\\s+Due:?\\s*(?:INR|Rs\\.?|\\u20b9)\\s*([\\d,]+(?:\\.\\d{1,2})?)[^\\n]{0,20}?Min\\s+Amt\\s+Due:?\\s*(?:INR|Rs\\.?|\\u20b9)\\s*([\\d,]+(?:\\.\\d{1,2})?)"
+      },
+      "action": {
+        "category": "important",
+        "sub_category": "bill",
+        "extract": {
+          "total_due": "$1",
+          "min_due": "$2",
+          "bank": "IDFC FIRST Bank"
+        }
+      },
+      "contributed_by": "clearsms",
+      "created_at": "2026-08-12T00:00:00Z"
+    },
+    {
+      "id": "idfc-rewards-redeemed-01",
+      "name": "IDFC FIRST Rewards Redemption Confirmed",
+      "priority": 305,
+      "match": {
+        "sender_pattern": "(?i)IDFC",
+        "body_pattern": "(?i)successfully\\s+redeemed\\s+Gift\\s+Cards?\\b[^\\n]{0,60}?\\bIDFC\\s+First\\s+Bank\\s+Rewards"
+      },
+      "action": {
+        "category": "important",
+        "sub_category": "general"
+      },
+      "contributed_by": "clearsms",
+      "created_at": "2026-08-12T00:00:00Z"
+    },
+    {
+      "id": "idfc-welcome-voucher-01",
+      "name": "IDFC FIRST Welcome Voucher Offer",
+      "priority": 304,
+      "match": {
+        "sender_pattern": "(?i)IDFC",
+        "body_pattern": "(?i)Welcome\\s+Voucher\\b[^\\n]{0,60}?\\bavailable\\s+for\\s+redemption"
+      },
+      "action": {
+        "category": "promotional",
+        "sub_category": "offer"
+      },
+      "contributed_by": "clearsms",
+      "created_at": "2026-08-12T00:00:00Z"
+    }
+  ]
+}

@@ -1,0 +1,996 @@
+package app.clearsms.data.db
+
+import androidx.paging.PagingSource
+import androidx.room.Dao
+import androidx.room.Insert
+import androidx.room.OnConflictStrategy
+import androidx.room.Query
+import androidx.room.Transaction
+import androidx.room.Update
+import app.clearsms.domain.model.Category
+import kotlinx.coroutines.flow.Flow
+
+/**
+ * Count of unread CONVERSATIONS for one category (badge counter). A
+ * conversation counts as unread when its representative (latest) message is
+ * unread - the same basis the inbox unread filter uses - so the badge always
+ * equals the number of rows shown when that filter is applied.
+ */
+data class CategoryUnreadCount(
+    val category: Category,
+    val count: Int,
+)
+
+@Dao
+interface MessageDao {
+    /**
+     * Latest message per thread for the inbox list, newest first.
+     * Optional [category] filter and [unreadOnly] flag; archived threads are excluded.
+     * "Latest" is [LatestPerThreadSql]'s newest-message row - the same row
+     * the conversation shows at the bottom - never the newest row id.
+     */
+    @Query(
+        """
+        SELECT m.* FROM messages m
+        ${LatestPerThreadSql.JOIN_BY_RECEIVED}
+        WHERE m.isArchived = 0
+          AND (:category IS NULL OR m.category = :category)
+          AND (:unreadOnly = 0 OR m.isRead = 0)
+        ORDER BY m.timestamp DESC
+        """,
+    )
+    fun observeInbox(
+        category: Category?,
+        unreadOnly: Boolean,
+    ): Flow<List<MessageEntity>>
+
+    @Query("SELECT * FROM messages WHERE threadId = :threadId AND deletedAt IS NULL ORDER BY timestamp ASC")
+    fun observeThread(threadId: Long): Flow<List<MessageEntity>>
+
+    /**
+     * Paged variant of [observeInbox]: same latest-per-thread rows, loaded
+     * incrementally, each joined with its thread's draft and pin. Every
+     * pill, Spam included, is a plain [category] filter. Draft
+     * presence never changes the ordering or the unread state - it only
+     * decorates the preview. Pinned threads sort ABOVE everything else
+     * (normal recency order within each group), and the category / unread
+     * filters still apply to them - a pinned promotional thread only shows
+     * under pills that would show it anyway. Search deliberately ignores
+     * pins (see [pagingSearch]).
+     */
+    @Query(
+        """
+        SELECT m.*, d.text AS draftText, p.pinnedAt AS pinnedAt FROM messages m
+        ${LatestPerThreadSql.JOIN_BY_RECEIVED}
+        LEFT JOIN drafts d ON d.threadId = m.threadId
+        LEFT JOIN thread_pins p ON p.normalizedSender = m.normalizedSender
+        WHERE m.isArchived = 0
+          AND (:category IS NULL OR m.category = :category)
+          AND (:unreadOnly = 0 OR m.isRead = 0)
+        ORDER BY (p.pinnedAt IS NOT NULL) DESC, m.timestamp DESC
+        """,
+    )
+    fun pagingInbox(
+        category: Category?,
+        unreadOnly: Boolean,
+    ): PagingSource<Int, InboxThreadRow>
+
+    /**
+     * [pagingInbox] under the SENT-time ordering: each thread is represented
+     * by the message [pagingThreadBySent] shows at the bottom - its newest
+     * by `COALESCE(dateSent, timestamp)`, `id` as tie-break
+     * ([LatestPerThreadSql.JOIN_BY_SENT]) - and threads are ranked by that
+     * message's sent time, so a conversation whose newest message was sent
+     * earlier than another's sorts below it even if it arrived later. The
+     * preview follows the setting deliberately: two messages that arrived
+     * together in the wrong send order have a DIFFERENT newest message under
+     * each setting, and the preview must be the one the user sees at the
+     * bottom of the thread under the setting they chose. Same pin
+     * precedence, filters and `id` tie-break as the received variant, so
+     * paging is stable under both.
+     */
+    @Query(
+        """
+        SELECT m.*, d.text AS draftText, p.pinnedAt AS pinnedAt FROM messages m
+        ${LatestPerThreadSql.JOIN_BY_SENT}
+        LEFT JOIN drafts d ON d.threadId = m.threadId
+        LEFT JOIN thread_pins p ON p.normalizedSender = m.normalizedSender
+        WHERE m.isArchived = 0
+          AND (:category IS NULL OR m.category = :category)
+          AND (:unreadOnly = 0 OR m.isRead = 0)
+        ORDER BY (p.pinnedAt IS NOT NULL) DESC, COALESCE(m.dateSent, m.timestamp) DESC, m.id DESC
+        """,
+    )
+    fun pagingInboxBySent(
+        category: Category?,
+        unreadOnly: Boolean,
+    ): PagingSource<Int, InboxThreadRow>
+
+    /** Distinct normalized senders of the given threads (pin toggling). */
+    @Query("SELECT DISTINCT normalizedSender FROM messages WHERE threadId IN (:threadIds)")
+    suspend fun normalizedSendersForThreads(threadIds: List<Long>): List<String>
+
+    /**
+     * The launcher-shortcut candidates: the inbox's own threads (same
+     * latest-live-message representative, archived threads excluded) in the
+     * inbox's own order - pinned first, then newest received - with the
+     * SQL half of the exclusion set already applied: a thread whose newest
+     * message is Spam or carries the blocked-sender flag never comes back,
+     * and a thread with no live message (every row binned or deleted) has
+     * no representative and so simply vanishes. Muted senders and the
+     * authoritative settings blocklist are applied in Kotlin
+     * ([app.clearsms.shortcuts.ConversationShortcutSelection]); [limit] is
+     * the shortcut budget plus the size of those two sets, so the Kotlin
+     * pass can never run short. A Room flow: every insert, bin, restore,
+     * block, pin or re-categorisation invalidates it, which is what drives
+     * a republish.
+     */
+    @Query(
+        """
+        SELECT m.threadId AS threadId, m.sender AS sender, m.normalizedSender AS normalizedSender,
+               m.timestamp AS timestamp, m.category AS category, m.isBlockedSender AS isBlockedSender,
+               p.pinnedAt AS pinnedAt
+        FROM messages m
+        ${LatestPerThreadSql.JOIN_BY_RECEIVED}
+        LEFT JOIN thread_pins p ON p.normalizedSender = m.normalizedSender
+        WHERE m.isArchived = 0
+          AND m.isBlockedSender = 0
+          AND m.category != 'SPAM'
+        ORDER BY (p.pinnedAt IS NOT NULL) DESC, m.timestamp DESC, m.id DESC
+        LIMIT :limit
+        """,
+    )
+    fun shortcutCandidates(limit: Int): Flow<List<ShortcutCandidateRow>>
+
+    /**
+     * [shortcutCandidates]' view of ONE thread, for re-checking a shortcut
+     * the user pinned to the home screen (a pinned shortcut outlives the
+     * dynamic list). Null when the thread has no live message any more or
+     * is archived; the Spam / blocked columns come back for the caller to
+     * judge - a pinned shortcut to a thread that became excluded is
+     * disabled, not merely dropped.
+     */
+    @Query(
+        """
+        SELECT m.threadId AS threadId, m.sender AS sender, m.normalizedSender AS normalizedSender,
+               m.timestamp AS timestamp, m.category AS category, m.isBlockedSender AS isBlockedSender,
+               p.pinnedAt AS pinnedAt
+        FROM messages m
+        ${LatestPerThreadSql.JOIN_BY_RECEIVED}
+        LEFT JOIN thread_pins p ON p.normalizedSender = m.normalizedSender
+        WHERE m.threadId = :threadId AND m.isArchived = 0
+        LIMIT 1
+        """,
+    )
+    suspend fun shortcutCandidateForThread(threadId: Long): ShortcutCandidateRow?
+
+    /**
+     * Paged conversation, NEWEST first (rendered with `reverseLayout`), so the
+     * initial page is the visible bottom of the thread and history loads on
+     * upward scroll. Backed by the (threadId, timestamp) index.
+     */
+    @Query("SELECT * FROM messages WHERE threadId = :threadId AND deletedAt IS NULL ORDER BY timestamp DESC, id DESC")
+    fun pagingThread(threadId: Long): PagingSource<Int, MessageEntity>
+
+    /**
+     * [pagingThread] under the SENT-time ordering (Settings → Messages →
+     * Sort by): the sender's network timestamp where one is known, the
+     * received time otherwise, so two messages that arrived together after
+     * a signal gap land in the order they were sent. The `id DESC`
+     * tie-break is the same as the received pager's and
+     * [newerCountInThreadBySent] mirrors this exact key, so the highlight
+     * jump stays correct under either setting.
+     */
+    @Query(
+        """
+        SELECT * FROM messages WHERE threadId = :threadId AND deletedAt IS NULL
+        ORDER BY COALESCE(dateSent, timestamp) DESC, id DESC
+        """,
+    )
+    fun pagingThreadBySent(threadId: Long): PagingSource<Int, MessageEntity>
+
+    /** Oldest message of a thread - carries the sender for the header. */
+    @Query(
+        "SELECT * FROM messages WHERE threadId = :threadId AND deletedAt IS NULL ORDER BY timestamp ASC, id ASC LIMIT 1",
+    )
+    suspend fun firstInThread(threadId: Long): MessageEntity?
+
+    /** Thread ids of the current inbox view, for select-all. */
+    @Query(
+        """
+        SELECT m.threadId FROM messages m
+        ${LatestPerThreadSql.JOIN_BY_RECEIVED}
+        WHERE m.isArchived = 0
+          AND (:category IS NULL OR m.category = :category)
+          AND (:unreadOnly = 0 OR m.isRead = 0)
+        ORDER BY m.timestamp DESC
+        """,
+    )
+    suspend fun inboxThreadIds(
+        category: Category?,
+        unreadOnly: Boolean,
+    ): List<Long>
+
+    @Query("SELECT id FROM messages WHERE threadId = :threadId AND deletedAt IS NULL")
+    suspend fun messageIdsInThread(threadId: Long): List<Long>
+
+    /**
+     * How many messages in the thread sort BEFORE [messageId] - its exact
+     * index under [pagingThread]'s `ORDER BY timestamp DESC, id DESC`. The
+     * tie-break on `id` must match the pager's: counting `timestamp >` alone
+     * misses same-timestamp rows with a higher id (bulk imports produce
+     * whole runs of tied timestamps), so the computed initial page could
+     * fall short of the target and the highlight never attached. Stays a
+     * single indexed COUNT (threadId+timestamp index), so resolving even a
+     * very old message costs one cheap query.
+     */
+    @Query(
+        """
+        SELECT COUNT(*) FROM messages m,
+            (SELECT timestamp AS ts FROM messages WHERE id = :messageId) target
+        WHERE m.threadId = :threadId
+          AND m.deletedAt IS NULL
+          AND (m.timestamp > target.ts OR (m.timestamp = target.ts AND m.id > :messageId))
+        """,
+    )
+    suspend fun newerCountInThread(
+        threadId: Long,
+        messageId: Long,
+    ): Int
+
+    /**
+     * [newerCountInThread] for [pagingThreadBySent]: the same COUNT over
+     * the sent-order key `COALESCE(dateSent, timestamp)` with the identical
+     * `id` tie-break, so the computed initial page matches the pager's
+     * index under the sent-time setting too.
+     */
+    @Query(
+        """
+        SELECT COUNT(*) FROM messages m,
+            (SELECT COALESCE(dateSent, timestamp) AS ts FROM messages WHERE id = :messageId) target
+        WHERE m.threadId = :threadId
+          AND m.deletedAt IS NULL
+          AND (COALESCE(m.dateSent, m.timestamp) > target.ts
+               OR (COALESCE(m.dateSent, m.timestamp) = target.ts AND m.id > :messageId))
+        """,
+    )
+    suspend fun newerCountInThreadBySent(
+        threadId: Long,
+        messageId: Long,
+    ): Int
+
+    /** Bodies of the given messages in chronological order (bulk copy). */
+    @Query("SELECT body FROM messages WHERE id IN (:ids) ORDER BY timestamp ASC, id ASC")
+    suspend fun bodiesFor(ids: List<Long>): List<String>
+
+    /** System-provider row ids behind the given messages (for provider deletion). */
+    @Query("SELECT systemSmsId FROM messages WHERE id IN (:ids) AND systemSmsId IS NOT NULL")
+    suspend fun systemSmsIdsFor(ids: List<Long>): List<Long>
+
+    @Query("SELECT systemSmsId FROM messages WHERE threadId IN (:threadIds) AND systemSmsId IS NOT NULL")
+    suspend fun systemSmsIdsForThreads(threadIds: List<Long>): List<Long>
+
+    @Query("SELECT COUNT(*) FROM messages WHERE threadId IN (:threadIds) AND isRead = 0 AND deletedAt IS NULL")
+    suspend fun unreadCountInThreads(threadIds: List<Long>): Int
+
+    /**
+     * Unread CONVERSATIONS per category - see [CategoryUnreadCount]. The
+     * representative is [LatestPerThreadSql]'s canonical (received-key)
+     * newest message, as for [inboxThreadIds], [observeArchived] and the
+     * other non-paged helpers: none of them renders a preview, and the
+     * received key is the indexed default. Only the two inbox PAGERS follow
+     * the sort setting, because they are what must agree with the bottom
+     * of the thread.
+     */
+    @Query(
+        """
+        SELECT m.category AS category, COUNT(*) AS count FROM messages m
+        ${LatestPerThreadSql.JOIN_BY_RECEIVED}
+        WHERE m.isRead = 0 AND m.isArchived = 0
+        GROUP BY m.category
+        """,
+    )
+    fun observeUnreadCounts(): Flow<List<CategoryUnreadCount>>
+
+    /**
+     * Paged full-text search over the [MessageFtsEntity] index, composed
+     * with the optional category and date-range filters in SQL so filtering
+     * never materializes the full match set. [match] is an FTS4 MATCH
+     * expression (see `SearchQueryFormat.toFtsMatch`), not raw user input.
+     */
+    @Query(
+        """
+        SELECT m.* FROM messages m
+        JOIN messages_fts ON m.id = messages_fts.rowid
+        WHERE messages_fts MATCH :match
+          AND m.deletedAt IS NULL
+          AND (:category IS NULL OR m.category = :category)
+          AND (:cutoffMs IS NULL OR m.timestamp >= :cutoffMs)
+        ORDER BY m.timestamp DESC
+        """,
+    )
+    fun pagingSearch(
+        match: String,
+        category: Category?,
+        cutoffMs: Long?,
+    ): PagingSource<Int, MessageEntity>
+
+    /**
+     * [pagingSearch] widened to also match messages whose sender address is
+     * in [senders] (contact / directory / raw-ID name matches, resolved
+     * BEFORE the query by `SenderQueryResolver`). A single SELECT, so a
+     * message matching both its body and its sender appears exactly once,
+     * and ordering, filters and paging are identical to the body-only path.
+     */
+    @Query(
+        """
+        SELECT m.* FROM messages m
+        WHERE (m.id IN (SELECT rowid FROM messages_fts WHERE messages_fts MATCH :match)
+               OR m.sender IN (:senders))
+          AND m.deletedAt IS NULL
+          AND (:category IS NULL OR m.category = :category)
+          AND (:cutoffMs IS NULL OR m.timestamp >= :cutoffMs)
+        ORDER BY m.timestamp DESC
+        """,
+    )
+    fun pagingSearchWithSenders(
+        match: String,
+        senders: List<String>,
+        category: Category?,
+        cutoffMs: Long?,
+    ): PagingSource<Int, MessageEntity>
+
+    /** Every distinct sender address in the live corpus (search-by-name join). */
+    @Query("SELECT DISTINCT sender FROM messages WHERE deletedAt IS NULL")
+    suspend fun distinctSenders(): List<String>
+
+    /** Non-paged FTS search (repository contract / tests); newest first. */
+    @Query(
+        """
+        SELECT m.* FROM messages m
+        JOIN messages_fts ON m.id = messages_fts.rowid
+        WHERE messages_fts MATCH :match AND m.deletedAt IS NULL
+        ORDER BY m.timestamp DESC
+        """,
+    )
+    fun search(match: String): Flow<List<MessageEntity>>
+
+    /** Latest message per archived thread, newest first. */
+    @Query(
+        """
+        SELECT m.* FROM messages m
+        ${LatestPerThreadSql.JOIN_BY_RECEIVED}
+        WHERE m.isArchived = 1
+        ORDER BY m.timestamp DESC
+        """,
+    )
+    fun observeArchived(): Flow<List<MessageEntity>>
+
+    /** Thread ids of the archived view, for select-all. */
+    @Query(
+        """
+        SELECT m.threadId FROM messages m
+        ${LatestPerThreadSql.JOIN_BY_RECEIVED}
+        WHERE m.isArchived = 1
+        ORDER BY m.timestamp DESC
+        """,
+    )
+    suspend fun archivedThreadIds(): List<Long>
+
+    @Query("SELECT * FROM messages WHERE category = :category AND timestamp < :cutoffMs AND deletedAt IS NULL")
+    suspend fun messagesOlderThan(
+        category: Category,
+        cutoffMs: Long,
+    ): List<MessageEntity>
+
+    /** Count for the confirm-before-delete step of the manual OTP cleanup. */
+    @Query("SELECT COUNT(*) FROM messages WHERE category = :category AND timestamp < :cutoffMs AND deletedAt IS NULL")
+    suspend fun countOlderThan(
+        category: Category,
+        cutoffMs: Long,
+    ): Int
+
+    /** Ids behind [countOlderThan], fed into the shared bulk-delete path. */
+    @Query("SELECT id FROM messages WHERE category = :category AND timestamp < :cutoffMs AND deletedAt IS NULL")
+    suspend fun idsOlderThan(
+        category: Category,
+        cutoffMs: Long,
+    ): List<Long>
+
+    @Query("SELECT * FROM messages WHERE id = :id")
+    suspend fun getById(id: Long): MessageEntity?
+
+    @Query("SELECT * FROM messages WHERE systemSmsId = :systemSmsId LIMIT 1")
+    suspend fun getBySystemId(systemSmsId: Long): MessageEntity?
+
+    @Query("SELECT * FROM messages ORDER BY id ASC")
+    suspend fun getAll(): List<MessageEntity>
+
+    /** Total row count (denominator for re-categorization progress). */
+    @Query("SELECT COUNT(*) FROM messages")
+    suspend fun count(): Int
+
+    /**
+     * Keyset page for full-table scans (re-categorization): rows after
+     * [afterId] in id order. Stable under in-place updates, unlike OFFSET.
+     */
+
+    @Query("SELECT * FROM messages WHERE id > :afterId ORDER BY id ASC LIMIT :limit")
+    suspend fun pageAfter(
+        afterId: Long,
+        limit: Int,
+    ): List<MessageEntity>
+
+    /**
+     * LIVE messages whose sender contains [core] - the shape a rule built from
+     * a message carries ("(?i)HDFCBK" matches "VM-HDFCBK"), so this is the set
+     * such a rule can possibly affect. Matched on the sender key AND on the
+     * raw sender: the rule engine matches the RAW sender, so a rule saved
+     * before #42 with the old ten-digit core (`8601234567` for `+48601234567`)
+     * still finds its rows after the key moved to `601234567`. Binned rows
+     * are excluded: a blocked or keyword-binned message must not gain
+     * derived finance rows from a re-sort.
+     */
+    @Query(
+        "SELECT * FROM messages WHERE (normalizedSender LIKE '%' || :core || '%' " +
+            "OR UPPER(sender) LIKE '%' || UPPER(:core) || '%') " +
+            "AND deletedAt IS NULL ORDER BY id ASC",
+    )
+    suspend fun liveMessagesBySenderCore(core: String): List<MessageEntity>
+
+    @Query("SELECT threadId FROM messages WHERE normalizedSender = :normalizedSender LIMIT 1")
+    suspend fun threadIdFor(normalizedSender: String): Long?
+
+    /**
+     * The app threads (with their sender keys) already anchored to a system
+     * provider thread - the input to
+     * [app.clearsms.data.repository.ThreadIdentity.resolve]. Several rows
+     * only when the provider thread turned out to hold more than one person.
+     */
+    @Query("SELECT DISTINCT threadId, normalizedSender FROM messages WHERE providerThreadId = :providerThreadId")
+    suspend fun threadsAnchoredTo(providerThreadId: Long): List<ThreadAnchor>
+
+    /**
+     * Records the provider thread a row belongs to once it is known - a
+     * scheduled message only gets its provider row (and thread) at dispatch.
+     */
+    @Query("UPDATE messages SET providerThreadId = :providerThreadId WHERE id = :id")
+    suspend fun setProviderThreadId(
+        id: Long,
+        providerThreadId: Long,
+    )
+
+    // region SIM subscription bookkeeping
+
+    /** Records which SIM an already-ingested (incoming) message arrived on. */
+    @Query("UPDATE messages SET subscriptionId = :subscriptionId WHERE id = :id")
+    suspend fun setSubscriptionId(
+        id: Long,
+        subscriptionId: Int,
+    )
+
+    /**
+     * Batched form of [setSubscriptionId] for the one-time SIM backfill: one
+     * statement (one transaction) per group of identity-verified rows,
+     * instead of one per row. Callers keep [ids] under SQLite's 999-variable
+     * bind limit.
+     */
+    @Query("UPDATE messages SET subscriptionId = :subscriptionId WHERE id IN (:ids)")
+    suspend fun setSubscriptionIdForIds(
+        ids: List<Long>,
+        subscriptionId: Int,
+    )
+
+    /**
+     * Rows the SIM backfill could still fill: imported from the provider
+     * (a `systemSmsId` to match on) but with no SIM recorded. Zero means a
+     * provider walk cannot fill anything and the pass can be skipped.
+     */
+    @Query("SELECT COUNT(*) FROM messages WHERE systemSmsId IS NOT NULL AND subscriptionId IS NULL")
+    suspend fun countNeedingSimBackfill(): Int
+
+    /**
+     * The SIM of the newest message in the thread that recorded one - the
+     * default sending SIM for a thread with no remembered per-recipient
+     * choice (reply on the SIM the conversation already lives on).
+     */
+    @Query(
+        """
+        SELECT subscriptionId FROM messages
+        WHERE threadId = :threadId AND subscriptionId IS NOT NULL AND deletedAt IS NULL
+        ORDER BY timestamp DESC, id DESC LIMIT 1
+        """,
+    )
+    suspend fun lastSubscriptionIdInThread(threadId: Long): Int?
+
+    /** Every distinct SIM the stored corpus spans (drives bubble SIM tags). */
+    @Query("SELECT DISTINCT subscriptionId FROM messages WHERE subscriptionId IS NOT NULL")
+    suspend fun distinctSubscriptionIds(): List<Int>
+
+    // endregion
+
+    // region sent-time (DATE_SENT) bookkeeping
+
+    /**
+     * Rows the one-time sent-time backfill could still fill: INCOMING,
+     * imported from the provider (a `systemSmsId` to match on) and with no
+     * sender timestamp recorded. Zero means a provider walk cannot fill
+     * anything and the pass can be skipped without a single provider read.
+     */
+    @Query(
+        "SELECT COUNT(*) FROM messages WHERE systemSmsId IS NOT NULL AND isOutgoing = 0 AND dateSent IS NULL",
+    )
+    suspend fun countNeedingSentTimeBackfill(): Int
+
+    /**
+     * Batched write for the sent-time backfill: every [updates] row lands
+     * in ONE transaction (Room's partial-entity update), never one
+     * transaction per row. Only [DateSentUpdate.dateSent] is written - the
+     * rest of the row is untouched.
+     */
+    @Update(entity = MessageEntity::class)
+    suspend fun setDateSentBatch(updates: List<DateSentUpdate>)
+
+    // endregion
+
+    // region outgoing message status
+
+    @Query("UPDATE messages SET deliveryStatus = :status WHERE id = :id")
+    suspend fun setDeliveryStatus(
+        id: Long,
+        status: DeliveryStatus,
+    )
+
+    @Query("UPDATE messages SET deliveryStatus = :status WHERE systemSmsId = :systemSmsId")
+    suspend fun setDeliveryStatusBySystemId(
+        systemSmsId: Long,
+        status: DeliveryStatus,
+    )
+
+    /**
+     * Compare-and-set status transition: applies [newStatus] only while the row is
+     * still at [expected]. Guards the ordering SENDING → SENT → DELIVERED so
+     * a late sent-report can never downgrade a DELIVERED message.
+     */
+    @Query(
+        """
+        UPDATE messages SET deliveryStatus = :newStatus
+        WHERE systemSmsId = :systemSmsId AND deliveryStatus = :expected
+        """,
+    )
+    suspend fun promoteDeliveryStatusBySystemId(
+        systemSmsId: Long,
+        expected: DeliveryStatus,
+        newStatus: DeliveryStatus,
+    )
+
+    /** Same compare-and-set as above, keyed by our own row id. */
+    @Query("UPDATE messages SET deliveryStatus = :newStatus WHERE id = :id AND deliveryStatus = :expected")
+    suspend fun promoteDeliveryStatus(
+        id: Long,
+        expected: DeliveryStatus,
+        newStatus: DeliveryStatus,
+    )
+
+    /** Live status of one outgoing message (drives the send-outcome snackbar). */
+    @Query("SELECT deliveryStatus FROM messages WHERE id = :id")
+    fun observeDeliveryStatus(id: Long): Flow<DeliveryStatus?>
+
+    /**
+     * Records the number of radio parts an outgoing message was divided into
+     * and resets the delivered-part tally for a fresh dispatch.
+     */
+    @Query("UPDATE messages SET partCount = :partCount, deliveredParts = 0 WHERE id = :id")
+    suspend fun setPartCount(
+        id: Long,
+        partCount: Int,
+    )
+
+    /**
+     * Worst-part failure: any part's failure report marks the whole message
+     * FAILED, overwriting SENT/DELIVERED (a message with a lost part was not
+     * delivered) and dropping any recorded acknowledgement time with it - a
+     * FAILED row must never carry a delivery instant. Returns the number of
+     * rows changed - 0 when the row was already FAILED, so callers can
+     * notify the user exactly once even when several parts of one message
+     * fail. [reason] is the persisted [app.clearsms.mms.SendFailureReason]
+     * name the platform's result code mapped to, or null when it said
+     * nothing usable.
+     */
+    @Query(
+        """
+        UPDATE messages SET deliveryStatus = :failed, deliveredAt = NULL, sendFailureReason = :reason
+        WHERE systemSmsId = :systemSmsId
+          AND (deliveryStatus IS NULL OR deliveryStatus != :failed)
+        """,
+    )
+    suspend fun markFailedBySystemId(
+        systemSmsId: Long,
+        reason: String?,
+        failed: DeliveryStatus = DeliveryStatus.FAILED,
+    ): Int
+
+    @Query("UPDATE messages SET deliveredParts = deliveredParts + 1 WHERE systemSmsId = :systemSmsId")
+    suspend fun incrementDeliveredParts(systemSmsId: Long)
+
+    /**
+     * Promotes to DELIVERED once every part has reported, stamping
+     * [acknowledgedAtMs] - when THIS device processed the completing report
+     * - as the row's [MessageEntity.deliveredAt]. Same statement as the
+     * status flip, so the time can never exist without the status or the
+     * status (from this path) without the time.
+     */
+    @Query(
+        """
+        UPDATE messages SET deliveryStatus = :delivered, deliveredAt = :acknowledgedAtMs
+        WHERE systemSmsId = :systemSmsId
+          AND deliveredParts >= partCount
+          AND deliveryStatus IN (:promotable)
+        """,
+    )
+    suspend fun promoteDeliveredIfComplete(
+        systemSmsId: Long,
+        acknowledgedAtMs: Long,
+        delivered: DeliveryStatus = DeliveryStatus.DELIVERED,
+        promotable: List<DeliveryStatus> = listOf(DeliveryStatus.SENDING, DeliveryStatus.SENT),
+    ): Int
+
+    /**
+     * Records one part's carrier delivery report and applies the worst-part
+     * rule: the message becomes DELIVERED only when EVERY part has reported
+     * delivery AND no part has failed (FAILED is never upgraded). The
+     * completing report also records [acknowledgedAtMs] - the instant this
+     * device handled it - as the delivery time (see
+     * [MessageEntity.deliveredAt]); earlier parts' reports record nothing,
+     * because a partially delivered message has no delivery time. Returns
+     * true when this report completed the delivery - the moment to mirror
+     * `STATUS_COMPLETE` to the system provider row.
+     */
+    @Transaction
+    suspend fun recordPartDelivered(
+        systemSmsId: Long,
+        acknowledgedAtMs: Long,
+    ): Boolean {
+        incrementDeliveredParts(systemSmsId)
+        return promoteDeliveredIfComplete(systemSmsId, acknowledgedAtMs) > 0
+    }
+
+    /** Records why the last send failed (a [app.clearsms.mms.SendFailureReason] name). */
+    @Query("UPDATE messages SET sendFailureReason = :reason WHERE id = :messageId")
+    suspend fun setSendFailureReason(
+        messageId: Long,
+        reason: String?,
+    )
+
+    /**
+     * Marks a send failed AND records why in ONE statement. The status flip
+     * is what [app.clearsms.ui.conversation.SentMessageWatcher] and the
+     * conversation resolve on, so writing the two columns separately let an
+     * observer read a FAILED row whose reason had not landed yet.
+     */
+    @Query("UPDATE messages SET deliveryStatus = :failed, sendFailureReason = :reason WHERE id = :messageId")
+    suspend fun markFailed(
+        messageId: Long,
+        reason: String?,
+        failed: DeliveryStatus = DeliveryStatus.FAILED,
+    )
+
+    /**
+     * Rewrites a failed row for re-dispatch: back to SENDING on a fresh
+     * provider row, with the part tally, failure reason and any stale
+     * acknowledgement time cleared - the new dispatch earns its own.
+     */
+    @Query(
+        """
+        UPDATE messages SET deliveryStatus = :status, systemSmsId = :systemSmsId, deliveredParts = 0,
+            sendFailureReason = NULL, deliveredAt = NULL
+        WHERE id = :id
+        """,
+    )
+    suspend fun resetForResend(
+        id: Long,
+        systemSmsId: Long?,
+        status: DeliveryStatus = DeliveryStatus.SENDING,
+    )
+
+    // endregion
+
+    // region scheduled messages
+
+    /** Every live scheduled message (alarm re-registration after boot / time change). */
+    @Query("SELECT * FROM messages WHERE deliveryStatus = :scheduled AND deletedAt IS NULL")
+    suspend fun scheduledMessages(scheduled: DeliveryStatus = DeliveryStatus.SCHEDULED): List<MessageEntity>
+
+    /**
+     * Moves a scheduled message's fire time. The bubble's [MessageEntity.timestamp]
+     * follows so it keeps sitting at its future position in the thread. Only
+     * a still-SCHEDULED row is touched (an edit racing the alarm loses).
+     */
+    @Query(
+        """
+        UPDATE messages SET scheduledAt = :scheduledAt, timestamp = :scheduledAt
+        WHERE id = :id AND deliveryStatus = :scheduled
+        """,
+    )
+    suspend fun updateScheduledTime(
+        id: Long,
+        scheduledAt: Long,
+        scheduled: DeliveryStatus = DeliveryStatus.SCHEDULED,
+    ): Int
+
+    /**
+     * Flips a fired schedule into the normal outgoing lifecycle: SENDING,
+     * stamped with the actual send time and the fresh provider row, schedule
+     * cleared. Compare-and-set on SCHEDULED so a cancel or a double alarm
+     * can never dispatch twice - the returned row count is the go/no-go.
+     */
+    @Query(
+        """
+        UPDATE messages SET deliveryStatus = :sending, timestamp = :timestamp,
+            systemSmsId = :systemSmsId, scheduledAt = NULL, deliveredParts = 0
+        WHERE id = :id AND deliveryStatus = :scheduled
+        """,
+    )
+    suspend fun markDispatchedFromSchedule(
+        id: Long,
+        timestamp: Long,
+        systemSmsId: Long?,
+        sending: DeliveryStatus = DeliveryStatus.SENDING,
+        scheduled: DeliveryStatus = DeliveryStatus.SCHEDULED,
+    ): Int
+
+    /**
+     * Cancels a pending schedule atomically: the row is deleted only while
+     * it is still SCHEDULED - the same single-winner contest as
+     * [markDispatchedFromSchedule], because SQLite serializes the DELETE
+     * against the fire's UPDATE. The returned row count is the "cancel won"
+     * signal; 0 means the fire (or another cancel) got there first and the
+     * message must be treated as sent.
+     */
+    @Query("DELETE FROM messages WHERE id = :id AND deliveryStatus = :scheduled")
+    suspend fun deleteIfScheduled(
+        id: Long,
+        scheduled: DeliveryStatus = DeliveryStatus.SCHEDULED,
+    ): Int
+
+    // endregion
+
+    @Query("SELECT MAX(threadId) FROM messages")
+    suspend fun maxThreadId(): Long?
+
+    /**
+     * Highest provider row id we have ever stored (satisfied by the unique
+     * `systemSmsId` index); the catch-up gap probe compares it against the
+     * provider's own max `_id`.
+     */
+    @Query("SELECT MAX(systemSmsId) FROM messages")
+    suspend fun maxSystemSmsId(): Long?
+
+    /**
+     * The same, for the MMS provider (satisfied by the unique `systemMmsId`
+     * index). Separate because the two providers number their rows
+     * independently, so one shared maximum would mask a gap in whichever
+     * provider numbers lower.
+     *
+     * Deliberately counts only IMPORTED rows: an MMS that arrived live over
+     * WAP push carries no systemMmsId (it was never written to the
+     * provider), so it cannot raise this maximum and hide un-imported
+     * history behind itself.
+     */
+    @Query("SELECT MAX(systemMmsId) FROM messages")
+    suspend fun maxSystemMmsId(): Long?
+
+    /**
+     * Every imported MMS's provider id (soft-deleted rows included - they
+     * still hold their id, and re-importing them would be a duplicate the
+     * unique index rejects anyway). Lets a widened re-walk of the provider
+     * skip the addr/part reads for rows it already has. MMS counts are
+     * small, so the whole set fits comfortably in memory.
+     */
+    @Query("SELECT systemMmsId FROM messages WHERE systemMmsId IS NOT NULL")
+    suspend fun allSystemMmsIds(): List<Long>
+
+    /**
+     * Newest message timestamp the app has ever stored - the catch-up
+     * import's notification watermark: imported rows newer than this are
+     * messages the user was never notified about. NULL on a fresh install,
+     * which makes the whole initial import "old" (silent).
+     */
+    @Query("SELECT MAX(timestamp) FROM messages")
+    suspend fun maxTimestamp(): Long?
+
+    @Query("SELECT * FROM messages WHERE systemSmsId = :systemSmsId LIMIT 1")
+    suspend fun bySystemSmsId(systemSmsId: Long): MessageEntity?
+
+    /**
+     * Distinct senders whose rows carry the legacy `isBlockedSender` flag.
+     * Blocking authority moved to the settings blocklist set; this scan only
+     * feeds [app.clearsms.data.repository.SenderBlocker]'s app-start
+     * reconcile, which folds flags written by older app versions (where the
+     * inbox block action set ONLY the row flag) into the set.
+     */
+    @Query("SELECT DISTINCT normalizedSender FROM messages WHERE isBlockedSender = 1")
+    suspend fun blockedSenderFlags(): List<String>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(message: MessageEntity): Long
+
+    /**
+     * Insert that yields `-1` instead of replacing when the unique
+     * `systemSmsId` index is violated - the live-delivery path uses this so
+     * losing the race against a concurrent catch-up import never REPLACEs
+     * (and thereby re-ids / un-reads) the row the import already committed.
+     */
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertIgnore(message: MessageEntity): Long
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAll(messages: List<MessageEntity>)
+
+    /**
+     * Batch insert that silently skips rows violating the unique
+     * `systemSmsId` index, making the history import idempotent.
+     *
+     * @return one row id per input message, `-1` for skipped duplicates.
+     */
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertAllIgnore(messages: List<MessageEntity>): List<Long>
+
+    @Update
+    suspend fun update(message: MessageEntity)
+
+    @Query("UPDATE messages SET mmsStatus = :status WHERE id = :id")
+    suspend fun setMmsStatus(
+        id: Long,
+        status: MmsStatus,
+    )
+
+    @Query("UPDATE messages SET isRead = 1 WHERE threadId = :threadId")
+    suspend fun markThreadRead(threadId: Long)
+
+    @Query("UPDATE messages SET isRead = :read WHERE id = :id")
+    suspend fun markRead(
+        id: Long,
+        read: Boolean,
+    )
+
+    @Query("UPDATE messages SET isRead = :read WHERE id IN (:ids)")
+    suspend fun setReadForIds(
+        ids: List<Long>,
+        read: Boolean,
+    )
+
+    @Query("UPDATE messages SET isRead = :read WHERE threadId IN (:threadIds)")
+    suspend fun setReadForThreads(
+        threadIds: List<Long>,
+        read: Boolean,
+    )
+
+    /** Distinct thread ids owning the given messages (notification cancellation). */
+    @Query("SELECT DISTINCT threadId FROM messages WHERE id IN (:ids)")
+    suspend fun threadIdsFor(ids: List<Long>): List<Long>
+
+    /** Of [threadIds], the threads that still contain at least one unread message. */
+    @Query(
+        "SELECT DISTINCT threadId FROM messages WHERE threadId IN (:threadIds) AND isRead = 0 AND deletedAt IS NULL",
+    )
+    suspend fun threadIdsWithUnread(threadIds: List<Long>): List<Long>
+
+    /** Unread message ids inside [threadIds] - the messages that may still own notifications. */
+    @Query("SELECT id FROM messages WHERE threadId IN (:threadIds) AND isRead = 0 AND deletedAt IS NULL")
+    suspend fun unreadMessageIdsInThreads(threadIds: List<Long>): List<Long>
+
+    @Query("UPDATE messages SET isArchived = :archived WHERE threadId IN (:threadIds)")
+    suspend fun setArchivedForThreads(
+        threadIds: List<Long>,
+        archived: Boolean,
+    )
+
+    @Query("UPDATE messages SET isArchived = :archived WHERE id = :id")
+    suspend fun setArchived(
+        id: Long,
+        archived: Boolean,
+    )
+
+    @Query("UPDATE messages SET isBlockedSender = :blocked WHERE normalizedSender = :normalizedSender")
+    suspend fun setBlockedSender(
+        normalizedSender: String,
+        blocked: Boolean,
+    )
+
+    // region soft delete / recycle bin
+
+    /** Stages live rows for deletion: hidden everywhere, provider commit deferred. */
+    @Query(
+        "UPDATE messages SET deletedAt = :deletedAt, providerDeletePending = 1 WHERE id IN (:ids) AND deletedAt IS NULL",
+    )
+    suspend fun stageDelete(
+        ids: List<Long>,
+        deletedAt: Long,
+    )
+
+    /** Of [ids], the rows that are still live (not soft-deleted). */
+    @Query("SELECT id FROM messages WHERE id IN (:ids) AND deletedAt IS NULL")
+    suspend fun liveIds(ids: List<Long>): List<Long>
+
+    /** Live message ids of the given threads (staging input for thread deletes). */
+    @Query("SELECT id FROM messages WHERE threadId IN (:threadIds) AND deletedAt IS NULL")
+    suspend fun liveIdsInThreads(threadIds: List<Long>): List<Long>
+
+    /** Reverts a staged deletion: rows become live again, nothing owed to the provider. */
+    @Query("UPDATE messages SET deletedAt = NULL, providerDeletePending = 0 WHERE id IN (:ids)")
+    suspend fun undoDelete(ids: List<Long>)
+
+    /** Provider row ids still awaiting the deferred deletion commit. */
+    @Query(
+        "SELECT systemSmsId FROM messages WHERE id IN (:ids) AND providerDeletePending = 1 AND systemSmsId IS NOT NULL",
+    )
+    suspend fun pendingSystemIdsFor(ids: List<Long>): List<Long>
+
+    /**
+     * Bin commit (marks the deferred provider deletion as committed): the provider copy is GONE, so the row's `systemSmsId` must
+     * go with it. Provider row ids are reusable (the telephony store's `_id`
+     * is a plain INTEGER PRIMARY KEY, so SQLite hands a freed id to the next
+     * insert). A row keeping a dangling id claims that id in the unique
+     * index, and the next incoming message that happens to reuse it looks
+     * like a duplicate and is silently dropped.
+     */
+    @Query("UPDATE messages SET providerDeletePending = 0, systemSmsId = NULL WHERE id IN (:ids)")
+    suspend fun clearProviderPendingAndSystemId(ids: List<Long>)
+
+    @Query("SELECT * FROM messages WHERE systemSmsId IN (:systemSmsIds)")
+    suspend fun bySystemSmsIds(systemSmsIds: List<Long>): List<MessageEntity>
+
+    /** Releases one row's claim on a reused provider id (see above). */
+    @Query("UPDATE messages SET systemSmsId = NULL WHERE id = :id")
+    suspend fun clearSystemSmsId(id: Long)
+
+    @Query("UPDATE messages SET providerDeletePending = 0 WHERE id IN (:ids)")
+    suspend fun clearProviderPending(ids: List<Long>)
+
+    /** Every row whose provider deletion never committed (startup recovery). */
+    @Query("SELECT id FROM messages WHERE providerDeletePending = 1")
+    suspend fun pendingCommitIds(): List<Long>
+
+    /** Recycle-bin contents, most recently deleted first. */
+    @Query("SELECT * FROM messages WHERE deletedAt IS NOT NULL ORDER BY deletedAt DESC, timestamp DESC")
+    fun observeBin(): Flow<List<MessageEntity>>
+
+    @Query("SELECT id FROM messages WHERE deletedAt IS NOT NULL")
+    suspend fun binIds(): List<Long>
+
+    /** Bin rows past the retention window (auto-purge input). */
+    @Query("SELECT id FROM messages WHERE deletedAt IS NOT NULL AND deletedAt < :cutoffMs")
+    suspend fun expiredBinIds(cutoffMs: Long): List<Long>
+
+    @Query("SELECT * FROM messages WHERE id IN (:ids)")
+    suspend fun getByIds(ids: List<Long>): List<MessageEntity>
+
+    /**
+     * Restores one bin row to the inbox. [systemSmsId] is the freshly
+     * re-inserted provider row id, or null when the re-insert failed or was
+     * skipped (not the default SMS app) - the stale pre-deletion id must not
+     * survive either way, because that provider row is gone.
+     */
+    @Query(
+        "UPDATE messages SET deletedAt = NULL, providerDeletePending = 0, systemSmsId = :systemSmsId WHERE id = :id",
+    )
+    suspend fun restoreRow(
+        id: Long,
+        systemSmsId: Long?,
+    )
+
+    // endregion
+
+    @Query("DELETE FROM messages WHERE id = :id")
+    suspend fun deleteById(id: Long)
+
+    @Query("DELETE FROM messages WHERE id IN (:ids)")
+    suspend fun deleteByIds(ids: List<Long>)
+
+    @Query("DELETE FROM messages WHERE threadId IN (:threadIds)")
+    suspend fun deleteByThreadIds(threadIds: List<Long>)
+
+    @Query("DELETE FROM messages")
+    suspend fun deleteAll()
+}

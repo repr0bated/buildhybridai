@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Curated fallback seed palette (teal/indigo) used when Material You
+         dynamic color is unavailable (pre-Android 12). The Compose theme reads
+         these as seed colors. -->
+    <color name="seed_primary_teal">#FF006A60</color>
+    <color name="seed_secondary_indigo">#FF3F51B5</color>
+    <color name="ic_launcher_background">#FF006A60</color>
+
+    <!-- Fixed semantic amount colors (light variant). Deliberately outside
+         the Material dynamic palette: debit must always read red, credit
+         green and balance blue regardless of wallpaper. Dark variants live
+         in values-night/colors.xml; the Compose copies are in
+         ui/theme/SemanticAmountColors.kt (kept identical by a unit test). -->
+    <color name="amount_debit">#FFB3261E</color>
+    <color name="amount_credit">#FF1B5E20</color>
+    <color name="amount_balance">#FF0D47A1</color>
+
+    <!-- Notification amount colors: a SINGLE mid-tone per kind, identical in
+         light and dark, chosen to stay legible on both the light and dark
+         notification shade (bold ~16sp clears WCAG AA large-text 3:1 on both).
+         The in-app transactions screen keeps its own theme-adaptive palette
+         (ui/theme/SemanticAmountColors.kt); these are only for the shade. -->
+    <color name="notif_amount_debit">#FFE53935</color>
+    <color name="notif_amount_credit">#FF43A047</color>
+    <color name="notif_amount_balance">#FF1E88E5</color>
+</resources>

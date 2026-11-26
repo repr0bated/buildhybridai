@@ -1,0 +1,559 @@
+{
+  "note": "Redacted fixtures from the device inbox/screening DB. Digits, names, emails, and URL paths removed. Hosts kept. No raw personal content.",
+  "counts": {
+    "fixture_count": 27,
+    "flagged_included": 15,
+    "expect_clear": 13,
+    "expect_scam": 4,
+    "before_false_positives_among_expect_clear": 4,
+    "before_contains_a_link_flag": 11,
+    "device_phishing_link_category": 8,
+    "device_link_flag_on_safe": 227,
+    "device_contains_a_link_total": 238,
+    "device_error_code_9": 478,
+    "before_fp_ids": [
+      "sms-01",
+      "sms-08",
+      "sms-10",
+      "sms-11"
+    ],
+    "expect_clear_hosts": [
+      "myborrowly.org",
+      "pftyrbf.com",
+      "py.pl",
+      "telvf.com"
+    ],
+    "real_official_brand_added": 0,
+    "real_official_brand_hosts": {}
+  },
+  "messages": [
+    {
+      "id": "sms-01",
+      "sender": "[shortcode]",
+      "is_contact": false,
+      "is_test": true,
+      "body": "PayPal: Payment to Google for $9.99 USD failed. To resolve, update payment method by following this link: https://py.pl/[path]",
+      "hosts": [
+        "py.pl"
+      ],
+      "recorded_rules_score": 45,
+      "recorded_rules_risk": "MEDIUM",
+      "recorded_rules_flags": [
+        "Contains a link",
+        "Asks to verify account or personal info",
+        "Uses the name \"PAYPAL\"",
+        "Not in your contacts"
+      ],
+      "recorded_risk": "MEDIUM",
+      "recorded_category": "PHISHING_LINK",
+      "recorded_confidence": 45,
+      "expect": "CLEAR",
+      "note": "Official PayPal shortener py.pl was a false positive"
+    },
+    {
+      "id": "sms-02",
+      "sender": "[number]",
+      "is_contact": false,
+      "is_test": true,
+      "body": "Jeremy, your Brigit Free subscription is currently deactivated due to a payment issue. Update your payment method here to restore access: https://brgt.us/[path]",
+      "hosts": [
+        "brgt.us"
+      ],
+      "recorded_rules_score": 35,
+      "recorded_rules_risk": "MEDIUM",
+      "recorded_rules_flags": [
+        "Contains a link",
+        "Asks to verify account or personal info",
+        "Not in your contacts"
+      ],
+      "recorded_risk": "MEDIUM",
+      "recorded_category": "PHISHING_LINK",
+      "recorded_confidence": 35,
+      "expect": "NOT_CLEAR"
+    },
+    {
+      "id": "sms-03",
+      "sender": "[shortcode]",
+      "is_contact": false,
+      "is_test": true,
+      "body": "\u26a0\ufe0f Connection lost: we aren\u2019t detecting any recent transactions. This means you may be missing out on savings \ud83d\udcb0. Check your bank connection. https://app.albrt.co/[path]",
+      "hosts": [
+        "app.albrt.co"
+      ],
+      "recorded_rules_score": 35,
+      "recorded_rules_risk": "MEDIUM",
+      "recorded_rules_flags": [
+        "Contains a link",
+        "Link hidden behind a URL shortener",
+        "Not in your contacts"
+      ],
+      "recorded_risk": "MEDIUM",
+      "recorded_category": "PHISHING_LINK",
+      "recorded_confidence": 35,
+      "expect": "NOT_CLEAR"
+    },
+    {
+      "id": "sms-04",
+      "sender": "[number]",
+      "is_contact": false,
+      "is_test": true,
+      "body": "BG: Up to [digits] in assistance may be available based on your eligibility. See if you qualify https://your.benefitguide.info/[path] Reply STOP to opt out",
+      "hosts": [
+        "your.benefitguide.info"
+      ],
+      "recorded_rules_score": 35,
+      "recorded_rules_risk": "MEDIUM",
+      "recorded_rules_flags": [
+        "Contains a link",
+        "Link uses a throwaway domain",
+        "Not in your contacts"
+      ],
+      "recorded_risk": "MEDIUM",
+      "recorded_category": "PHISHING_LINK",
+      "recorded_confidence": 35,
+      "expect": "NOT_CLEAR"
+    },
+    {
+      "id": "sms-05",
+      "sender": "[shortcode]",
+      "is_contact": false,
+      "is_test": true,
+      "body": "Your $1,[digits] store credit card is approved.\n\nConfirm your info here to claim: https://p.[digits]clothes.com/[path] \n\nExpires on 11/25\n\nReply STOP to optout",
+      "hosts": [
+        "p.123clothes.com"
+      ],
+      "recorded_rules_score": 35,
+      "recorded_rules_risk": "MEDIUM",
+      "recorded_rules_flags": [
+        "Contains a link",
+        "Pressure to act fast",
+        "Not in your contacts"
+      ],
+      "recorded_risk": "MEDIUM",
+      "recorded_category": "PHISHING_LINK",
+      "recorded_confidence": 35,
+      "expect": "NOT_CLEAR"
+    },
+    {
+      "id": "sms-06",
+      "sender": "[shortcode]",
+      "is_contact": false,
+      "is_test": true,
+      "body": "Borrowly confirms you opted in to SMS messages. If you no longer wish to receive texts from Borrowly, reply STOP. Freq varies. Msg & data rates may apply.",
+      "hosts": [],
+      "recorded_rules_score": 0,
+      "recorded_rules_risk": "SAFE",
+      "recorded_rules_flags": [],
+      "recorded_risk": "HIGH",
+      "recorded_category": "NONE",
+      "recorded_confidence": 0,
+      "expect": "NOT_CLEAR"
+    },
+    {
+      "id": "sms-07",
+      "sender": "[shortcode]",
+      "is_contact": false,
+      "is_test": true,
+      "body": "Check your account lots of things you can borrow https://myborrowly.org/[path] Reply Stop to opt-out. (Borrowly)",
+      "hosts": [
+        "myborrowly.org"
+      ],
+      "recorded_rules_score": 20,
+      "recorded_rules_risk": "LOW",
+      "recorded_rules_flags": [
+        "Contains a link",
+        "Not in your contacts"
+      ],
+      "recorded_risk": "HIGH",
+      "recorded_category": "NONE",
+      "recorded_confidence": 0,
+      "expect": "NOT_CLEAR"
+    },
+    {
+      "id": "sms-08",
+      "sender": "[shortcode]",
+      "is_contact": false,
+      "is_test": false,
+      "body": "VerifyTel: Did you get what you were looking for, Jeremy? Check for other options here: https://telvf.com/[path]\n \nreply STOP to end texts",
+      "hosts": [
+        "telvf.com"
+      ],
+      "recorded_rules_score": 20,
+      "recorded_rules_risk": "LOW",
+      "recorded_rules_flags": [
+        "Contains a link",
+        "Not in your contacts"
+      ],
+      "recorded_risk": "LOW",
+      "recorded_category": "PHISHING_LINK",
+      "recorded_confidence": 20,
+      "expect": "CLEAR",
+      "note": "Link alone, no urgency/payment/credentials"
+    },
+    {
+      "id": "sms-09",
+      "sender": "[shortcode]",
+      "is_contact": false,
+      "is_test": true,
+      "body": "Cash App: This code is for you and only you. Code: [digits]. To prevent fraud, never share it anywhere or with anyone, including people posing as Cash App.",
+      "hosts": [],
+      "recorded_rules_score": 50,
+      "recorded_rules_risk": "MEDIUM",
+      "recorded_rules_flags": [
+        "Asks you to share a code or password",
+        "Asks for gift cards, wire or crypto",
+        "Not in your contacts"
+      ],
+      "recorded_risk": "MEDIUM",
+      "recorded_category": "OTP_THEFT",
+      "recorded_confidence": 50,
+      "expect": "NOT_CLEAR_CODE"
+    },
+    {
+      "id": "sms-10",
+      "sender": "[number]",
+      "is_contact": false,
+      "is_test": true,
+      "body": "Your advancement amount is now calculated. Funds can be claimed here https://pftyrbf.com/[path]",
+      "hosts": [
+        "pftyrbf.com"
+      ],
+      "recorded_rules_score": 20,
+      "recorded_rules_risk": "LOW",
+      "recorded_rules_flags": [
+        "Contains a link",
+        "Not in your contacts"
+      ],
+      "recorded_risk": "LOW",
+      "recorded_category": "PHISHING_LINK",
+      "recorded_confidence": 20,
+      "expect": "CLEAR",
+      "note": "Link alone, no urgency/payment/credentials"
+    },
+    {
+      "id": "sms-11",
+      "sender": "[shortcode]",
+      "is_contact": false,
+      "is_test": true,
+      "body": "Check your account lots of things you can borrow https://myborrowly.org/[path] Reply Stop to opt-out. (Borrowly)",
+      "hosts": [
+        "myborrowly.org"
+      ],
+      "recorded_rules_score": 20,
+      "recorded_rules_risk": "LOW",
+      "recorded_rules_flags": [
+        "Contains a link",
+        "Not in your contacts"
+      ],
+      "recorded_risk": "LOW",
+      "recorded_category": "PHISHING_LINK",
+      "recorded_confidence": 20,
+      "expect": "CLEAR",
+      "note": "Link alone, no urgency/payment/credentials"
+    },
+    {
+      "id": "sms-12",
+      "sender": "[shortcode]",
+      "is_contact": false,
+      "is_test": true,
+      "body": "Cash App: This code is for you and only you. Code: [digits]. To prevent fraud, never share it anywhere or with anyone, including people posing as Cash App.",
+      "hosts": [],
+      "recorded_rules_score": 50,
+      "recorded_rules_risk": "MEDIUM",
+      "recorded_rules_flags": [
+        "Asks you to share a code or password",
+        "Asks for gift cards, wire or crypto",
+        "Not in your contacts"
+      ],
+      "recorded_risk": "MEDIUM",
+      "recorded_category": "OTP_THEFT",
+      "recorded_confidence": 50,
+      "expect": "NOT_CLEAR_CODE"
+    },
+    {
+      "id": "sms-13",
+      "sender": "[shortcode]",
+      "is_contact": false,
+      "is_test": true,
+      "body": "Cash App: This code is for you and only you. Code: [digits]. To prevent fraud, never share it anywhere or with anyone, including people posing as Cash App.",
+      "hosts": [],
+      "recorded_rules_score": 50,
+      "recorded_rules_risk": "MEDIUM",
+      "recorded_rules_flags": [
+        "Asks you to share a code or password",
+        "Asks for gift cards, wire or crypto",
+        "Not in your contacts"
+      ],
+      "recorded_risk": "MEDIUM",
+      "recorded_category": "OTP_THEFT",
+      "recorded_confidence": 50,
+      "expect": "NOT_CLEAR_CODE"
+    },
+    {
+      "id": "sms-14",
+      "sender": "[number]",
+      "is_contact": false,
+      "is_test": true,
+      "body": "E-ZPass FINAL NOTICE: You have an unpaid toll of $4.15. Pay today to avoid a $50 late fee: https://ezpass-pay.info/[path]",
+      "hosts": [
+        "ezpass-pay.info"
+      ],
+      "recorded_rules_score": 100,
+      "recorded_rules_risk": "CRITICAL",
+      "recorded_rules_flags": [
+        "Look-alike brand domain (ezpass-pay.info)",
+        "Unpaid toll or fine",
+        "Contains a link",
+        "Link uses a throwaway domain",
+        "Pressure to act fast",
+        "Uses the name \"E-ZPASS\"",
+        "Not in your contacts"
+      ],
+      "recorded_risk": "CRITICAL",
+      "recorded_category": "IMPERSONATION",
+      "recorded_confidence": 100,
+      "expect": "SCAM"
+    },
+    {
+      "id": "sms-15",
+      "sender": "[number]",
+      "is_contact": false,
+      "is_test": true,
+      "body": "USPS: Your package is on hold due to an incomplete address. Update within 12 hours or it will be returned: https://usps-redelivery-help.top/[path]",
+      "hosts": [
+        "usps-redelivery-help.top"
+      ],
+      "recorded_rules_score": 85,
+      "recorded_rules_risk": "CRITICAL",
+      "recorded_rules_flags": [
+        "Look-alike brand domain (usps-redelivery-help.top)",
+        "Contains a link",
+        "Link uses a throwaway domain",
+        "Fake delivery / redelivery story",
+        "Uses the name \"USPS\"",
+        "Not in your contacts"
+      ],
+      "recorded_risk": "CRITICAL",
+      "recorded_category": "IMPERSONATION",
+      "recorded_confidence": 85,
+      "expect": "SCAM"
+    },
+    {
+      "id": "sms-16",
+      "sender": "[shortcode]",
+      "is_contact": false,
+      "is_test": true,
+      "body": "Cash App: Your payment of $[digits] was sent. Details: https://cash.app/[path]",
+      "hosts": [
+        "cash.app"
+      ],
+      "recorded_rules_score": null,
+      "recorded_rules_risk": null,
+      "recorded_rules_flags": [],
+      "recorded_risk": null,
+      "recorded_category": null,
+      "recorded_confidence": null,
+      "expect": "CLEAR",
+      "note": "Synthetic official Cash App link"
+    },
+    {
+      "id": "sms-17",
+      "sender": "[shortcode]",
+      "is_contact": false,
+      "is_test": true,
+      "body": "Square: Receipt for $[digits]. View at https://squareup.com/[path]",
+      "hosts": [
+        "squareup.com"
+      ],
+      "recorded_rules_score": null,
+      "recorded_rules_risk": null,
+      "recorded_rules_flags": [],
+      "recorded_risk": null,
+      "recorded_category": null,
+      "recorded_confidence": null,
+      "expect": "CLEAR",
+      "note": "Synthetic official Square link"
+    },
+    {
+      "id": "sms-18",
+      "sender": "[shortcode]",
+      "is_contact": false,
+      "is_test": true,
+      "body": "Amazon: Your package shipped. Track: https://a.co/[path]",
+      "hosts": [
+        "a.co"
+      ],
+      "recorded_rules_score": null,
+      "recorded_rules_risk": null,
+      "recorded_rules_flags": [],
+      "recorded_risk": null,
+      "recorded_category": null,
+      "recorded_confidence": null,
+      "expect": "CLEAR",
+      "note": "Synthetic official Amazon shortener"
+    },
+    {
+      "id": "sms-19",
+      "sender": "[shortcode]",
+      "is_contact": false,
+      "is_test": true,
+      "body": "Chase: See your recent account activity https://www.chase.com/[path]",
+      "hosts": [
+        "chase.com"
+      ],
+      "recorded_rules_score": null,
+      "recorded_rules_risk": null,
+      "recorded_rules_flags": [],
+      "recorded_risk": null,
+      "recorded_category": null,
+      "recorded_confidence": null,
+      "expect": "CLEAR",
+      "note": "Synthetic official Chase link"
+    },
+    {
+      "id": "sms-20",
+      "sender": "[shortcode]",
+      "is_contact": false,
+      "is_test": true,
+      "body": "E-ZPass: Your statement is ready https://www.e-zpassny.com/[path]",
+      "hosts": [
+        "e-zpassny.com"
+      ],
+      "recorded_rules_score": null,
+      "recorded_rules_risk": null,
+      "recorded_rules_flags": [],
+      "recorded_risk": null,
+      "recorded_category": null,
+      "recorded_confidence": null,
+      "expect": "CLEAR",
+      "note": "Synthetic official E-ZPass link"
+    },
+    {
+      "id": "sms-21",
+      "sender": "[shortcode]",
+      "is_contact": false,
+      "is_test": true,
+      "body": "Google: Review a recent sign-in https://g.co/[path]",
+      "hosts": [
+        "g.co"
+      ],
+      "recorded_rules_score": null,
+      "recorded_rules_risk": null,
+      "recorded_rules_flags": [],
+      "recorded_risk": null,
+      "recorded_category": null,
+      "recorded_confidence": null,
+      "expect": "CLEAR",
+      "note": "Synthetic official Google shortener"
+    },
+    {
+      "id": "sms-22",
+      "sender": "[shortcode]",
+      "is_contact": false,
+      "is_test": true,
+      "body": "Apple ID: Your receipt is ready https://apple.com/[path]",
+      "hosts": [
+        "apple.com"
+      ],
+      "recorded_rules_score": null,
+      "recorded_rules_risk": null,
+      "recorded_flags": [],
+      "recorded_rules_flags": [],
+      "recorded_risk": null,
+      "recorded_category": null,
+      "recorded_confidence": null,
+      "expect": "CLEAR",
+      "note": "Synthetic official Apple link"
+    },
+    {
+      "id": "sms-23",
+      "sender": "[number]",
+      "is_contact": false,
+      "is_test": true,
+      "body": "PayPal: verify your account now https://paypal-secure.top/[path]",
+      "hosts": [
+        "paypal-secure.top"
+      ],
+      "recorded_rules_score": null,
+      "recorded_rules_risk": null,
+      "recorded_rules_flags": [],
+      "recorded_risk": null,
+      "recorded_category": null,
+      "recorded_confidence": null,
+      "expect": "SCAM",
+      "note": "Synthetic lookalike + verify"
+    },
+    {
+      "id": "sms-24",
+      "sender": "[number]",
+      "is_contact": false,
+      "is_test": true,
+      "body": "PayPal: verify your account https://login.paypal.com.secure-alerts.tk/[path]",
+      "hosts": [
+        "login.paypal.com.secure-alerts.tk"
+      ],
+      "recorded_rules_score": null,
+      "recorded_rules_risk": null,
+      "recorded_rules_flags": [],
+      "recorded_risk": null,
+      "recorded_category": null,
+      "recorded_confidence": null,
+      "expect": "SCAM",
+      "note": "Brand in subdomain of a foreign domain"
+    },
+    {
+      "id": "sms-25",
+      "sender": "[number]",
+      "is_contact": false,
+      "is_test": true,
+      "body": "Urgent: pay now http://bit.ly/[path]",
+      "hosts": [
+        "bit.ly"
+      ],
+      "recorded_rules_score": null,
+      "recorded_rules_risk": null,
+      "recorded_rules_flags": [],
+      "recorded_risk": null,
+      "recorded_category": null,
+      "recorded_confidence": null,
+      "expect": "NOT_CLEAR",
+      "note": "Public shortener plus urgency"
+    },
+    {
+      "id": "sms-26",
+      "sender": "[number]",
+      "is_contact": false,
+      "is_test": true,
+      "body": "Here's the menu https://bit.ly/[path]",
+      "hosts": [
+        "bit.ly"
+      ],
+      "recorded_rules_score": null,
+      "recorded_rules_risk": null,
+      "recorded_rules_flags": [],
+      "recorded_risk": null,
+      "recorded_category": null,
+      "recorded_confidence": null,
+      "expect": "CLEAR",
+      "note": "Public shortener alone is not phishing"
+    },
+    {
+      "id": "sms-27",
+      "sender": "[number]",
+      "is_contact": false,
+      "is_test": true,
+      "body": "Visit pineapple.com for recipes https://pineapple.com/[path]",
+      "hosts": [
+        "pineapple.com"
+      ],
+      "recorded_rules_score": null,
+      "recorded_rules_risk": null,
+      "recorded_rules_flags": [],
+      "recorded_risk": null,
+      "recorded_category": null,
+      "recorded_confidence": null,
+      "expect": "CLEAR",
+      "note": "Must not treat pineapple.com as an Apple lookalike"
+    }
+  ]
+}

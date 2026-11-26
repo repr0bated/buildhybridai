@@ -1,0 +1,300 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- SMS functionality requires telephony hardware. -->
+    <uses-feature
+        android:name="android.hardware.telephony"
+        android:required="true" />
+
+    <!-- Permissions required by a default SMS app (REQUIREMENTS §1.2) -->
+    <uses-permission android:name="android.permission.READ_SMS" />
+    <uses-permission android:name="android.permission.WRITE_SMS" />
+    <uses-permission android:name="android.permission.RECEIVE_SMS" />
+    <uses-permission android:name="android.permission.RECEIVE_MMS" />
+    <uses-permission android:name="android.permission.SEND_SMS" />
+    <uses-permission android:name="android.permission.READ_CONTACTS" />
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- Required by WorkManager: the expedited InitialSyncWorker runs as a
+         foreground service on API < 31 (see getForegroundInfo). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <!-- Optional: exact alarms for bill payment reminders -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <!-- Opt-in "Direct call" (Settings → Messages, default OFF): lets the
+         Call button place the call (ACTION_CALL) instead of opening the
+         dialer prefilled. A dangerous runtime permission that cannot be
+         declared conditionally, so every install lists "make and manage
+         phone calls" even though it is REQUESTED only when the user switches
+         the toggle on, and never used while the toggle is off - with it
+         off, or the grant missing or revoked, calls go through ACTION_DIAL
+         exactly as before (ui/settings/DirectCall). No privileged call
+         permission is declared. -->
+    <uses-permission android:name="android.permission.CALL_PHONE" />
+
+    <!-- Package visibility (Android 11+): lets FrameworkMmsGateway ask the
+         platform WHICH package will read a staged outgoing MMS PDU (the
+         carrier/OEM CarrierMessagingService) so the read grant lands on the
+         right component instead of a guessed package name (issue #51).
+         This queries nothing about the user; it names a system interface. -->
+    <queries>
+        <intent>
+            <action android:name="android.service.carrier.CarrierMessagingService" />
+        </intent>
+        <!-- Package visibility (Android 11+): lets the compose bar's Camera
+             option FIND a camera the user installed (ui/components/
+             CameraCapture, issue #140). The platform answers an implicit
+             IMAGE_CAPTURE with pre-installed system cameras only, so on a
+             de-Googled Pixel or a ROM without a stock camera the capture
+             must be addressed to the installed camera app explicitly - and
+             querying which packages are camera apps (APP_CAMERA) and whether
+             each handles IMAGE_CAPTURE is exactly what visibility gates.
+             Neither entry is needed to merely START a camera; nothing is
+             queried beyond "which camera apps exist". -->
+        <intent>
+            <action android:name="android.media.action.IMAGE_CAPTURE" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.APP_CAMERA" />
+        </intent>
+    </queries>
+
+    <!-- allowBackup is deliberately FALSE: the database holds the user's
+         entire SMS history, so Android auto-backup / device-to-device
+         transfer would be an exfiltration path. Backups are explicit,
+         user-initiated exports only. With backup disabled no
+         dataExtractionRules / fullBackupContent config is needed. -->
+    <application
+        android:name=".ClearSmsApplication"
+        android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.ClearSms">
+
+        <!-- Default SMS app requirement #1: an activity handling SEND/SENDTO
+             for sms/smsto/mms/mmsto schemes. -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <action android:name="android.intent.action.SENDTO" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="sms" />
+                <data android:scheme="smsto" />
+                <data android:scheme="mms" />
+                <data android:scheme="mmsto" />
+            </intent-filter>
+            <!-- Standard sms-link handoff (issue #32). Browsers and many
+                 apps fire ACTION_VIEW - not SENDTO - for a tapped
+                 sms:/smsto:/mms:/mmsto: hyperlink, and the role-required
+                 SEND/SENDTO filter above never matches a VIEW. This filter
+                 is deliberately SEPARATE so the default-SMS-app role check
+                 (which looks for SENDTO on these schemes) keeps its filter
+                 untouched. BROWSABLE lets web content reach it. The intent
+                 lands in the same IntentTriage as SENDTO: composer opens
+                 prefilled, nothing is ever auto-sent. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="sms" />
+                <data android:scheme="smsto" />
+                <data android:scheme="mms" />
+                <data android:scheme="mmsto" />
+            </intent-filter>
+            <!-- Internal deep links used by notification tap actions. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="clearsms" />
+            </intent-filter>
+            <!-- Inbound share target: text OR a single image shared from
+                 ANY app lands in the new-conversation screen - text
+                 prefilled, the image staged as a removable attachment
+                 chip. NEVER auto-sent. Single image/* + text/plain is the
+                 honest v1: SEND_MULTIPLE is deliberately not registered
+                 (multi-image shares need ClipData iteration and multi-
+                 grant handling for a niche flow; the same plumbing can
+                 take it later). Distinct from the sms-scheme SEND filter
+                 above, which requires a data URI and so never matches a
+                 plain share. The Direct Share <share-target> in
+                 res/xml/shortcuts.xml advertises EXACTLY these two types
+                 and launches this same activity with the share intent plus
+                 EXTRA_SHORTCUT_ID, so a share into a conversation rides
+                 this filter's path with the recipient prefilled. -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+                <data android:mimeType="image/*" />
+            </intent-filter>
+            <!-- Launcher shortcuts (issue #81) and the Direct Share target:
+                 the static "New message" entry and the <share-target> live
+                 in res/xml/shortcuts.xml; the per-conversation shortcuts are
+                 published at runtime by
+                 shortcuts/ConversationShortcutPublisher against this same
+                 activity (the launcher activity owns the shortcut budget).
+                 Ignored below API 25, where ShortcutManager does not exist. -->
+            <meta-data
+                android:name="android.app.shortcuts"
+                android:resource="@xml/shortcuts" />
+        </activity>
+
+        <!-- Default SMS app requirement #2: SMS_DELIVER receiver. -->
+        <receiver
+            android:name=".receiver.SmsReceiver"
+            android:exported="true"
+            android:permission="android.permission.BROADCAST_SMS">
+            <intent-filter>
+                <action android:name="android.provider.Telephony.SMS_DELIVER" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Default SMS app requirement #3: WAP_PUSH_DELIVER receiver for MMS. -->
+        <receiver
+            android:name=".receiver.MmsWapPushReceiver"
+            android:exported="true"
+            android:permission="android.permission.BROADCAST_WAP_PUSH">
+            <intent-filter>
+                <action android:name="android.provider.Telephony.WAP_PUSH_DELIVER" />
+                <data android:mimeType="application/vnd.wap.mms-message" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Default SMS app requirement #4: RESPOND_VIA_MESSAGE service. -->
+        <service
+            android:name=".service.HeadlessSmsSendService"
+            android:exported="true"
+            android:permission="android.permission.SEND_RESPOND_VIA_MESSAGE">
+            <intent-filter>
+                <action android:name="android.intent.action.RESPOND_VIA_MESSAGE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="sms" />
+                <data android:scheme="smsto" />
+                <data android:scheme="mms" />
+                <data android:scheme="mmsto" />
+            </intent-filter>
+        </service>
+
+        <!-- Re-schedules reminders, scheduled sends and periodic work after a
+             device reboot or wall-clock/timezone change. Exported is required
+             to receive BOOT_COMPLETED; safe because all three actions are
+             protected broadcasts only the system can send, and onReceive
+             ignores every other action. -->
+        <receiver
+            android:name=".receiver.BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.TIME_SET" />
+                <action android:name="android.intent.action.TIMEZONE_CHANGED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- AlarmManager target for scheduled message sends. NOT exported:
+             only our own PendingIntents may trigger a send. -->
+        <receiver
+            android:name=".receiver.ScheduledSendReceiver"
+            android:exported="false" />
+
+        <!-- PendingIntent target for SMS sent / delivery reports. -->
+        <receiver
+            android:name=".receiver.SmsSentReceiver"
+            android:exported="false" />
+
+        <!-- PendingIntent target for MMS download results (see
+             SystemMmsDownloader). NOT exported: only our own PendingIntents
+             may report a download outcome. -->
+        <receiver
+            android:name=".receiver.MmsDownloadReceiver"
+            android:exported="false" />
+
+        <!-- PendingIntent target for MMS send results (see MmsSender). NOT
+             exported: only our own PendingIntents may report a send outcome. -->
+        <receiver
+            android:name=".receiver.MmsSentReceiver"
+            android:exported="false" />
+
+        <!-- Serves filesDir/mms/, filesDir/diagnostics/share/ and
+             filesDir/shortcuts/icons/ only (see @xml/mms_file_paths): the
+             staging file the platform MMS service writes a downloaded PDU
+             into, stored attachments handed to viewers/share targets via
+             per-URI grants, the zipped diagnostic report the user shares,
+             and the rendered conversation-shortcut avatars the system hands
+             the launcher a per-URI read grant for. Not exported; access is
+             grant-based. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/mms_file_paths" />
+        </provider>
+
+        <!-- ================================================================
+             Platform-stage additions (not part of the default-SMS-app
+             contract): notification action handlers and reminder alarms.
+             ================================================================ -->
+
+        <!-- Copy / Share / Delete actions on OTP notifications. -->
+        <receiver
+            android:name=".notification.OtpActionReceiver"
+            android:exported="false" />
+
+        <!-- Mark read / Delete / inline Reply actions on message and
+             transaction notifications. NOT exported: a third-party app must
+             not be able to spoof a delete or mark-read broadcast. -->
+        <receiver
+            android:name=".notification.MessageActionReceiver"
+            android:exported="false" />
+
+        <!-- The Call action on message and transaction notifications: an
+             invisible activity that decides AT TAP TIME between the dialer
+             (ACTION_DIAL) and, with Direct call on and CALL_PHONE granted,
+             the call itself - then finishes. An activity (not a receiver)
+             because Android 12+ blocks notification trampolines. NOT
+             exported: only this app's own PendingIntents reach it. -->
+        <activity
+            android:name=".notification.CallActionActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
+        <!-- AlarmManager target for bill-due reminders. -->
+        <receiver
+            android:name=".receiver.ReminderAlarmReceiver"
+            android:exported="false" />
+
+        <!-- WorkManager: on-demand initialization. The default initializer is
+             removed because ClearSmsApplication implements Configuration.Provider
+             (HiltWorkerFactory). -->
+        <provider
+            android:name="androidx.startup.InitializationProvider"
+            android:authorities="${applicationId}.androidx-startup"
+            android:exported="false"
+            tools:node="merge">
+            <meta-data
+                android:name="androidx.work.WorkManagerInitializer"
+                android:value="androidx.startup"
+                tools:node="remove" />
+        </provider>
+
+    </application>
+
+</manifest>

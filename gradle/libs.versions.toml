@@ -12,6 +12,8 @@ firebase-ai-ondevice = "16.0.0-beta08"
 firebase-ai-ksp = "17.0.0"
 firebase-appcheck = "20.1.0"
 firebase-common = "23.0.0"
+firebase-config = "22.1.2"
+guava = "33.4.0-android"
 core-ktx = "1.16.0"
 lifecycle = "2.9.2"
 activity-compose = "1.10.1"
@@ -61,6 +63,8 @@ firebase-ai-ondevice = { group = "com.google.firebase", name = "firebase-ai-onde
 firebase-ai-ksp = { group = "com.google.firebase", name = "firebase-ai-ksp-processor", version.ref = "firebase-ai-ksp" }
 firebase-appcheck-playintegrity = { group = "com.google.firebase", name = "firebase-appcheck-playintegrity", version.ref = "firebase-appcheck" }
 firebase-appcheck-debug = { group = "com.google.firebase", name = "firebase-appcheck-debug", version.ref = "firebase-appcheck" }
+firebase-config = { group = "com.google.firebase", name = "firebase-config", version.ref = "firebase-config" }
+guava = { group = "com.google.guava", name = "guava", version.ref = "guava" }
 json-schema-validator = { group = "com.networknt", name = "json-schema-validator", version.ref = "json-schema-validator" }
 timber = { group = "com.jakewharton.timber", name = "timber", version.ref = "timber" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }

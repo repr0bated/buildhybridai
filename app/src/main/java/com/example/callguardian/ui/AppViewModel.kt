@@ -94,7 +94,9 @@ class AppViewModel @Inject constructor(
     private val quarantineInbox: com.example.callguardian.sms.QuarantineInbox,
     private val smsRolePrefs: com.example.callguardian.sms.SmsRolePrefs,
     private val ownedStore: OwnedStore,
+    private val subscriptionStore: com.example.callguardian.subscriptions.SubscriptionStore,
     private val jevSecrets: com.example.callguardian.jev.JevSecrets,
+    private val remoteConfig: com.example.callguardian.firebase.GuardianRemoteConfig,
 ) : AndroidViewModel(app) {
 
     val receipts: StateFlow<List<ReceiptEntity>> = receiptsDao.observeRecent(500).stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
@@ -135,6 +137,27 @@ class AppViewModel @Inject constructor(
 
     private val _processAll = MutableStateFlow(ProcessAllState())
     val processAll: StateFlow<ProcessAllState> = _processAll.asStateFlow()
+
+    private val _pendingCancelAsk = MutableStateFlow<com.example.callguardian.subscriptions.SubscriptionRecord?>(null)
+    val pendingCancelAsk: StateFlow<com.example.callguardian.subscriptions.SubscriptionRecord?> = _pendingCancelAsk.asStateFlow()
+
+    fun refreshCancelAsk() = viewModelScope.launch {
+        _pendingCancelAsk.value = subscriptionStore.pendingCancelAsks().firstOrNull()
+    }
+    fun confirmCanceled(alsoUnmarkOwned: Boolean) = viewModelScope.launch {
+        val rec = _pendingCancelAsk.value ?: return@launch
+        subscriptionStore.confirmCanceled(rec.id)
+        // Canceling a subscription does not remove the Owned account unless the user chooses to.
+        if (alsoUnmarkOwned) {
+            ownedStore.matchSender(rec.sender)?.let { ownedStore.delete(it.id) }
+        }
+        _pendingCancelAsk.value = subscriptionStore.pendingCancelAsks().firstOrNull()
+    }
+    fun dismissCancelAsk() = viewModelScope.launch {
+        val rec = _pendingCancelAsk.value ?: return@launch
+        subscriptionStore.dismissCancelAsk(rec.id)
+        _pendingCancelAsk.value = subscriptionStore.pendingCancelAsks().firstOrNull()
+    }
     private var processJob: kotlinx.coroutines.Job? = null
 
     fun cancelProcessAll() {
@@ -198,6 +221,12 @@ class AppViewModel @Inject constructor(
                     }.isSuccess
                     if (ok) done++ else failed++
                     _processAll.value = _processAll.value.copy(current = i + 1, done = done, failed = failed)
+                    // Give AICore a breath so a 500-item startup batch does not hit ErrorCode 9 (quota).
+                    kotlinx.coroutines.delay(300)
+                    if (!com.example.callguardian.screening.AppForeground.isForeground) {
+                        _processAll.value = _processAll.value.copy(running = false, cancelled = true, label = null)
+                        return@launch
+                    }
                 }
             } catch (ce: CancellationException) {
                 _processAll.value = _processAll.value.copy(running = false, cancelled = true, done = done, failed = failed, label = null)
@@ -243,9 +272,12 @@ class AppViewModel @Inject constructor(
             }
         }
         viewModelScope.launch { loadSubscriptions() }
+        viewModelScope.launch { refreshCancelAsk() }
         // Once per process: analyze unprocessed messages with rules, then Firebase AI Logic
         // (Nano, then cloud Gemini). Judge only — never sends STOP or runs a method.
         viewModelScope.launch {
+            remoteConfig.fetch()
+            if (!remoteConfig.startupAutoProcess) return@launch
             recent.drop(1).first()
             startProcessAll(includeLogs = true)
         }
@@ -259,6 +291,7 @@ class AppViewModel @Inject constructor(
     fun event(id: Long): Flow<ScreeningEventEntity?> = events.observe(id)
 
     fun refresh() {
+        refreshCancelAsk()
         val ctx = app
         fun granted(p: String) = ContextCompat.checkSelfPermission(ctx, p) == PackageManager.PERMISSION_GRANTED
         val role = ctx.getSystemService(RoleManager::class.java)?.isRoleHeld(RoleManager.ROLE_CALL_SCREENING) == true

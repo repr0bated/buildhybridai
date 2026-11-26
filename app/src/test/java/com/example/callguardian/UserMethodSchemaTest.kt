@@ -45,8 +45,8 @@ class UserMethodSchemaTest {
         assertTrue(ri.errors.toString(), ri.valid)
         val out = UserMethodInputs.jevOutput(3, mapOf(
             "asks_payment" to 0.92, "deadline_pressure" to 0.81, "claims_organization" to 0.97, "asks_open_link" to 0.99,
-            "asks_share_code" to 0.02, "asks_login_details" to 0.1, "offers_money" to 0.01, "moves_to_other_app" to 0.0, "stranger_opener" to 0.03,
-        ), false, "jev-latest", "2026.11.1", 210, 900)
+            "asks_share_code" to 0.02, "asks_login_details" to 0.1, "offers_money" to 0.01, "moves_to_other_app" to 0.0, "stranger_opener" to 0.03, "reputable_official" to 0.05,
+        ), false, "jev-latest", "2026.11.2", 210, 900)
         val ro = m(UserMethod.JEV_CHECK).outputValidator.validate(out.toString())
         assertTrue(ro.errors.toString(), ro.valid)
         assertEquals(JsonPrimitive("SCAM"), out["verdict"])

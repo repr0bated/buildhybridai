@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.shareIn
 import javax.inject.Inject
 import javax.inject.Singleton
 
+/** Held accounts persist in Room permanently. They are never auto-pruned and are only removed by an explicit unmark ([delete]). Canceling a subscription does not remove the Owned account. */
 @Singleton
 class OwnedStore @Inject constructor(private val dao: OwnedAccountDao) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)

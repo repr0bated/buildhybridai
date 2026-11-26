@@ -1,51 +1,33 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://github.com/repr0bated/callguardian-android/schemas/scam_verdict.schema.json",
+  "$id": "https://github.com/repr0bated/buildhybridai/schemas/scam_verdict.schema.json",
   "title": "ScamVerdict",
-  "description": "Typed verdict + proposed action emitted by the on-device triage model. Nothing is executed unless the raw model output validates against this schema.",
+  "description": "Triage verdict emitted by Gemini Nano (parsed and validated) or cloud Gemini (structured output). Nothing is executed unless the raw model output validates against this schema.",
   "type": "object",
   "additionalProperties": false,
   "required": [
-    "riskLevel",
-    "category",
+    "verdict",
     "confidence",
-    "reasons",
-    "method",
-    "advice"
+    "reasons"
   ],
   "properties": {
-    "riskLevel": {
+    "verdict": {
+      "type": "string",
       "enum": [
-        "SAFE",
-        "LOW",
-        "MEDIUM",
-        "HIGH",
-        "CRITICAL"
-      ]
-    },
-    "category": {
-      "enum": [
-        "NONE",
-        "PHISHING_LINK",
-        "IMPERSONATION",
-        "PACKAGE_DELIVERY",
-        "BANK_FRAUD",
-        "TOLL_OR_FINE",
-        "PRIZE_OR_LOTTERY",
-        "JOB_OFFER",
-        "ROMANCE_OR_WRONG_NUMBER",
-        "CRYPTO_INVESTMENT",
-        "TECH_SUPPORT",
-        "OTP_THEFT",
-        "ROBOCALL",
-        "SPOOFED_CALLER",
-        "OTHER"
-      ]
+        "SCAM",
+        "SUSPICIOUS",
+        "CLEAR",
+        "SUBSCRIPTION",
+        "CODE",
+        "OWNED"
+      ],
+      "description": "SCAM if fraudulent, SUSPICIOUS if unsettled, CLEAR if legitimate, SUBSCRIPTION if a list the user could opt out of, CODE if a login or verification code, OWNED if it is from an account the user owns."
     },
     "confidence": {
-      "type": "integer",
+      "type": "number",
       "minimum": 0,
-      "maximum": 100
+      "maximum": 100,
+      "description": "Confidence in this verdict from 0 to 100. Do not use 100."
     },
     "reasons": {
       "type": "array",
@@ -54,24 +36,8 @@
         "type": "string",
         "minLength": 1,
         "maxLength": 200
-      }
-    },
-    "advice": {
-      "type": "string",
-      "maxLength": 300
-    },
-    "method": {
-      "enum": [
-        "NONE",
-        "BLOCK_NUMBER",
-        "ALLOW_NUMBER",
-        "REJECT_CALL",
-        "QUARANTINE_SMS",
-        "REPORT_SCAM",
-        "SAVE_CONTACT",
-        "EXPLAIN_CLOUD"
-      ],
-      "description": "The ONE registry method the model proposes (alias, upper-case). It is validated against the registry and the method's input schema before dispatch."
+      },
+      "description": "Up to 3 short, concrete reasons taken from the content."
     }
   }
 }

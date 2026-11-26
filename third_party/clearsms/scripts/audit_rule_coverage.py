@@ -1,0 +1,446 @@
+#!/usr/bin/env python3
+"""Audit bundled rule coverage against a real SMS corpus.
+
+Replays the app's first two categorization stages over a corpus of messages
+and reports how many are confidently categorized:
+
+  1. Bundled rules (``app/src/main/assets/default_rules.json``), evaluated
+     with the exact RuleEngine semantics: rules sorted by priority descending,
+     first match wins; a rule matches when ALL present conditions hold -
+     ``sender_pattern`` found in the sender, ``body_pattern`` found in the
+     body (``Regex.find`` semantics, i.e. match anywhere), every
+     ``body_must_contain`` term present (case-insensitive), no
+     ``body_must_not_contain`` term present, and no guard named in
+     ``guards_none`` matching the body. Named guards are replayed from
+     ``rules/guards.json`` and ``rules/rule_guards.json`` exactly like the
+     app's guard library (any-pattern match; a rule referencing an unknown
+     guard id is skipped, mirroring the engine). Only the first
+     ``MAX_EVAL_BODY_LENGTH`` (1000) characters of the body are evaluated,
+     mirroring ``MessageCategorizer``.
+  2. Sender-ID directory (``app/src/main/assets/sender_ids.db``): the sender
+     is uppercased, a two-letter TRAI route prefix (``XY-``) and a
+     one-letter content-type suffix (``-S``/``-P``/``-T``/``-G``) are
+     stripped, and both the stripped and raw forms are looked up.
+
+Messages matched by neither stage are grouped by normalized sender and by
+body "shape" (digits masked, whitespace collapsed) so the highest-value
+missing rules are easy to spot.
+
+The report also breaks down every ``generic-*`` rule hit by normalized
+sender (ranked by count, with a redacted example each). Generic rules are
+meant to be a safety net, so this breakdown is the work list for authoring
+sender-specific rules that displace them. Disable it with
+``--no-generic-breakdown``; tune the number of senders shown per rule with
+``--generic-top``.
+
+Input is either a JSONL file (one ``{"sender": ..., "body": ...}`` object
+per line) or ``--from-device``, which pulls the corpus from a connected
+Android device via ``adb shell content query --uri content://sms``.
+
+PRIVACY: output is redacted by default - digits in printed examples are
+masked as ``X`` and bodies are truncated. Nothing is ever written back to
+the repository; keep raw corpora outside the repo (e.g. under /tmp).
+
+Exit status is non-zero when coverage falls below ``--min-coverage`` so the
+tool can gate CI or pre-release checks.
+
+Examples:
+    python3 scripts/audit_rule_coverage.py --from-device
+    python3 scripts/audit_rule_coverage.py corpus.jsonl --min-coverage 70
+    python3 scripts/audit_rule_coverage.py corpus.jsonl --top 40 --no-redact
+"""
+
+import argparse
+import collections
+import json
+import os
+import re
+import shutil
+import sqlite3
+import subprocess
+import sys
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
+
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DEFAULT_RULES = os.path.join(REPO, "app/src/main/assets/default_rules.json")
+DEFAULT_SENDER_DB = os.path.join(REPO, "app/src/main/assets/sender_ids.db")
+DEFAULT_GUARD_DOCS = (
+    os.path.join(REPO, "rules/guards.json"),
+    os.path.join(REPO, "rules/rule_guards.json"),
+)
+
+# Mirrors MessageCategorizer.MAX_EVAL_BODY_LENGTH.
+MAX_EVAL_BODY_LENGTH = 1000
+
+# Mirrors SenderIdStore's TRAI header normalization.
+TRAI_PREFIX = re.compile(r"^[A-Z]{2}-")
+TRAI_SUFFIX = re.compile(r"-[SPTG]$")
+
+ADB_ROW = re.compile(r"^Row: \d+ address=(.*?), body=(.*), date=(\d*)$", re.DOTALL)
+
+
+# --------------------------------------------------------------------------
+# Corpus loading
+# --------------------------------------------------------------------------
+
+
+def parse_adb_dump(text):
+    """Parse ``adb shell content query`` output tolerantly.
+
+    Rows look like ``Row: N address=..., body=..., date=...`` but bodies can
+    contain embedded newlines and commas, so records are re-assembled by
+    splitting on ``Row: N address=`` boundaries and anchoring on the trailing
+    ``, date=<millis>`` of each record.
+    """
+    messages = []
+    record = []
+    boundary = re.compile(r"^Row: \d+ address=")
+    for line in text.splitlines():
+        if boundary.match(line) and record:
+            messages.extend(_finish_record("\n".join(record)))
+            record = []
+        record.append(line)
+    if record:
+        messages.extend(_finish_record("\n".join(record)))
+    return messages
+
+
+def _finish_record(chunk):
+    m = ADB_ROW.match(chunk)
+    if not m:
+        return []
+    sender, body = m.group(1), m.group(2)
+    if sender == "NULL" or body == "NULL":
+        return []
+    return [{"sender": sender, "body": body}]
+
+
+def load_corpus_jsonl(path):
+    messages = []
+    with open(path, encoding="utf-8") as f:
+        for lineno, line in enumerate(f, 1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+                messages.append({"sender": str(obj["sender"]), "body": str(obj["body"])})
+            except (json.JSONDecodeError, KeyError) as e:
+                print(f"warning: skipping line {lineno}: {e}", file=sys.stderr)
+    return messages
+
+
+def find_adb(adb="adb"):
+    if shutil.which(adb):
+        return adb
+    candidates = []
+    for env in ("ANDROID_HOME", "ANDROID_SDK_ROOT"):
+        val = os.environ.get(env)
+        if val:
+            candidates.append(os.path.join(val, "platform-tools", "adb.exe" if sys.platform == "win32" else "adb"))
+    if sys.platform == "win32":
+        local_app = os.environ.get("LOCALAPPDATA")
+        if local_app:
+            candidates.append(os.path.join(local_app, "Android", "Sdk", "platform-tools", "adb.exe"))
+    for cand in candidates:
+        if os.path.isfile(cand):
+            return cand
+    return adb
+
+
+def load_corpus_from_device(adb="adb"):
+    adb = find_adb(adb)
+    cmd = [adb, "shell", "content", "query", "--uri", "content://sms",
+           "--projection", "address:body:date"]
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
+                             check=True, errors="replace").stdout
+    except FileNotFoundError:
+        print(f"error: adb command '{adb}' not found. Make sure adb is on PATH or pass --adb <path>",
+              file=sys.stderr)
+        sys.exit(2)
+    except subprocess.CalledProcessError as e:
+        print(f"error: adb failed (exit {e.returncode}): {e.stderr.strip()}",
+              file=sys.stderr)
+        sys.exit(2)
+    return parse_adb_dump(out)
+
+
+# --------------------------------------------------------------------------
+# Named guards (guard library + rule-guard extensions), as the app loads them
+# --------------------------------------------------------------------------
+
+
+class GuardSet:
+    """Compiled named guards; ``matches`` mirrors GuardLibrary/RuleGuards.
+
+    Java-flavoured regexes in the guard documents are compatible with
+    Python's ``re`` for the shapes the ReDoS rules allow (word boundaries,
+    bounded gaps, ``(?i)`` flags). Patterns that still fail to compile are
+    skipped, exactly like the app's load-time degradation.
+    """
+
+    def __init__(self, doc_paths=DEFAULT_GUARD_DOCS):
+        self.guards = {}
+        for path in doc_paths:
+            if not os.path.exists(path):
+                continue
+            with open(path, encoding="utf-8") as f:
+                doc = json.load(f)
+            for entry in doc.get("guards", []):
+                patterns = []
+                for pattern in entry.get("patterns", []):
+                    try:
+                        patterns.append(re.compile(pattern))
+                    except re.error:
+                        print(f"warning: guard '{entry['id']}' pattern skipped",
+                              file=sys.stderr)
+                self.guards.setdefault(entry["id"], []).extend(patterns)
+
+    def is_known(self, guard_id):
+        return guard_id in self.guards
+
+    def matches(self, guard_id, body):
+        # Same input cap as GuardLibrary.MAX_INPUT_LENGTH (== eval cap here).
+        return any(rx.search(body) for rx in self.guards.get(guard_id, []))
+
+
+# --------------------------------------------------------------------------
+# Stage 1: rule engine (exact RuleEngine semantics)
+# --------------------------------------------------------------------------
+
+
+class RuleMatcher:
+    def __init__(self, rules_path, guards=None):
+        with open(rules_path, encoding="utf-8") as f:
+            doc = json.load(f)
+        self.rules = sorted(doc["rules"], key=lambda r: -r["priority"])
+        self.guards = guards if guards is not None else GuardSet()
+        self._cache = {}
+
+    def _compiled(self, pattern):
+        rx = self._cache.get(pattern)
+        if rx is None:
+            try:
+                rx = re.compile(pattern)
+            except re.error:
+                rx = False  # invalid patterns are skipped, like the engine
+            self._cache[pattern] = rx
+        return rx or None
+
+    def match(self, sender, body):
+        """Returns the first matching rule id (priority desc), or None."""
+        body = body[:MAX_EVAL_BODY_LENGTH]
+        lower = body.lower()
+        for rule in self.rules:
+            m = rule.get("match", {})
+            sp = m.get("sender_pattern")
+            if sp is not None:
+                rx = self._compiled(sp)
+                if rx is None or not rx.search(sender):
+                    continue
+            bp = m.get("body_pattern")
+            if bp is not None:
+                rx = self._compiled(bp)
+                if rx is None or not rx.search(body):
+                    continue
+            if any(t.lower() not in lower for t in m.get("body_must_contain", [])):
+                continue
+            if any(t.lower() in lower for t in m.get("body_must_not_contain", [])):
+                continue
+            guards_none = m.get("guards_none", [])
+            # Unknown guard id: the rule is skipped, mirroring the engine.
+            if any(not self.guards.is_known(g) for g in guards_none):
+                continue
+            if any(self.guards.matches(g, body) for g in guards_none):
+                continue
+            return rule["id"]
+        return None
+
+
+# --------------------------------------------------------------------------
+# Stage 2: sender-ID directory
+# --------------------------------------------------------------------------
+
+
+class SenderDirectory:
+    def __init__(self, db_path):
+        self.conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        self._cache = {}
+
+    def lookup(self, sender):
+        raw = sender.strip().upper()
+        if raw in self._cache:
+            return self._cache[raw]
+        result = None
+        for candidate in normalize_candidates(raw):
+            row = self.conn.execute(
+                "SELECT name, category FROM sender_ids WHERE sender_id = ?",
+                (candidate,),
+            ).fetchone()
+            if row:
+                result = row
+                break
+        self._cache[raw] = result
+        return result
+
+
+def normalize_candidates(raw):
+    stripped = TRAI_SUFFIX.sub("", TRAI_PREFIX.sub("", raw))
+    if stripped != raw and stripped:
+        return [stripped, raw]
+    return [raw]
+
+
+# --------------------------------------------------------------------------
+# Grouping and redaction
+# --------------------------------------------------------------------------
+
+
+def redact(text, limit=110):
+    masked = re.sub(r"\d", "X", text)
+    masked = re.sub(r"\s+", " ", masked).strip()
+    return masked[:limit] + ("…" if len(masked) > limit else "")
+
+
+def normalized_sender(sender):
+    raw = sender.strip().upper()
+    stripped = normalize_candidates(raw)[0]
+    digits = sum(c.isdigit() for c in stripped)
+    if digits >= 7 and digits >= len(stripped) - 3:
+        return "<phone-number>"
+    return stripped
+
+
+def body_shape(body):
+    """A stable digit-masked fingerprint of the start of the body."""
+    masked = re.sub(r"\d+", "N", body[:120].lower())
+    masked = re.sub(r"[^a-z<>@./-]+|n(?=[^a-z])|n$", " ", masked)
+    return " ".join(masked.split()[:8])
+
+
+# --------------------------------------------------------------------------
+# Main
+# --------------------------------------------------------------------------
+
+
+def main():
+    ap = argparse.ArgumentParser(
+        description=__doc__.split("\n\n")[0],
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    ap.add_argument("corpus", nargs="?", help="JSONL corpus file: one "
+                    '{"sender":..., "body":...} object per line')
+    ap.add_argument("--from-device", action="store_true",
+                    help="pull the corpus from a connected device via adb")
+    ap.add_argument("--adb", default="adb", help="adb binary (default: adb on PATH)")
+    ap.add_argument("--rules", default=DEFAULT_RULES,
+                    help="path to default_rules.json")
+    ap.add_argument("--sender-db", default=DEFAULT_SENDER_DB,
+                    help="path to sender_ids.db")
+    ap.add_argument("--top", type=int, default=40,
+                    help="number of unmatched groups to print (default 40)")
+    ap.add_argument("--generic-top", type=int, default=15,
+                    help="senders to list per generic-* rule (default 15)")
+    ap.add_argument("--no-generic-breakdown", dest="generic_breakdown",
+                    action="store_false",
+                    help="skip the per-sender breakdown of generic-* rule hits")
+    ap.add_argument("--min-coverage", type=float, default=0.0,
+                    help="exit non-zero if coverage %% falls below this")
+    ap.add_argument("--no-redact", dest="redact", action="store_false",
+                    help="print examples without masking digits (NEVER use on "
+                         "output that leaves your machine)")
+    args = ap.parse_args()
+
+    if args.from_device:
+        messages = load_corpus_from_device(args.adb)
+    elif args.corpus:
+        messages = load_corpus_jsonl(args.corpus)
+    else:
+        ap.error("provide a corpus file or --from-device")
+
+    if not messages:
+        print("no messages parsed from the corpus", file=sys.stderr)
+        return 2
+
+    matcher = RuleMatcher(args.rules)
+    directory = SenderDirectory(args.sender_db)
+
+    rule_hits = collections.Counter()
+    generic_hits = collections.defaultdict(list)
+    senderid_only = 0
+    unmatched = []
+    for msg in messages:
+        rid = matcher.match(msg["sender"], msg["body"])
+        if rid:
+            rule_hits[rid] += 1
+            if rid.startswith("generic-"):
+                generic_hits[rid].append(msg)
+        elif directory.lookup(msg["sender"]):
+            senderid_only += 1
+        else:
+            unmatched.append(msg)
+
+    total = len(messages)
+    by_rule = sum(rule_hits.values())
+    covered = by_rule + senderid_only
+    coverage = 100.0 * covered / total
+
+    print(f"total messages:        {total}")
+    print(f"matched by rule:       {by_rule} ({100.0 * by_rule / total:.1f}%)")
+    print(f"matched by sender-ID:  {senderid_only} ({100.0 * senderid_only / total:.1f}%)")
+    print(f"unmatched:             {len(unmatched)} ({100.0 * len(unmatched) / total:.1f}%)")
+    print(f"coverage:              {coverage:.1f}%")
+
+    print("\nper-rule hit counts:")
+    for rid, count in rule_hits.most_common():
+        print(f"  {count:6d}  {rid}")
+
+    if args.generic_breakdown and generic_hits:
+        total_generic = sum(len(v) for v in generic_hits.values())
+        print(f"\ngeneric-* rule breakdown ({total_generic} hits - "
+              "each sender below is a candidate for a specific rule):")
+        for rid in sorted(generic_hits, key=lambda r: -len(generic_hits[r])):
+            msgs = generic_hits[rid]
+            senders = collections.defaultdict(list)
+            for msg in msgs:
+                senders[normalized_sender(msg["sender"])].append(msg)
+            print(f"\n  {rid} ({len(msgs)} hits, {len(senders)} senders):")
+            ranked = sorted(senders.items(), key=lambda kv: -len(kv[1]))
+            for sender, hits in ranked[: args.generic_top]:
+                example = hits[0]["body"]
+                if args.redact:
+                    example = redact(example)
+                print(f"    {len(hits):6d}  {sender}\n            e.g. {example}")
+            if len(ranked) > args.generic_top:
+                rest = sum(len(v) for _, v in ranked[args.generic_top:])
+                print(f"    {rest:6d}  … {len(ranked) - args.generic_top} more senders")
+
+    def show(title, key_fn):
+        groups = collections.defaultdict(list)
+        for msg in unmatched:
+            groups[key_fn(msg)].append(msg)
+        ranked = sorted(groups.items(), key=lambda kv: -len(kv[1]))
+        print(f"\n{title} (top {args.top}):")
+        for key, msgs in ranked[: args.top]:
+            example = msgs[0]["body"]
+            if args.redact:
+                example = redact(example)
+            print(f"  {len(msgs):6d}  {key!r}\n          e.g. {example}")
+
+    show("UNMATCHED by normalized sender", lambda m: normalized_sender(m["sender"]))
+    show("UNMATCHED by body shape", lambda m: body_shape(m["body"]))
+
+    if coverage < args.min_coverage:
+        print(f"\nFAIL: coverage {coverage:.1f}% < required {args.min_coverage}%",
+              file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

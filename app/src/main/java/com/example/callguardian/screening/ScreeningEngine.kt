@@ -76,6 +76,7 @@ class ScreeningEngine @Inject constructor(
     private val integrationPrefs: com.example.callguardian.integrations.IntegrationPrefs,
     private val quarantineInbox: QuarantineInbox,
     private val ownedStore: OwnedStore,
+    private val subscriptionStore: com.example.callguardian.subscriptions.SubscriptionStore,
 ) {
     private val json = Json { ignoreUnknownKeys = false }
     val verdictValidator by lazy { SchemaValidator(asset("schemas/scam_verdict.schema.json"), "scam_verdict.schema.json") }
@@ -104,7 +105,8 @@ class ScreeningEngine @Inject constructor(
         val owned = ownedStore.matchSender(number)
         val trusted = profileFor(number)?.trusted == true
         val shortHist = SenderIds.isShortCode(number) && historyCount(number) >= 1
-        return ScanInput(channel, number, body, isContact = isContact, isTrusted = trusted, shortCodeHistory = shortHist, owned = owned, allOwned = ownedStore.snapshot).extra()
+        val sub = subscriptionStore.bySender(number)
+        return ScanInput(channel, number, body, isContact = isContact, isTrusted = trusted, shortCodeHistory = shortHist, owned = owned, allOwned = ownedStore.snapshot, subscriptionStatus = sub?.status).extra()
     }
 
     private fun senderFeatureLine(input: ScanInput, number: String?): String {
@@ -174,6 +176,12 @@ class ScreeningEngine @Inject constructor(
             userAction = if (blocked) "BLOCKED_BY_LIST" else null, quarantined = blocked, smsUri = smsUri,
         ))
         if (id <= 0L) return@withContext 0L
+        if (com.example.callguardian.subscriptions.UnsubscribeConfirmation.matches(body)) {
+            val rec = subscriptionStore.bySender(number)
+            if (rec != null && rec.status != com.example.callguardian.subscriptions.SubscriptionStatus.CANCELED) {
+                subscriptionStore.markUnsubscribed(number ?: rec.sender, eventId = id, reason = "Unsubscribe confirmation text")
+            }
+        }
         if (applyActions && !blocked) decideAndDispatch(id, MethodProposal(cal.method, cal.risk, cal.confidence, cal.reasons, VerdictSource.RULES))
         val saved = events.get(id) ?: return@withContext id
         if (blocked) quarantineInbox.hide(saved)
@@ -356,20 +364,49 @@ class ScreeningEngine @Inject constructor(
             ownedList = ownedListLine(),
         )
 
-        events.update(e.copy(aiStatus = AiStatus.RUNNING, aiError = null))
-        val run = try {
-            aiMutex.withLock { withTimeout(25_000) { analyzer.triage(prompt, settings.modelChoice, settings.privateMode) } }
-        } catch (t: Throwable) {
-            val bg = fromBackground || !AppForeground.isForeground
-            val msg = when {
-                t is TimeoutCancellationException -> "On-device model timed out"
-                bg -> "Waiting for the app to be open (on-device AI runs in the foreground only)"
-                else -> t.message?.take(240) ?: t.javaClass.simpleName
-            }
-            Timber.w(t, "On-device triage failed")
-            val updated = events.get(id)!!.copy(aiStatus = if (bg) AiStatus.PENDING else AiStatus.FAILED, aiError = msg)
+        if (!AppForeground.isForeground) {
+            val updated = events.get(id)!!.copy(
+                aiStatus = AiStatus.PENDING,
+                aiError = "The on-device model only runs while Call Guardian is open. It will retry when you come back.",
+            )
             events.update(updated)
             return@withContext updated
+        }
+        events.update(e.copy(aiStatus = AiStatus.RUNNING, aiError = null))
+        val run = run {
+            var last: Throwable? = null
+            var result: com.example.callguardian.ai.ModelRun? = null
+            // Serialize (aiMutex) and back off on ErrorCode 9 (quota / background). Then cloud fallback inside triage.
+            for (attempt in 0..2) {
+                if (!AppForeground.isForeground) {
+                    val updated = events.get(id)!!.copy(
+                        aiStatus = AiStatus.PENDING,
+                        aiError = com.example.callguardian.ai.HybridScamAnalyzer.friendlyError(
+                            last ?: IllegalStateException("background"), background = true,
+                        ),
+                    )
+                    events.update(updated)
+                    return@withContext updated
+                }
+                if (attempt > 0) kotlinx.coroutines.delay(1_000L * (1 shl (attempt - 1)))
+                try {
+                    result = aiMutex.withLock { withTimeout(25_000) { analyzer.triage(prompt, settings.modelChoice, settings.privateMode) } }
+                    last = null
+                    break
+                } catch (t: Throwable) {
+                    last = t
+                    Timber.w(t, "On-device triage failed (attempt %s)", attempt + 1)
+                    if (!com.example.callguardian.ai.HybridScamAnalyzer.isError9(t) && t !is TimeoutCancellationException) break
+                }
+            }
+            if (result != null) result
+            else {
+                val bg = fromBackground || !AppForeground.isForeground
+                val msg = com.example.callguardian.ai.HybridScamAnalyzer.friendlyError(last ?: IllegalStateException("inference failed"), background = bg)
+                val updated = events.get(id)!!.copy(aiStatus = if (bg) AiStatus.PENDING else AiStatus.FAILED, aiError = msg)
+                events.update(updated)
+                return@withContext updated
+            }
         }
 
         val report = verdictValidator.validate(run.rawText)
@@ -385,11 +422,13 @@ class ScreeningEngine @Inject constructor(
             events.update(rejected)
             return@withContext rejected
         }
+        val signals = VerdictCalibrator.modelSignals(verdict)
         val cal = VerdictCalibrator.fuse(
             rules, VerdictCalibrator.features(input),
-            modelConfidence = verdict.confidence, modelRisk = verdict.riskLevel,
-            modelCategory = verdict.category, modelMethod = verdict.method,
-            modelReasons = verdict.reasons, modelAdvice = verdict.advice,
+            modelConfidence = verdict.confidenceInt, modelRisk = signals.risk,
+            modelCategory = signals.category, modelMethod = signals.method,
+            modelReasons = verdict.reasons, modelAdvice = signals.advice,
+            modelVerdict = verdict.verdict,
             channel = channel,
         )
         events.update(base.copy(

@@ -7,9 +7,9 @@ import androidx.room.RoomDatabase
     entities = [
         ScreeningEventEntity::class, PhoneProfileEntity::class, ReceiptEntity::class,
         QuarantinedSmsEntity::class, PrivacyMarkEntity::class, ScreeningEventFts::class,
-        OwnedAccountEntity::class,
+        OwnedAccountEntity::class, SubscriptionEntity::class, SubscriptionStatusHistoryEntity::class,
     ],
-    version = 6,
+    version = 7,
     exportSchema = true,
 )
 abstract class CallGuardianDatabase : RoomDatabase() {
@@ -19,6 +19,8 @@ abstract class CallGuardianDatabase : RoomDatabase() {
     abstract fun quarantined(): QuarantinedSmsDao
     abstract fun privacyMarks(): PrivacyMarkDao
     abstract fun ownedAccounts(): OwnedAccountDao
+    abstract fun subscriptions(): SubscriptionDao
+    abstract fun subscriptionHistory(): SubscriptionHistoryDao
 }
 
 /** v5: quarantine folder, optional sms_uri on events, privacy marks, and FTS4 over event bodies. */
@@ -76,5 +78,66 @@ val MIGRATION_3_4 = object : androidx.room.migration.Migration(3, 4) {
         db.execSQL("ALTER TABLE screening_events ADD COLUMN integration TEXT")
         db.execSQL("UPDATE screening_events SET source = 'call_screening' WHERE channel = 'CALL'")
         db.execSQL("UPDATE screening_events SET source = 'lab_sample' WHERE is_test = 1")
+    }
+}
+
+
+/**
+ * v7: subscription lifecycle (ACTIVE / STOP_SENT / UNSUBSCRIBED / CANCELED) with timestamps
+ * and a status history. Owned accounts are unchanged and are never auto-pruned.
+ */
+object SubscriptionSchema {
+    val CREATE_SUBSCRIPTIONS = """
+        CREATE TABLE IF NOT EXISTS subscriptions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+            sender TEXT NOT NULL,
+            service TEXT NOT NULL,
+            source TEXT NOT NULL,
+            keyword TEXT,
+            link_url TEXT,
+            link_domain TEXT,
+            link_kind TEXT,
+            status TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            stop_sent_at INTEGER,
+            unsubscribed_at INTEGER,
+            canceled_at INTEGER,
+            stop_receipt_id INTEGER,
+            unsubscribed_event_id INTEGER,
+            unsubscribed_receipt_id INTEGER,
+            canceled_receipt_id INTEGER,
+            pending_cancel_ask INTEGER NOT NULL,
+            muted INTEGER NOT NULL
+        )
+    """.trimIndent()
+    val CREATE_HISTORY = """
+        CREATE TABLE IF NOT EXISTS subscription_status_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+            subscription_id INTEGER NOT NULL,
+            from_status TEXT NOT NULL,
+            to_status TEXT NOT NULL,
+            at INTEGER NOT NULL,
+            reason TEXT NOT NULL,
+            receipt_id INTEGER,
+            event_id INTEGER
+        )
+    """.trimIndent()
+    const val INDEX_SENDER = "CREATE INDEX IF NOT EXISTS index_subscriptions_sender ON subscriptions (sender)"
+    const val INDEX_STATUS = "CREATE INDEX IF NOT EXISTS index_subscriptions_status ON subscriptions (status)"
+    const val INDEX_HISTORY = "CREATE INDEX IF NOT EXISTS index_subscription_status_history_subscription_id ON subscription_status_history (subscription_id)"
+
+    fun install(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+        db.execSQL(CREATE_SUBSCRIPTIONS)
+        db.execSQL(CREATE_HISTORY)
+        db.execSQL(INDEX_SENDER)
+        db.execSQL(INDEX_STATUS)
+        db.execSQL(INDEX_HISTORY)
+    }
+}
+
+val MIGRATION_6_7 = object : androidx.room.migration.Migration(6, 7) {
+    override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+        SubscriptionSchema.install(db)
     }
 }

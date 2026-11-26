@@ -4,6 +4,11 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.material3.LocalContentColor
+import androidx.compose.material3.Surface
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.Font
@@ -11,6 +16,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import com.example.callguardian.R
+import kotlin.math.pow
 import com.example.callguardian.model.RiskLevel
 
 /**
@@ -81,7 +87,7 @@ private val Scheme = darkColorScheme(
 )
 
 private fun TextStyle.mono(w: FontWeight, size: Int, line: Int, track: Double = 0.0) =
-    copy(fontFamily = JetBrainsMono, fontWeight = w, fontSize = size.sp, lineHeight = line.sp, letterSpacing = track.sp)
+    copy(fontFamily = JetBrainsMono, fontWeight = w, fontSize = size.sp, lineHeight = line.sp, letterSpacing = track.sp, color = Color.Unspecified)
 
 private val AppTypography = Typography().let { t ->
     Typography(
@@ -115,5 +121,25 @@ private val AppShapes = androidx.compose.material3.Shapes(
 @Suppress("UNUSED_PARAMETER")
 @Composable
 fun CallGuardianTheme(dark: Boolean = true, content: @Composable () -> Unit) {
-    MaterialTheme(colorScheme = Scheme, typography = AppTypography, shapes = AppShapes, content = content)
+    MaterialTheme(colorScheme = Scheme, typography = AppTypography, shapes = AppShapes) {
+        // MaterialTheme does not set LocalContentColor. Without this, typography with
+        // Color.Unspecified (or Text with no color) inherits Compose's default — black —
+        // and body text is unreadable on Void / Glass.
+        CompositionLocalProvider(LocalContentColor provides Scheme.onSurface) {
+            Surface(modifier = Modifier.fillMaxSize(), color = Scheme.background, contentColor = Scheme.onSurface, content = content)
+        }
+    }
 }
+
+/** Contrast ratio of [fg] on [bg]. WCAG AA for body text is 4.5:1. */
+fun contrastRatio(fg: Color, bg: Color): Double {
+    fun lin(c: Float): Double {
+        val s = c.toDouble()
+        return if (s <= 0.04045) s / 12.92 else ((s + 0.055) / 1.055).pow(2.4)
+    }
+    fun L(c: Color) = 0.2126 * lin(c.red) + 0.7152 * lin(c.green) + 0.0722 * lin(c.blue)
+    val l1 = L(fg); val l2 = L(bg)
+    val hi = maxOf(l1, l2); val lo = minOf(l1, l2)
+    return (hi + 0.05) / (lo + 0.05)
+}
+

@@ -21,6 +21,7 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.unit.dp
 import com.example.callguardian.ui.theme.Brand
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Science
@@ -35,6 +36,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -54,13 +56,16 @@ import com.example.callguardian.ui.screens.ReceiptDetailScreen
 import com.example.callguardian.ui.screens.ReceiptsScreen
 import com.example.callguardian.ui.screens.SearchScreen
 import com.example.callguardian.ui.screens.SettingsScreen
+import com.example.callguardian.ui.screens.messages.ComposeMessageRoute
+import com.example.callguardian.ui.screens.messages.MessageThreadRoute
+import com.example.callguardian.ui.screens.messages.MessagesListRoute
 
 private data class Tab(val route: String, val label: String, val icon: ImageVector)
 
 private val tabs = listOf(
     Tab("home", "Home", Icons.Default.Home),
+    Tab("messages", "Messages", Icons.Default.Email),
     Tab("activity", "Activity", Icons.Default.Shield),
-    Tab("logs", "Logs", Icons.Default.Call),
     Tab("watchlist", "Watchlist", Icons.Default.Visibility),
     Tab("settings", "Settings", Icons.Default.Settings),
 )
@@ -109,8 +114,31 @@ fun CallGuardianApp(vm: AppViewModel, actions: SetupActions, openEventId: Long?,
         com.example.callguardian.ui.components.LocalOwned provides com.example.callguardian.ui.components.OwnedLookup(owned),
     ) {
     CallGuardianNav(vm, actions, openEventId, onEventOpened, nav, route)
+    val pending by vm.pendingCancelAsk.collectAsState()
+    pending?.let { rec ->
+        val ownedMatch = com.example.callguardian.ui.components.LocalOwned.current.forSender(rec.sender) != null
+        var alsoOwned by androidx.compose.runtime.remember(rec.id) { androidx.compose.runtime.mutableStateOf(false) }
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { vm.dismissCancelAsk() },
+            title = { androidx.compose.material3.Text("Did you cancel?") },
+            text = {
+                androidx.compose.foundation.layout.Column {
+                    androidx.compose.material3.Text("Did you cancel ${rec.service.ifBlank { rec.sender }} on the website? This will mark the subscription CANCELED. It does not remove an Owned account unless you choose to.")
+                    if (ownedMatch) {
+                        androidx.compose.foundation.layout.Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                            androidx.compose.material3.Checkbox(checked = alsoOwned, onCheckedChange = { alsoOwned = it })
+                            androidx.compose.material3.Text("Also remove from Owned accounts")
+                        }
+                    }
+                }
+            },
+            confirmButton = { androidx.compose.material3.TextButton(onClick = { vm.confirmCanceled(alsoOwned) }) { androidx.compose.material3.Text("Yes, I canceled") } },
+            dismissButton = { androidx.compose.material3.TextButton(onClick = { vm.dismissCancelAsk() }) { androidx.compose.material3.Text("Not yet") } },
+        )
+    }
     }
 }
+
 
 @Composable
 private fun CallGuardianNav(vm: AppViewModel, actions: SetupActions, openEventId: Long?, onEventOpened: () -> Unit, nav: androidx.navigation.NavHostController, route: String?) {
@@ -155,6 +183,35 @@ private fun CallGuardianNav(vm: AppViewModel, actions: SetupActions, openEventId
             popExitTransition = { fadeOut(tween(140)) + slideOutVertically(tween(200)) { it / 24 } },
         ) {
             composable("home") { HomeScreen(vm, actions, onEvent = { nav.navigate("event/$it") }, onTab = { nav.navigate(it) }, onSearch = { nav.navigate("search") }) }
+            composable("messages") {
+                MessagesListRoute(vm, actions, onOpen = { nav.navigate("messages/thread/" + android.net.Uri.encode(it)) }, onCompose = { to ->
+                    val q = to?.let { "?to=" + android.net.Uri.encode(it) }.orEmpty()
+                    nav.navigate("messages/compose$q")
+                })
+            }
+            composable("messages/thread/{address}", arguments = listOf(navArgument("address") { type = NavType.StringType })) {
+                val addr = android.net.Uri.decode(it.arguments?.getString("address").orEmpty())
+                MessageThreadRoute(
+                    address = addr, vm = vm, actions = actions,
+                    onBack = { nav.popBackStack() },
+                    onForward = { body -> nav.navigate("messages/compose?body=" + android.net.Uri.encode(body)) },
+                    onSubscriptions = { nav.navigate("subscriptions") },
+                )
+            }
+            composable(
+                "messages/compose?to={to}&body={body}",
+                arguments = listOf(
+                    navArgument("to") { type = NavType.StringType; defaultValue = ""; nullable = true },
+                    navArgument("body") { type = NavType.StringType; defaultValue = ""; nullable = true },
+                ),
+                deepLinks = emptyList(),
+            ) {
+                val to = it.arguments?.getString("to")?.let(android.net.Uri::decode)?.ifBlank { null }
+                val body = it.arguments?.getString("body")?.let(android.net.Uri::decode)?.ifBlank { null }
+                ComposeMessageRoute(to, body, vm, actions, onBack = { nav.popBackStack() }, onSent = { dest ->
+                    nav.navigate("messages/thread/" + android.net.Uri.encode(dest)) { popUpTo("messages") { inclusive = false } }
+                })
+            }
             composable("activity") { ActivityScreen(vm, onEvent = { nav.navigate("event/$it") }, onReceipt = { nav.navigate("receipt/$it") }, onSearch = { nav.navigate("search") }) }
             composable("activity/{tab}", arguments = listOf(navArgument("tab") { type = NavType.StringType })) {
                 ActivityScreen(vm, onEvent = { nav.navigate("event/$it") }, onReceipt = { nav.navigate("receipt/$it") }, initialTab = it.arguments?.getString("tab"), onSearch = { nav.navigate("search") })

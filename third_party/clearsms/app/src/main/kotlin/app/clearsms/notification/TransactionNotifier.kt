@@ -1,0 +1,419 @@
+package app.clearsms.notification
+
+import android.app.Notification
+import android.app.PendingIntent
+import android.content.Context
+import android.os.Build
+import android.text.SpannableString
+import android.text.Spanned
+import android.text.style.ForegroundColorSpan
+import android.widget.RemoteViews
+import androidx.annotation.ColorRes
+import androidx.annotation.LayoutRes
+import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
+import app.clearsms.ConversationDeepLink
+import app.clearsms.R
+import app.clearsms.data.db.MessageEntity
+import app.clearsms.domain.model.CurrencyCatalog
+import app.clearsms.domain.model.MoneyFormat
+import app.clearsms.domain.model.NotificationAction
+import app.clearsms.domain.model.StartDestination
+import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.serialization.builtins.MapSerializer
+import kotlinx.serialization.builtins.serializer
+import kotlinx.serialization.json.Json
+import java.time.LocalDate
+import java.time.format.DateTimeFormatter
+import java.util.Locale
+import javax.inject.Inject
+import javax.inject.Singleton
+
+/**
+ * Notification for a parsed bank transaction: the essentials up front
+ * (signed amount, merchant, account, bank) instead of the raw SMS.
+ *
+ * Semantics mirror the Finance UI's three-way split - debit (red, "− ₹…"),
+ * credit (green, "+ ₹…") and balance-only update (blue, unsigned "₹…"),
+ * using the same fixed colors as
+ * [app.clearsms.ui.theme.SemanticAmountColors] via `R.color.amount_*`
+ * (day/night variants), deliberately independent of the Material dynamic
+ * palette.
+ *
+ * The standard notification template cannot color its title -
+ * [NotificationCompat.Builder.setColor] only tints the small icon/accent -
+ * so on API 24+ the amount is rendered through a custom content view
+ * ([NotificationCompat.Builder.setCustomContentView] +
+ * [NotificationCompat.DecoratedCustomViewStyle]) whose amount TextView gets
+ * an explicit color; the expanded custom view carries the full original SMS
+ * body. On API 23 (`minSdk`), where the decorated style does not exist, the
+ * template title is a [SpannableString] with a [ForegroundColorSpan] - the
+ * platform templates on API 21–23 preserve title spans, so the amount stays
+ * colored there too. Either way the text is never shipped uncolored.
+ *
+ * Tapping deep-links to the conversation at THAT message:
+ * `clearsms://conversation/{threadId}?messageId={messageId}` - the query
+ * parameter is named `messageId` and is also present as the "message_id"
+ * intent extra ([MessageActionReceiver.EXTRA_MESSAGE_ID]) for the UI to
+ * highlight the target message.
+ *
+ * Notifications are grouped under one shade group so a burst of bank
+ * messages collapses instead of spamming, on a dedicated DEFAULT-importance
+ * "transactions" channel (deliberately not heads-up).
+ */
+@Singleton
+class TransactionNotifier
+    @Inject
+    constructor(
+        @ApplicationContext private val context: Context,
+        private val json: Json,
+        private val senderResolver: NotificationSenderResolver,
+        private val iconFactory: SenderIconFactory,
+        private val sectionGate: NotificationSectionGate,
+        private val mutedSenderGate: MutedSenderGate,
+    ) {
+        /**
+         * Posts a parsed-transaction notification for [message].
+         *
+         * @return false when the message's extracted data does not contain
+         *   enough to render (no amount+type and no balance) - the caller
+         *   falls back to the plain message notification.
+         */
+        suspend fun notify(
+            message: MessageEntity,
+            selected: Set<NotificationAction>,
+        ): Boolean {
+            // The parsed-finance notification is the Finance section's
+            // voice. With Finance off it returns false - exactly like the
+            // transaction-notification toggle being off - so the router
+            // falls through to the plain message notification, itself gated
+            // by the Inbox flag.
+            if (!sectionGate.allows(StartDestination.FINANCE)) return false
+            // A muted sender's transaction is still extracted into Finance;
+            // only the notification is dropped. Returning TRUE (not false)
+            // is deliberate: false would let the router fall through to the
+            // plain message notification, re-notifying a muted sender.
+            if (!mutedSenderGate.allows(message.sender)) return true
+            val notification = buildNotification(message, selected) ?: return false
+            try {
+                val manager = NotificationManagerCompat.from(context)
+                manager.notify(notificationId(message.id), notification)
+                manager.notify(GROUP_SUMMARY_ID, groupSummary())
+            } catch (_: SecurityException) {
+                // POST_NOTIFICATIONS not granted; onboarding asks for it.
+            }
+            return true
+        }
+
+        /**
+         * Builds the notification, or null when there is nothing to render.
+         * Separated from [notify] so tests can inspect the result.
+         */
+        internal fun buildNotification(
+            message: MessageEntity,
+            selected: Set<NotificationAction>,
+        ): Notification? {
+            val details = decodeDetails(message.extractedDataJson) ?: return null
+            val content =
+                buildContent(
+                    details = details,
+                    balanceUpdateLabel = context.getString(R.string.transaction_balance_update),
+                    accountFormat = context.getString(R.string.transaction_account_short),
+                    dueDateFormat = context.getString(R.string.transaction_bill_due),
+                    minDueFormat = context.getString(R.string.transaction_bill_min_due),
+                    requestLabel = context.getString(R.string.transaction_payment_request),
+                ) ?: return null
+            Channels.ensureCreated(context)
+
+            val notificationId = notificationId(message.id)
+            val planned =
+                NotificationActionPlanner.forMessage(
+                    selected,
+                    repliable = NotificationActionPlanner.isRepliableAddress(message.sender),
+                    dialable = NotificationActionPlanner.dialableAddress(message.sender) != null,
+                )
+            val amountColor = ContextCompat.getColor(context, amountColorRes(content.kind))
+            // Bank identity via the shared avatar chain (logo / brand tile) -
+            // resolution never throws, so the notification always renders.
+            val largeIcon = iconFactory.largeIconFor(senderResolver.resolve(message.sender))
+            val builder =
+                NotificationCompat
+                    .Builder(context, Channels.TRANSACTIONS)
+                    .setSmallIcon(R.drawable.ic_notification)
+                    .setLargeIcon(largeIcon)
+                    // Title/text stay set for accessibility services and
+                    // surfaces that ignore custom views (e.g. wearables).
+                    .setContentTitle(content.title)
+                    .setContentText(content.text)
+                    .setColor(amountColor)
+                    .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+                    .setGroup(GROUP_KEY)
+                    .setContentIntent(contentIntent(message))
+                    .setAutoCancel(true)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                builder
+                    .setStyle(NotificationCompat.DecoratedCustomViewStyle())
+                    .setCustomContentView(contentView(content, R.layout.notification_transaction, amountColor))
+                    .setCustomBigContentView(
+                        contentView(content, R.layout.notification_transaction_big, amountColor)
+                            .apply { setTextViewText(R.id.transaction_body, message.body) },
+                    )
+            } else {
+                // API 23 fallback: color the template title via a span
+                // (preserved by the platform templates on 21–23) and keep
+                // the full SMS on expand through BigTextStyle.
+                val coloredTitle =
+                    SpannableString(content.title).apply {
+                        setSpan(ForegroundColorSpan(amountColor), 0, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    }
+                builder
+                    .setContentTitle(coloredTitle)
+                    .setStyle(NotificationCompat.BigTextStyle().bigText(message.body))
+            }
+            MessageActionFactory.build(context, message, notificationId, planned).forEach(builder::addAction)
+            return builder.build()
+        }
+
+        /** Inflates one of the custom layouts with the amount (explicitly colored) and detail line. */
+        private fun contentView(
+            content: Content,
+            @LayoutRes layout: Int,
+            amountColor: Int,
+        ): RemoteViews =
+            RemoteViews(context.packageName, layout).apply {
+                setTextViewText(R.id.transaction_amount, content.title)
+                setTextColor(R.id.transaction_amount, amountColor)
+                setTextViewText(R.id.transaction_details, content.text)
+            }
+
+        /** Deep link carrying the target message id (query param `messageId` + extra). */
+        private fun contentIntent(message: MessageEntity): PendingIntent {
+            val intent =
+                ConversationDeepLink
+                    .intent(context, message.threadId, message.id)
+                    .putExtra(MessageNotifier.EXTRA_THREAD_ID, message.threadId)
+                    .putExtra(MessageActionReceiver.EXTRA_MESSAGE_ID, message.id)
+            return PendingIntent.getActivity(
+                context,
+                notificationId(message.id),
+                intent,
+                NotificationIntents.flags(),
+            )
+        }
+
+        private fun groupSummary(): Notification =
+            NotificationCompat
+                .Builder(context, Channels.TRANSACTIONS)
+                .setSmallIcon(R.drawable.ic_notification)
+                .setContentTitle(context.getString(R.string.channel_transactions))
+                .setGroup(GROUP_KEY)
+                .setGroupSummary(true)
+                .setAutoCancel(true)
+                .build()
+
+        private fun decodeDetails(raw: String?): Map<String, String>? =
+            raw?.let {
+                try {
+                    json.decodeFromString(MapSerializer(String.serializer(), String.serializer()), it)
+                } catch (_: Exception) {
+                    null
+                }
+            }
+
+        private fun notificationId(messageId: Long) = NotificationIds.transaction(messageId)
+
+        /** What a transaction notification shows; pure and unit-testable. */
+        data class Content(
+            val kind: Kind,
+            val title: String,
+            val text: String,
+        ) {
+            enum class Kind { DEBIT, CREDIT, BALANCE }
+        }
+
+        companion object {
+            private const val GROUP_SUMMARY_ID = NotificationIds.TRANSACTION_GROUP_SUMMARY
+            private const val GROUP_KEY = NotificationIds.TRANSACTION_GROUP_KEY
+
+            /**
+             * Detail keys written only for bill/payment reminders. Their
+             * presence forces the informational blue/no-sign treatment -
+             * the notification twin of `isBillDetails` in the UI layer.
+             */
+            private val BILL_MARKER_KEYS = setOf("due_date", "total_due", "min_due")
+
+            /**
+             * Detail key written only for collect / payment requests. Its
+             * presence forces the informational blue/no-sign treatment: the
+             * amount was only ASKED for, so it must never render as a
+             * signed credit or debit.
+             */
+            internal const val REQUESTED_AMOUNT_KEY = "requested_amount"
+
+            /**
+             * Fixed day/night color resource for a transaction kind - the
+             * notification twin of [app.clearsms.ui.theme.SemanticAmountColors].
+             */
+            @ColorRes
+            fun amountColorRes(kind: Content.Kind): Int =
+                when (kind) {
+                    Content.Kind.DEBIT -> R.color.notif_amount_debit
+                    Content.Kind.CREDIT -> R.color.notif_amount_credit
+                    Content.Kind.BALANCE -> R.color.notif_amount_balance
+                }
+
+            /**
+             * Builds notification content from the message's extracted
+             * detail map (keys written by the ingestion pipeline: "amount",
+             * "type", "merchant", "account_last4", "bank", "balance",
+             * "due_date", "total_due", "min_due", "label").
+             *
+             * Bill/reminder-derived amounts win first: any of the reminder
+             * keys ("due_date", "total_due", "min_due") marks the message as
+             * a bill notice, which is informational - no money moved - so it
+             * renders in the blue balance treatment with NO sign, never as a
+             * red debit (even when a parser also stamped a debit "type" on
+             * the same message). The bill HEADLINE is the invariant-checked
+             * TOTAL due when present; a rule's generic "amount" or the
+             * minimum are only fallbacks - a card bill must lead with what
+             * is owed, not the minimum. The detail line carries the due
+             * date, the biller (merchant or reminder label), the account and
+             * the bank, plus the minimum due as a secondary figure.
+             * Otherwise kind selection mirrors the UI: an amount with type
+             * debit / credit wins; a lone balance renders as a balance-only
+             * update; with neither there is nothing to show (null).
+             */
+            fun buildContent(
+                details: Map<String, String>,
+                balanceUpdateLabel: String,
+                accountFormat: String,
+                dueDateFormat: String = "Due %s",
+                minDueFormat: String = "Min due %s",
+                requestLabel: String = "Payment request",
+            ): Content? {
+                // The details map holds the pipeline's OWN rendering of each
+                // figure (Double.toString(): "1299.0"), never the SMS text, so
+                // a plain decimal parse is exact here. The currency rides
+                // along under "currency"; absent means rupees (the encoding
+                // every pre-v23 row uses).
+                val currency = details["currency"] ?: CurrencyCatalog.INR_CODE
+                val amount = details["amount"]?.replace(",", "")?.toDoubleOrNull()
+                val type = details["type"]?.lowercase()
+                // Balances and bill figures carry the message's own currency
+                // too - they are NOT rupee-anchored. Formatting them with a
+                // fixed INR code showed the wrong symbol to every user
+                // outside India.
+                val balance = details["balance"]?.replace(",", "")?.toDoubleOrNull()
+                val minDue = details["min_due"]?.replace(",", "")?.toDoubleOrNull()
+                // Collect / payment requests: money only ASKED for. Renders
+                // in the informational blue treatment with NO sign - never a
+                // green credit - led by the request label.
+                val requested = details[REQUESTED_AMOUNT_KEY]?.replace(",", "")?.toDoubleOrNull()
+                val billAmount =
+                    if (BILL_MARKER_KEYS.any { it in details }) {
+                        details["total_due"]?.replace(",", "")?.toDoubleOrNull()
+                            ?: amount
+                            ?: minDue
+                            ?: balance
+                    } else {
+                        null
+                    }
+
+                if (billAmount == null && requested != null) {
+                    return Content(
+                        kind = Content.Kind.BALANCE,
+                        title = MoneyFormat.format(requested, currency),
+                        text =
+                            listOfNotNull(
+                                requestLabel,
+                                details["merchant"] ?: details["label"],
+                                details["account_last4"]?.let { String.format(accountFormat, it) },
+                                details["bank"],
+                            ).joinToString(" · "),
+                    )
+                }
+
+                val kind =
+                    when {
+                        billAmount != null -> Content.Kind.BALANCE
+                        amount != null && type == "debit" -> Content.Kind.DEBIT
+                        amount != null && type == "credit" -> Content.Kind.CREDIT
+                        balance != null -> Content.Kind.BALANCE
+                        else -> return null
+                    }
+                val title =
+                    when {
+                        billAmount != null -> MoneyFormat.format(billAmount, currency)
+                        kind == Content.Kind.DEBIT -> "\u2212 " + MoneyFormat.format(amount!!, currency)
+                        kind == Content.Kind.CREDIT -> "+ " + MoneyFormat.format(amount!!, currency)
+                        else -> MoneyFormat.format(balance!!, currency)
+                    }
+                val text =
+                    if (billAmount != null) {
+                        listOfNotNull(
+                            formatDueDate(details["due_date"])?.let { String.format(dueDateFormat, it) },
+                            details["merchant"] ?: details["label"],
+                            details["account_last4"]?.let { String.format(accountFormat, it) },
+                            details["bank"],
+                            // Secondary figure only when it differs from the headline.
+                            minDue
+                                ?.takeIf { it != billAmount }
+                                ?.let { String.format(minDueFormat, MoneyFormat.format(it, currency)) },
+                        ).joinToString(" · ")
+                    } else {
+                        compactText(
+                            merchant = details["merchant"],
+                            accountLast4 = details["account_last4"],
+                            bank = details["bank"],
+                            balanceOnly = kind == Content.Kind.BALANCE,
+                            balanceUpdateLabel = balanceUpdateLabel,
+                            accountFormat = accountFormat,
+                        )
+                    }
+                return Content(kind = kind, title = title, text = text)
+            }
+
+            /**
+             * "2026-08-04" (the pipeline's normalized ISO due date) → "4 Aug",
+             * with the month name in [locale] - notification text the user
+             * reads, so it follows the app language (the process default
+             * locale IS the per-app language on Android 13+). The INPUT is
+             * ISO and locale-free; only the output is localized.
+             * Null when the stored value is not ISO - a missing date is
+             * better than a raw capture leaking into the notification.
+             */
+            internal fun formatDueDate(
+                iso: String?,
+                locale: Locale = Locale.getDefault(),
+            ): String? {
+                if (iso == null) return null
+                return try {
+                    LocalDate
+                        .parse(iso)
+                        .format(DateTimeFormatter.ofPattern("d MMM", locale))
+                } catch (_: Exception) {
+                    null
+                }
+            }
+
+            /**
+             * One-liner like "Swiggy · A/c 2863 · HDFC Bank". Missing fields
+             * drop out; a balance-only update with no merchant leads with
+             * [balanceUpdateLabel].
+             */
+            fun compactText(
+                merchant: String?,
+                accountLast4: String?,
+                bank: String?,
+                balanceOnly: Boolean,
+                balanceUpdateLabel: String,
+                accountFormat: String,
+            ): String =
+                listOfNotNull(
+                    merchant ?: balanceUpdateLabel.takeIf { balanceOnly },
+                    accountLast4?.let { String.format(accountFormat, it) },
+                    bank,
+                ).joinToString(" · ")
+        }
+    }

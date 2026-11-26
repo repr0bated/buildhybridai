@@ -12,7 +12,7 @@ import kotlinx.serialization.json.putJsonObject
  * The truth table that turns answers into a verdict lives in [JevTruthTable].
  */
 object JevQuestions {
-    const val QUESTIONS_VERSION = "2026.11.1"
+    const val QUESTIONS_VERSION = "2026.11.2"
     const val MODEL = "jev-latest"
 
     val SIGNAL_IDS: List<String> = JevTruthTable.Signal.entries.map { it.id }
@@ -24,12 +24,14 @@ object JevQuestions {
         "hidden" to "a hidden sender",
     )
 
-    fun buildRequest(redactedText: String, sender: String): JsonObject = buildJsonObject {
+    fun buildRequest(redactedText: String, sender: String, fromOwnedAccount: Boolean = false, officialDomain: Boolean = false): JsonObject = buildJsonObject {
         put("model", MODEL)
         putJsonObject("state") {
             put("message", redactedText)
             put("sender", senderLabel[sender] ?: senderLabel.getValue("unknown_number"))
             put("note", "Personal details in `message` were masked as [name], [number], [digits], [email] and [path] before it was sent.")
+            put("fromOwnedAccount", if (fromOwnedAccount) "yes — sender and official domain match an account the user holds" else "no")
+            put("officialDomain", if (officialDomain) "yes — link domain is official for the claimed brand" else "no or no link")
         }
         putJsonObject("questions") {
             noul("asks_payment", "Does `message` ask the reader to pay money?",
@@ -53,6 +55,10 @@ object JevQuestions {
             noul("stranger_opener", "Is the sender of `message` starting a chat with someone they don't seem to know?",
                 "A 'wrong number' or 'is this still your number?' opener from a stranger",
                 "A message that refers to an existing order, appointment or account")
+            noul("reputable_official",
+                "Is the sender a reputable, well-known organization (e.g. Google, Apple, a major bank, a government toll agency) AND does the message match how that organization normally communicates (official domain, short code, no unusual ask)?",
+                "A well-known organization, and the message looks like a normal notice from them",
+                "An unknown sender, a look-alike domain, or an unusual ask (share a code, log in, pay urgently)")
         }
     }
 

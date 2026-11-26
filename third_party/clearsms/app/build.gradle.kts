@@ -1,0 +1,389 @@
+import java.util.zip.ZipFile
+
+plugins {
+    alias(libs.plugins.android.application)
+    alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.kotlin.serialization)
+    alias(libs.plugins.ksp)
+    alias(libs.plugins.hilt)
+}
+
+// Release signing is driven entirely by environment variables so that the same
+// build file works everywhere: in CI with the signing secrets configured the
+// release APKs come out signed, while local builds (and forks / PRs without
+// secrets) gracefully fall back to unsigned release APKs instead of failing.
+val signingKeystoreFile: String? = System.getenv("SIGNING_KEYSTORE_FILE")
+val signingKeystorePassword: String? = System.getenv("SIGNING_KEYSTORE_PASSWORD")
+val signingKeyAlias: String? = System.getenv("SIGNING_KEY_ALIAS")
+val signingKeyPassword: String? = System.getenv("SIGNING_KEY_PASSWORD")
+val hasReleaseSigning =
+    !signingKeystoreFile.isNullOrBlank() &&
+        !signingKeystorePassword.isNullOrBlank() &&
+        !signingKeyAlias.isNullOrBlank() &&
+        !signingKeyPassword.isNullOrBlank()
+
+android {
+    namespace = "app.clearsms"
+    compileSdk = 35
+
+    defaultConfig {
+        applicationId = "app.clearsms"
+        minSdk = 23
+        targetSdk = 35
+        versionCode = 76
+        versionName = "0.26.0"
+
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    if (hasReleaseSigning) {
+        signingConfigs {
+            create("release") {
+                storeFile = file(signingKeystoreFile!!)
+                storePassword = signingKeystorePassword
+                keyAlias = signingKeyAlias
+                keyPassword = signingKeyPassword
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            // Signed only when all four SIGNING_* environment variables are set
+            // (see the top of this file); otherwise the release APK is unsigned.
+            if (hasReleaseSigning) {
+                signingConfig = signingConfigs.getByName("release")
+            }
+            // Reproducible builds (F-Droid verifies our APK byte-for-byte against
+            // its own rebuild from source - see docs/publishing-fdroid.md):
+            //
+            // 1. AGP otherwise embeds META-INF/version-control-info.textproto
+            //    containing the git revision and the checkout path. F-Droid
+            //    patches build.gradle.kts before building, so the recorded VCS
+            //    state cannot be relied on to match - and the path leaks the
+            //    build machine's layout.
+            vcsInfo {
+                include = false
+            }
+            // 2. aapt2's PNG cruncher is not byte-stable across build-tools
+            //    versions and host platforms: res/ww.png and res/yi.png came
+            //    out 4-6 bytes apart between a Linux CI build and a macOS
+            //    build of the same commit, which shifts every following zip
+            //    offset and breaks signature verification. Storing PNGs as-is
+            //    is deterministic; the size cost is a few KB.
+            isCrunchPngs = false
+            // R8 code shrinking + resource shrinking keep the APK small.
+            // Obfuscation is disabled in proguard-rules.pro (-dontobfuscate):
+            // the app is open source, so auditability is preserved while dead
+            // code and unused resources are still removed. Room, Hilt and
+            // kotlinx.serialization are covered by their bundled consumer
+            // rules plus the curated app rules in proguard-rules.pro.
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
+        }
+    }
+
+    // A single universal APK is produced deliberately. The app contains no
+    // native code (no .so libraries), so per-ABI splits used to yield five
+    // byte-for-byte-equal-sized APKs - pure release overhead. A single APK is
+    // also what F-Droid requires: its build server expects exactly one APK
+    // per build block, and reproducible builds verify one artifact.
+
+    // Strip the Play-Store "dependency info" block (a Google-encrypted binary
+    // blob AGP embeds by default). It is useless outside the Play Store and
+    // the F-Droid scanner rejects APKs that contain it. Removing it also
+    // helps reproducible builds.
+    dependenciesInfo {
+        includeInApk = false
+        includeInBundle = false
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+        // java.time and other modern JDK APIs are used with minSdk 23.
+        isCoreLibraryDesugaringEnabled = true
+    }
+
+    buildFeatures {
+        compose = true
+        // BuildConfig.VERSION_NAME feeds the Settings → About release-notes link.
+        buildConfig = true
+    }
+
+    androidResources {
+        // Android 13+ per-app language picker (Settings → Apps → Clear SMS →
+        // Language). AGP generates res/xml/_generated_res_locale_config.xml
+        // from the values-<locale>/ folders that exist plus the default locale
+        // named in res/resources.properties, and wires android:localeConfig
+        // into the merged manifest - so a new translation folder is all a
+        // translator has to add.
+        generateLocaleConfig = true
+    }
+
+    lint {
+        abortOnError = true
+        warningsAsErrors = false
+    }
+
+    packaging {
+        resources {
+            excludes += "/META-INF/{AL2.0,LGPL2.1}"
+            excludes += "/META-INF/LICENSE.md"
+            excludes += "/META-INF/LICENSE-notice.md"
+        }
+    }
+
+    testOptions {
+        unitTests {
+            isIncludeAndroidResources = true
+            all { test ->
+                // Native graphics for the WHOLE suite, set once and uniformly.
+                // Per-test @GraphicsMode / @Config values fork extra Robolectric
+                // sandbox classloaders, which race on the JVM-global native
+                // runtime extraction (FileSystemAlreadyExistsException ->
+                // UnsatisfiedLinkError); RobolectricSandboxConventionTest
+                // enforces that no test splits the sandbox.
+                test.systemProperty("robolectric.graphicsMode", "NATIVE")
+                // CI-repro mode: `./gradlew -PciRepro testDebugUnitTest` caps
+                // the TEST JVM (not the daemon) at 2 visible cores, matching
+                // the 2-vCPU GitHub runners. Runtime.availableProcessors()
+                // then reports 2, so Dispatchers.Default, ForkJoinPool and
+                // Robolectric size their pools like CI. Normal builds are
+                // untouched. Kept permanently for hunting CI-only hangs.
+                if (project.hasProperty("ciRepro")) {
+                    test.jvmArgs("-XX:ActiveProcessorCount=2")
+                }
+            }
+        }
+    }
+
+    sourceSets {
+        getByName("main") {
+            kotlin.srcDir("src/main/kotlin")
+            // Bundled parser tables as CLASSPATH resources, so the pure-JVM
+            // domain parsers (and their plain JUnit tests) load them with no
+            // Android Context. `assets/tables/` mirrors `rules/tables/`
+            // (identity enforced by a unit test); `rules/brands/` is the
+            // community master of brands.json, packaged directly.
+            resources.srcDir("src/main/assets/tables")
+            // Named guard patterns, same arrangement: `assets/guards/`
+            // mirrors `rules/guards.json` (identity enforced by a unit test).
+            resources.srcDir("src/main/assets/guards")
+            resources.srcDir("$rootDir/rules/brands")
+        }
+        getByName("debug") {
+            // Robolectric unit tests read the DEBUG merged assets; exposing the
+            // committed Room schema JSONs here lets MigrationTestHelper load
+            // them. Debug-only: release APKs never include them.
+            assets.srcDir("$projectDir/schemas")
+        }
+        getByName("test") {
+            kotlin.srcDir("src/test/kotlin")
+        }
+    }
+}
+
+kotlin {
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+    }
+}
+
+// Publish human-friendly artifact names: ClearSMS.apk for release builds
+// (what ends up attached to a GitHub release, and what the F-Droid build
+// metadata's Binaries URL points at) and ClearSMS-debug.apk for debug builds,
+// instead of Gradle's default app-<buildType>.apk.
+androidComponents {
+    onVariants { variant ->
+        val suffix = if (variant.buildType == "release") "" else "-${variant.buildType}"
+        variant.outputs.forEach { output ->
+            (output as? com.android.build.api.variant.impl.VariantOutputImpl)
+                ?.outputFileName
+                ?.set("ClearSMS$suffix.apk")
+        }
+    }
+}
+
+// --- Offline guard: no HTTP client may ever ship in the release APK --------
+// The app's core promise is "fully offline, no INTERNET permission". OkHttp
+// used to ride in transitively via Coil 2 and put 100+ dead network classes
+// in the dex - contradicting that promise to anyone who unzips the APK and
+// plausibly tripping heuristic AV engines. This task scans every classes*.dex
+// in the packaged release APK for the type descriptors of known HTTP clients
+// and fails the build if any appears. Dex type descriptors are stored as
+// plain MUTF-8 strings, so a byte search is exact: a hit means the dex
+// references (or defines) a class in that package. It gates assembleRelease
+// itself (not just CI), so local builds, GitHub CI and the F-Droid builder
+// all enforce it.
+abstract class CheckApkNoHttpClientTask : DefaultTask() {
+    @get:InputDirectory
+    abstract val apkDir: DirectoryProperty
+
+    @get:Input
+    abstract val forbiddenDescriptors: ListProperty<String>
+
+    @TaskAction
+    fun check() {
+        val apks = apkDir.get().asFile.listFiles { f -> f.extension == "apk" }.orEmpty()
+        check(apks.isNotEmpty()) { "No APK found in ${apkDir.get()} - nothing to verify" }
+        val offenders = mutableListOf<String>()
+        var dexSeen = 0
+        for (apk in apks) {
+            ZipFile(apk).use { zip ->
+                for (entry in zip.entries().asSequence()) {
+                    if (!entry.name.matches(Regex("""classes\d*\.dex"""))) continue
+                    dexSeen++
+                    val dex = zip.getInputStream(entry).readBytes().toString(Charsets.ISO_8859_1)
+                    for (descriptor in forbiddenDescriptors.get()) {
+                        if (descriptor in dex) offenders += "${apk.name}!${entry.name} contains $descriptor"
+                    }
+                }
+            }
+        }
+        check(dexSeen > 0) { "APK contained no classes*.dex - verification impossible" }
+        if (offenders.isNotEmpty()) {
+            throw GradleException(
+                "HTTP-client classes found in the release APK - this app is offline by design " +
+                    "(no INTERNET permission), so no HTTP client may ship:\n  " +
+                    offenders.joinToString("\n  ") +
+                    "\nIf a dependency dragged one in, exclude it or use a network-free variant " +
+                    "(Coil 3 core, not coil-network-okhttp).",
+            )
+        }
+        logger.lifecycle("OK: no HTTP-client classes in ${apks.joinToString { it.name }} ($dexSeen dex file(s) scanned)")
+    }
+}
+
+androidComponents {
+    onVariants(androidComponents.selector().withBuildType("release")) { variant ->
+        tasks.register<CheckApkNoHttpClientTask>("checkReleaseApkNoHttpClient") {
+            group = "verification"
+            description = "Fails if the release APK dex references any known HTTP client"
+            apkDir.set(variant.artifacts.get(com.android.build.api.artifact.SingleArtifact.APK))
+            forbiddenDescriptors.set(
+                listOf(
+                    "Lokhttp3/", // OkHttp
+                    "Lio/netty/", // Netty
+                    "Lorg/apache/http/", // Apache HttpClient 4.x (bundled copies)
+                    "Lorg/apache/hc/", // Apache HttpClient 5.x
+                    "Lcz/msebera/android/httpclient/", // repackaged Apache HttpClient
+                    "Lcom/android/volley/", // Volley
+                    "Lretrofit2/", // Retrofit
+                    "Lio/ktor/client/", // Ktor client
+                ),
+            )
+        }
+    }
+}
+
+// The guard gates assembleRelease itself: packageRelease -> guard -> assembleRelease.
+tasks.matching { it.name == "assembleRelease" }.configureEach {
+    dependsOn("checkReleaseApkNoHttpClient")
+}
+
+// TranslationStatusTest reads the repo README to verify the generated
+// translation table. README.md is not otherwise a test input, so without this
+// an edit to it would leave the test task UP-TO-DATE and the check would not
+// re-run locally (CI always starts cold). Resource files are already inputs.
+tasks.withType<Test>().configureEach {
+    inputs.file(rootProject.file("README.md")).withPathSensitivity(PathSensitivity.RELATIVE)
+}
+
+// Exported Room schemas (schemas/<db>/<version>.json) are committed so future
+// schema changes can ship validated migrations against the released baseline.
+ksp {
+    arg("room.schemaLocation", "$projectDir/schemas")
+}
+
+// Size note: assets/sender_ids.db (44 MB raw) is deflate-compressed by AAPT2
+// inside the APK (~16.5 MB stored) - .db is not on the default noCompress
+// list, so no androidResources tuning is required. The remaining size lever
+// (a more compact on-disk sender directory format) lives in the data layer.
+//
+// TODO(supply-chain): add Gradle dependency verification
+// (gradle/verification-metadata.xml) and/or version-catalog lockfiles so CI
+// can detect tampered dependencies. Tracked as a follow-up; see README.
+
+dependencies {
+    // Core AndroidX + lifecycle
+    implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.lifecycle.runtime.compose)
+    implementation(libs.androidx.lifecycle.viewmodel.compose)
+    implementation(libs.androidx.activity.compose)
+
+    // Compose (versions from the BOM)
+    implementation(platform(libs.compose.bom))
+    implementation(libs.compose.ui)
+    implementation(libs.compose.ui.graphics)
+    implementation(libs.compose.ui.tooling.preview)
+    implementation(libs.compose.material3)
+    implementation(libs.compose.material.icons.extended)
+    debugImplementation(libs.compose.ui.tooling)
+
+    // Navigation
+    implementation(libs.androidx.navigation.compose)
+
+    // Hilt
+    implementation(libs.hilt.android)
+    ksp(libs.hilt.compiler)
+    implementation(libs.androidx.hilt.navigation.compose)
+    implementation(libs.androidx.hilt.work)
+    ksp(libs.androidx.hilt.compiler)
+
+    // Room
+    implementation(libs.room.runtime)
+    implementation(libs.room.ktx)
+    implementation(libs.room.paging)
+    ksp(libs.room.compiler)
+
+    // Paging (large message lists load incrementally instead of whole tables)
+    implementation(libs.androidx.paging.runtime)
+    implementation(libs.androidx.paging.compose)
+
+    // Serialization + coroutines
+    implementation(libs.kotlinx.serialization.json)
+    implementation(libs.kotlinx.coroutines.core)
+    implementation(libs.kotlinx.coroutines.android)
+
+    // WorkManager + DataStore
+    implementation(libs.androidx.work.runtime.ktx)
+    implementation(libs.androidx.datastore.preferences)
+
+    // Device-lock gate for Settings → Privacy → Show balance. BIOMETRIC_WEAK
+    // or DEVICE_CREDENTIAL: fingerprint/face AND PIN/pattern/password all
+    // unlock - purely local, no new permissions.
+    implementation(libs.androidx.biometric)
+
+    // Images + permissions. Coil 3 renders contact photos (content:// URIs,
+    // ui/components/SenderAvatar.kt) and MMS attachment files. Coil 3's core
+    // has NO network dependency - HTTP support lives in the separate
+    // coil-network-okhttp artifact, which this app deliberately does not
+    // include, so no HTTP client ships in the APK (the app has no INTERNET
+    // permission). checkReleaseApkNoHttpClient guards this.
+    implementation(libs.coil.compose)
+    implementation(libs.accompanist.permissions)
+
+    // Material Components (provides the XML Theme.Material3.* parent used in themes.xml)
+    implementation(libs.google.material)
+
+    // Desugaring (java.time on minSdk 23)
+    coreLibraryDesugaring(libs.desugar.jdk.libs)
+
+    // Unit tests
+    testImplementation(libs.junit)
+    testImplementation(libs.truth)
+    testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.robolectric)
+    testImplementation(libs.androidx.test.core.ktx)
+    testImplementation(libs.turbine)
+    // Migration tests validate committed schemas; worker tests need a test WorkManager.
+    testImplementation(libs.room.testing)
+    testImplementation(libs.androidx.work.testing)
+    // Schema-shape tests reflect over serializable models with kotlin.reflect.
+    testImplementation(kotlin("reflect"))
+}

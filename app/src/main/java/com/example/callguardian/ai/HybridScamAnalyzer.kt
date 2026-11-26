@@ -17,6 +17,8 @@ import com.google.firebase.ai.type.generationConfig
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
 import timber.log.Timber
+import android.content.Context
+import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -46,7 +48,10 @@ enum class DeviceModelState { UNKNOWN, UNAVAILABLE, DOWNLOADABLE, DOWNLOADING, A
  * and surface that as a cloud fallback, not a hard failure.
  */
 @Singleton
-class HybridScamAnalyzer @Inject constructor() {
+class HybridScamAnalyzer @Inject constructor(
+    @ApplicationContext private val context: Context,
+    private val remote: com.example.callguardian.firebase.GuardianRemoteConfig,
+) {
 
     private val cloudModelName = BuildConfig.CLOUD_MODEL
 
@@ -75,10 +80,22 @@ class HybridScamAnalyzer @Inject constructor() {
             )
         }
 
-    private val cloudTriageModel: GenerativeModel by lazy {
-        Firebase.ai(backend = GenerativeBackend.googleAI()).generativeModel(
-            modelName = cloudModelName,
-            generationConfig = generationConfig { temperature = 0.1f; maxOutputTokens = 400 },
+    private val verdictSchema by lazy {
+        FirebaseSchemaFactory.fromJson(
+            context.assets.open("schemas/scam_verdict.schema.json").bufferedReader().use { it.readText() },
+        )
+    }
+
+    private fun cloudTriageModel(): GenerativeModel {
+        val name = remote.cloudModel
+        return Firebase.ai(backend = GenerativeBackend.googleAI()).generativeModel(
+            modelName = name,
+            generationConfig = generationConfig {
+                temperature = 0.1f
+                maxOutputTokens = 400
+                responseMimeType = "application/json"
+                responseSchema = verdictSchema
+            },
             onDeviceConfig = OnDeviceConfig(mode = InferenceMode.ONLY_IN_CLOUD),
         )
     }
@@ -161,8 +178,25 @@ class HybridScamAnalyzer @Inject constructor() {
 
     private suspend fun runCloudTriage(prompt: String): ModelRun {
         val t0 = System.currentTimeMillis()
-        val result = cloudTriageModel.generateObject(ScamVerdict.firebaseAISchema(), prompt)
-        return ModelRun(result.response.text, VerdictSource.IN_CLOUD, cloudModelName, System.currentTimeMillis() - t0)
+        val finalPrompt = remote.cloudPrompt.takeIf { it.isNotBlank() }?.let { "$it\n\n$prompt" } ?: prompt
+        val templateId = remote.cloudPromptTemplate
+        if (templateId.isNotBlank()) {
+            val templated = runCatching {
+                val resp = Firebase.ai(backend = GenerativeBackend.googleAI())
+                    .templateGenerativeModel()
+                    .generateContent(templateId, mapOf("prompt" to finalPrompt, "input" to finalPrompt))
+                resp.text?.trim().orEmpty()
+            }
+            val text = templated.getOrNull().orEmpty()
+            if (text.isNotEmpty()) {
+                return ModelRun(text, VerdictSource.IN_CLOUD, "template:$templateId", System.currentTimeMillis() - t0)
+            }
+            timber.log.Timber.w(templated.exceptionOrNull(), "Server prompt template unavailable (Spark/Developer API may not serve templates); falling back to Remote Config / in-app prompt")
+        }
+        val result = cloudTriageModel().generateContent(finalPrompt)
+        val text = result.text?.trim().orEmpty()
+        if (text.isEmpty()) error("Cloud model returned an empty response")
+        return ModelRun(text, VerdictSource.IN_CLOUD, remote.cloudModel, System.currentTimeMillis() - t0)
     }
 
     companion object {
@@ -178,15 +212,26 @@ class HybridScamAnalyzer @Inject constructor() {
             return t.take(maxChars).trimEnd() + "\n[truncated]"
         }
 
-        fun shortError(t: Throwable): String {
+        fun isError9(t: Throwable): Boolean {
+            val m = (t.message ?: "") + (t.cause?.message ?: "")
+            return Regex("""ErrorCode\s*9\b""").containsMatchIn(m) ||
+                m.contains("usage quota", true) || m.contains("disallowed background", true)
+        }
+
+        /** User-visible copy. Never surfaces a raw ErrorCode. */
+        fun friendlyError(t: Throwable, background: Boolean = false): String {
             val m = t.message.orEmpty()
-            val code = Regex("""ErrorCode\s*-?\d+""").find(m)?.value
             return when {
-                code != null && m.contains("Invalid arguments", true) -> "$code invalid request"
-                code != null -> code
-                m.contains("Invalid arguments", true) -> "invalid request"
-                else -> (t.message ?: t.javaClass.simpleName).take(80)
+                t is kotlinx.coroutines.TimeoutCancellationException -> "The on-device model timed out. Try again, or leave the app open."
+                isError9(t) && background -> "The on-device model only runs while Call Guardian is open. It will retry when you come back, or use cloud if that's on."
+                isError9(t) -> "The on-device model is busy or has reached its usage quota. Retrying, then using cloud if needed."
+                m.contains("Invalid arguments", true) -> "The on-device model rejected the request. Trying cloud if that's allowed."
+                Regex("""ErrorCode\s*-?\d+""").containsMatchIn(m) -> "The on-device model couldn't finish this one. Retrying, then using cloud if needed."
+                else -> (t.message ?: t.javaClass.simpleName).take(160)
             }
         }
+
+        fun shortError(t: Throwable): String = friendlyError(t)
+
     }
 }

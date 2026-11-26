@@ -1,0 +1,173 @@
+package app.clearsms.work
+
+import android.content.Context
+import android.provider.Telephony
+import androidx.work.WorkManager
+import app.clearsms.data.db.MessageDao
+import app.clearsms.di.IoDispatcher
+import app.clearsms.diagnostics.Diag
+import app.clearsms.diagnostics.DiagField.Companion.count
+import app.clearsms.mms.SystemMmsSource
+import app.clearsms.sms.SystemSmsImporter
+import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.withContext
+import javax.inject.Inject
+import javax.inject.Singleton
+
+/**
+ * Enqueues catch-up runs of [InitialSyncWorker] when messages may have landed
+ * in the system SMS provider while Clear SMS was not the default app.
+ *
+ * While another app is default, incoming messages are written to the provider
+ * by that app and never reach [app.clearsms.receiver.SmsReceiver] - without a
+ * catch-up they would stay invisible forever. Two triggers close the gap:
+ *
+ * 1. **Role regained** ([onRoleChecked] with `regained = true`) - the
+ *    inbox banner's role check observed an ABSENT→HELD transition (grant via
+ *    the banner, or an external switch detected on resume). Enqueue
+ *    unconditionally: the import resumes from its durable checkpoint, so
+ *    rows the checkpoint already passed are skipped and re-scanned rows are
+ *    deduplicated by the unique `systemSmsId` index. A no-gap run is a fast
+ *    no-op.
+ * 2. **Foreground gap probe** (every role check with the role held) -
+ *    covers rows that reached the provider without a matching Room row: a
+ *    default-app switch away-and-back that happened while the app was dead,
+ *    or a receiver run whose Room insert failed after the provider write.
+ *    It runs on EVERY inbox resume, not once per process: a user who
+ *    reopens a still-alive background process must not be left blind to
+ *    provider rows Room is missing until the next cold start. Each probe
+ *    costs two single-row indexed queries: the provider's `MAX(_id)` (via
+ *    `ORDER BY _id DESC LIMIT 1` on the primary key) and Room's
+ *    `MAX(systemSmsId)` (backed by the unique index) - cheap enough to pay
+ *    per resume. A provider max above ours means rows exist that we never
+ *    saw; the worker is enqueued. The probe only looks at rows the import
+ *    would store (inbox and sent), so a newest row of another type - a
+ *    stranded draft - cannot make it fire on every resume; and should it
+ *    still over-trigger, the run terminates immediately, reporting no
+ *    progress and posting no notification.
+ *
+ * Catch-up runs reuse the initial import wholesale: unique work (KEEP),
+ * durable checkpoint, and the FULL classification pipeline (categorization,
+ * transaction extraction, reminders). The importer persists pages in bulk;
+ * messages NEWER than the pre-run watermark (never seen, never notified)
+ * are then surfaced through [app.clearsms.notification.CatchUpNotifier] -
+ * per message when few, one summary when many - while old history imports
+ * silently, so catching up on a year of backfill never storms the shade.
+ */
+@Singleton
+class CatchUpSyncScheduler
+    @Inject
+    constructor(
+        @ApplicationContext private val context: Context,
+        private val messageDao: MessageDao,
+        private val workManager: WorkManager,
+        private val checkpointStore: SyncCheckpointStore,
+        @IoDispatcher private val ioDispatcher: CoroutineDispatcher,
+    ) {
+        /**
+         * Reacts to a default-SMS role check from the inbox. [regained] is
+         * [app.clearsms.ui.inbox.DefaultSmsBannerState.onRoleChecked]'s
+         * ABSENT→HELD transition signal; every check with the role held
+         * additionally runs the gap probe.
+         */
+        suspend fun onRoleChecked(
+            held: Boolean,
+            regained: Boolean,
+        ) {
+            if (!held) return
+            if (regained) {
+                InitialSyncWorker.enqueue(workManager)
+                return
+            }
+            withContext(ioDispatcher) {
+                val providerMax = providerMaxId()
+                val localMax = messageDao.maxSystemSmsId() ?: 0L
+                if (providerMax != null && providerMax > localMax) {
+                    Diag.i(TAG, "gap probe scheduling catch-up", count("providerMaxId", providerMax), count("localMaxId", localMax))
+                    InitialSyncWorker.enqueue(workManager)
+                    return@withContext
+                }
+                // The same probe for MMS, against its own provider and its
+                // own column. Needed on its own terms: the SMS probe above
+                // can never notice missing MMS, so without this an existing
+                // install whose SMS history is already complete would never
+                // run the MMS import at all - leaving exactly the invisible
+                // picture messages of issue #94 in place. It also covers MMS
+                // that arrive while another app holds the role.
+                val providerMmsMax = providerMaxMmsId()
+                val localMmsMax = messageDao.maxSystemMmsId() ?: 0L
+                if (providerMmsMax != null && providerMmsMax > localMmsMax) {
+                    Diag.i(
+                        TAG,
+                        "mms gap probe scheduling catch-up",
+                        count("providerMaxMmsId", providerMmsMax),
+                        count("localMaxMmsId", localMmsMax),
+                    )
+                    InitialSyncWorker.enqueue(workManager)
+                    return@withContext
+                }
+                // A max-id gap cannot see a SENT row that an inbox-only walk
+                // stepped over (issue #112): on an install upgraded from
+                // 0.23.0 the newest MMS is typically a received one that IS
+                // stored, so the two maxima agree while every sent MMS is
+                // missing. The checkpoint's recorded scope is the signal
+                // instead: a walk under an older scope (or none recorded)
+                // is owed one re-walk, which the importer performs and then
+                // records, so this fires once per install, not per resume.
+                val scope = checkpointStore.mmsImportScope()
+                if (scope < SyncCheckpointStore.MMS_SCOPE_CURRENT) {
+                    Diag.i(TAG, "mms import scope widened, scheduling catch-up", count("scope", scope.toLong()))
+                    InitialSyncWorker.enqueue(workManager)
+                }
+            }
+        }
+
+        /**
+         * Highest importable (inbox or sent) `_id` in the system SMS
+         * provider, or null when unreadable/empty. Restricted to the types
+         * the importer stores - the same guard the MMS probe has - so a
+         * stranded draft or a failed send, which the import skips, cannot
+         * keep the probe firing on every resume (issue #153: each such run
+         * flashed "Importing your messages" for nothing).
+         */
+        private fun providerMaxId(): Long? =
+            try {
+                context.contentResolver
+                    .query(
+                        Telephony.Sms.CONTENT_URI,
+                        arrayOf(Telephony.Sms._ID),
+                        SystemSmsImporter.IMPORTED_TYPES_SELECTION,
+                        null,
+                        "${Telephony.Sms._ID} DESC LIMIT 1",
+                    )?.use { if (it.moveToFirst()) it.getLong(0) else null }
+            } catch (e: Exception) {
+                Diag.w(TAG, "cannot probe the system SMS provider", e)
+                null
+            }
+
+        /**
+         * Highest importable (received or sent) MMS `_id` in the system MMS
+         * provider, or null when unreadable/empty. Restricted to the boxes
+         * the importer stores, so a draft or a stranded outbox row cannot
+         * make the probe fire forever.
+         */
+        private fun providerMaxMmsId(): Long? =
+            try {
+                context.contentResolver
+                    .query(
+                        Telephony.Mms.CONTENT_URI,
+                        arrayOf(Telephony.Mms._ID),
+                        SystemMmsSource.IMPORTED_BOXES,
+                        null,
+                        "${Telephony.Mms._ID} DESC LIMIT 1",
+                    )?.use { if (it.moveToFirst()) it.getLong(0) else null }
+            } catch (e: Exception) {
+                Diag.w(TAG, "cannot probe the system MMS provider", e)
+                null
+            }
+
+        private companion object {
+            const val TAG = "CatchUpSyncScheduler"
+        }
+    }

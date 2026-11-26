@@ -53,7 +53,7 @@ class JevTruthTableTest {
         assertEquals(listOf(Signal.STRANGER_OPENER), r.unsettled)
     }
 
-    /** Exhaustive: every yes/no/unsettled combination of the nine signals gives a verdict. */
+    /** Exhaustive: every yes/no/unsettled combination of the ten signals gives a verdict. */
     @Test fun everyCombinationIsDefined() {
         val values = listOf(0.1, 0.5, 0.9)
         var n = 0
@@ -62,7 +62,7 @@ class JevTruthTableTest {
             values.forEach { rec(i + 1, acc + (Signal.entries[i] to it)) }
         }
         rec(0, emptyMap())
-        assertEquals(19683, n)
+        assertEquals(59049, n)
     }
 
     @Test(expected = IllegalArgumentException::class)
@@ -74,5 +74,39 @@ class JevTruthTableTest {
         Signal.entries.forEach { assertTrue(it.id, it.id in props) }
         val q = listOf(File("../functions/src/questions.ts"), File("functions/src/questions.ts")).first { it.exists() }.readText()
         Signal.entries.forEach { assertTrue("questions.ts lacks ${it.id}", Regex("\\b${it.id}:\\s*\\{").containsMatchIn(q)) }
+    }
+
+    @Test fun reputableOfficialNeedsOfficialDomain() {
+        val p = probs(Signal.REPUTABLE_OFFICIAL to 0.95, Signal.CLAIMS_ORGANIZATION to 0.9)
+        // Reputable is a strong negative only when the official domain also checks out.
+        val noDomain = JevTruthTable.decide(p, JevTruthTable.Context(senderIsContact = false, officialDomainChecksOut = false))
+        assertEquals(Verdict.CLEAR, noDomain.verdict)
+        assertEquals("no scam combination", noDomain.rule)
+        val withDomain = JevTruthTable.decide(p, JevTruthTable.Context(senderIsContact = false, officialDomainChecksOut = true))
+        assertEquals(Verdict.CLEAR, withDomain.verdict)
+        assertEquals("reputable organization and official domain, no unusual ask", withDomain.rule)
+    }
+
+    @Test fun ownedPlusOfficialIsClear() {
+        val r = JevTruthTable.decide(
+            probs(),
+            JevTruthTable.Context(senderIsContact = false, officialDomainChecksOut = true, fromOwnedAccount = true),
+        )
+        assertEquals(Verdict.CLEAR, r.verdict)
+        assertEquals("owned account (sender and official domain match)", r.rule)
+    }
+
+    @Test fun lookalikePlusBrandIsScamEvenIfOwnedOrReputable() {
+        val r = JevTruthTable.decide(
+            probs(Signal.CLAIMS_ORGANIZATION to 0.95, Signal.REPUTABLE_OFFICIAL to 0.9),
+            JevTruthTable.Context(senderIsContact = false, officialDomainChecksOut = false, lookalikeDomain = true, fromOwnedAccount = true),
+        )
+        assertEquals(Verdict.SCAM, r.verdict)
+        assertEquals("brand claim + lookalike domain", r.rule)
+    }
+
+    @Test fun fromOwnedIsContextNotAMissingJevAnswer() {
+        // 10 Jev signals only; from_owned_account is app-answered context.
+        JevTruthTable.decide(probs(), JevTruthTable.Context(senderIsContact = false, fromOwnedAccount = true))
     }
 }
